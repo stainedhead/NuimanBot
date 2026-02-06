@@ -18,6 +18,7 @@ import (
 	"nuimanbot/internal/adapter/repository/sqlite"
 	"nuimanbot/internal/config"
 	"nuimanbot/internal/domain"
+	"nuimanbot/internal/infrastructure/audit"
 	"nuimanbot/internal/infrastructure/crypto"
 	anthropic "nuimanbot/internal/infrastructure/llm/anthropic"
 	ollama "nuimanbot/internal/infrastructure/llm/ollama"
@@ -91,11 +92,6 @@ func main() {
 		log.Fatalf("Failed to create credential vault: %v", err)
 	}
 
-	// 4. Initialize Security Service
-	inputValidator := security.NewDefaultInputValidator()
-	auditor := security.NewNoOpAuditor()
-	securityService := security.NewService(vault, inputValidator, auditor)
-
 	// 4. Initialize Database
 	dbPath := cfg.Storage.DSN
 	if dbPath == "" {
@@ -117,19 +113,28 @@ func main() {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 
-	// 5. Initialize Memory Repository
+	// 5. Initialize Security Service with SQLite Auditor
+	inputValidator := security.NewDefaultInputValidator()
+	auditor, err := audit.NewSQLiteAuditor(db)
+	if err != nil {
+		log.Fatalf("Failed to create audit logger: %v", err)
+	}
+	securityService := security.NewService(vault, inputValidator, auditor)
+	slog.Info("Security service initialized with SQLite auditor")
+
+	// 6. Initialize Memory Repository
 	memoryRepo := sqlite.NewMessageRepository(db)
 
-	// 5.5. Initialize Notes Repository
+	// 7. Initialize Notes Repository
 	notesRepo := sqlite.NewNotesRepository(db)
 
-	// 6. Initialize LLM Service
+	// 8. Initialize LLM Service
 	llmService, err := initializeLLMService(cfg)
 	if err != nil {
 		log.Fatalf("Failed to create LLM service: %v", err)
 	}
 
-	// 7. Initialize Skill System
+	// 9. Initialize Skill System
 	skillRegistry := skill.NewInMemoryRegistry()
 
 	// Register built-in skills
@@ -139,10 +144,10 @@ func main() {
 
 	skillExecutionService := skill.NewService(&cfg.Skills, skillRegistry, securityService)
 
-	// 8. Initialize Chat Service
+	// 10. Initialize Chat Service
 	chatService := chat.NewService(llmService, memoryRepo, skillExecutionService, securityService)
 
-	// 9. Create Application
+	// 11. Create Application
 	app := &application{
 		Config:                cfg,
 		Vault:                 vault,
@@ -155,13 +160,13 @@ func main() {
 		DB:                    db,
 	}
 
-	// 10. Run application in goroutine
+	// 12. Run application in goroutine
 	errChan := make(chan error, 1)
 	go func() {
 		errChan <- app.Run(ctx)
 	}()
 
-	// 11. Wait for shutdown signal or error
+	// 13. Wait for shutdown signal or error
 	select {
 	case <-sigChan:
 		fmt.Println("\nReceived shutdown signal, stopping gracefully...")

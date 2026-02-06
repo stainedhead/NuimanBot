@@ -91,7 +91,7 @@ internal/
 │   ├── repository/
 │   │   └── vector/             # Vector store adapter (SQLite/pgvector)
 │   └── gateway/
-│       └── storage/            # S3/Drive/Git workspace connectors
+│       └── storage/            # S3/Git workspace connectors
 └── infrastructure/
     ├── llm/bedrock/            # AWS Bedrock client
     ├── browser/                # Playwright/Selenium runners
@@ -119,7 +119,7 @@ internal/
 ## 6. Skills System Expansion
  
 ### 6.1 Skills with Reference Implementations (HomeBots)
- 
+
 | Skill | Purpose | Reference |
 |-------|---------|-----------|
 | `coding_agent` | Orchestrate Codex/Claude Code/OpenCode CLI runs | OpenClaw `coding-agent` |
@@ -131,14 +131,30 @@ internal/
 | `repo_search` | Fast codebase search via ripgrep | Internal proposal (BOT_TOOL_IDEAS) |
 | `doc_summarize` | Summaries of internal docs and links | Internal proposal (BOT_TOOL_IDEAS) |
 | `goog` | Google Workspace CLI (Gmail/Calendar/Drive) | OpenClaw `gog` / go-goog-cli |
- 
+
+#### HomeBots skill reference index
+- Consolidated list of HomeBots skills: `BOT_TOOL_IDEAS.md` (root).
+- OpenClaw skills: `examples/HomeBots/openclaw/skills/<skill>/SKILL.md`
+- NanoBot skills: `examples/HomeBots/nanobot/nanobot/skills/<skill>/SKILL.md`
+- LettaBot skills: `examples/HomeBots/lettabot/skills/<skill>/SKILL.md`
+
+#### Coding-agent operational notes (from OpenClaw)
+- Requires PTY mode for interactive CLIs; non-PTY runs can hang or corrupt output.
+- Use background sessions for long tasks and monitor via log/poll operations.
+- Send input via write/submit to answer prompts when the CLI requests confirmation.
+- Codex requires a git repo; use a temp repo for scratch tasks.
+- Safety modes: `--full-auto` (auto-approve in workspace), `--yolo` (no approvals; high risk).
+
+#### Additional CLI scope for coding-agent
+- **Gemini CLI**: support non-interactive prompts via `-p/--prompt`; approval control via `--approval-mode auto_edit|yolo|plan` or `--yolo`.
+- **Copilot CLI (standalone `copilot`)**: support interactive prompts via `--interactive <prompt>`; approval control via `--allow-all-tools` or `--allow-tool` plus directory access with `--add-dir` when required.
+
 ### 6.2 Skills Requiring New Research/Implementation
  
 | Skill | Scope | Research Notes |
 |-------|-------|----------------|
-| `selenium` | Browser automation for QA/research tasks | Evaluate Selenium WebDriver + Go bindings |
-| `playwright` | Headless browser automation | Evaluate Playwright Go vs. Node sidecar |
-| `puppeteer` | Node-based browser automation | Evaluate hosted sidecar process |
+| `selenium` | Browser automation for QA/research tasks | Use `github.com/sourcegraph/go-selenium` |
+| `playwright` | Headless browser automation | Use `playwright-community/playwright-go` |
 | `doc_index` | Ingest and embed documents | See RAG section |
 | `doc_search` | Query ranked chunks | See RAG section |
 | `doc_retrieve` | Fetch full docs/snippets | See RAG section |
@@ -148,7 +164,7 @@ internal/
 ## 7. Document Intelligence (RAG)
  
 ### Scope
-- Index and retrieve from local filesystem, Git repos/workspaces, and cloud storage (S3/Drive).
+- Index and retrieve from local filesystem, Git repos/workspaces, and cloud storage (S3).
 - Support common formats: Markdown, text, PDF, Office, HTML.
  
 ### Core Skills
@@ -164,6 +180,7 @@ internal/
 - Embedding model selection via LLM provider abstraction.
 - Vector store backend: SQLite for dev, pgvector for production.
 - Citations with source metadata (path, repo, URL, timestamp).
+- S3 connectors use AWS SDK for Go with environment variables or config-based credentials.
  
 ### Security Requirements
 - Per-source RBAC controls and auditing.
@@ -178,6 +195,7 @@ internal/
 - Headless runs for research/QA tasks.
 - Scriptable flows with step limits and timeouts.
 - Output artifacts: screenshots, HTML snapshots, and logs.
+- Implementation targets: Playwright (`playwright-community/playwright-go`) and Selenium (`github.com/sourcegraph/go-selenium`).
  
 ### Constraints
 - Admin-only by default (`browser` permission).
@@ -216,7 +234,7 @@ internal/
 | Task | Description | Status |
 |------|-------------|--------|
 | `doc_index/search/retrieve` | Index + query docs | ☐ |
-| Browser automation | Selenium/Playwright/Puppeteer | ☐ |
+| Browser automation | Selenium + Playwright | ☐ |
 | `goog` skill | Google Workspace workflows | ☐ |
  
 ---
@@ -233,7 +251,7 @@ internal/
 ## 11. Open Questions
  
 - Preferred default embedding model for RAG (Bedrock, OpenAI, or local)?
-- Browser automation priority: Playwright vs. Selenium vs. Puppeteer as first-class?
+- Browser automation priority: Playwright vs. Selenium as first-class?
  
 ---
  
