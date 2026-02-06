@@ -150,3 +150,388 @@ func TestNotesSkill_Config(t *testing.T) {
 		t.Error("Expected skill to be enabled by default")
 	}
 }
+
+func TestNotesSkill_Execute_MissingUserID(t *testing.T) {
+	repo := newMockNotesRepo()
+	skill := notes.NewNotes(repo)
+
+	// Context without user_id
+	ctx := context.Background()
+
+	result, err := skill.Execute(ctx, map[string]any{
+		"operation": "create",
+		"title":     "Test",
+		"content":   "Test content",
+	})
+	if err != nil {
+		t.Fatalf("Execute() unexpected error: %v", err)
+	}
+	if result.Error == "" {
+		t.Error("Expected error for missing user_id")
+	}
+}
+
+func TestNotesSkill_Execute_CreateWithTags(t *testing.T) {
+	repo := newMockNotesRepo()
+	skill := notes.NewNotes(repo)
+
+	ctx := context.WithValue(context.Background(), "user_id", "user1")
+
+	result, err := skill.Execute(ctx, map[string]any{
+		"operation": "create",
+		"title":     "Tagged Note",
+		"content":   "Content with tags",
+		"tags":      []interface{}{"work", "important"},
+	})
+	if err != nil {
+		t.Fatalf("Execute() unexpected error: %v", err)
+	}
+	if result.Error != "" {
+		t.Errorf("Expected no error, got: %s", result.Error)
+	}
+	if result.Metadata["note_id"] == nil {
+		t.Error("Expected note_id in metadata")
+	}
+}
+
+func TestNotesSkill_Execute_CreateMissingTitle(t *testing.T) {
+	repo := newMockNotesRepo()
+	skill := notes.NewNotes(repo)
+
+	ctx := context.WithValue(context.Background(), "user_id", "user1")
+
+	result, err := skill.Execute(ctx, map[string]any{
+		"operation": "create",
+		"content":   "Content without title",
+	})
+	if err != nil {
+		t.Fatalf("Execute() unexpected error: %v", err)
+	}
+	if result.Error == "" {
+		t.Error("Expected error for missing title")
+	}
+}
+
+func TestNotesSkill_Execute_CreateMissingContent(t *testing.T) {
+	repo := newMockNotesRepo()
+	skill := notes.NewNotes(repo)
+
+	ctx := context.WithValue(context.Background(), "user_id", "user1")
+
+	result, err := skill.Execute(ctx, map[string]any{
+		"operation": "create",
+		"title":     "Title without content",
+	})
+	if err != nil {
+		t.Fatalf("Execute() unexpected error: %v", err)
+	}
+	if result.Error == "" {
+		t.Error("Expected error for missing content")
+	}
+}
+
+func TestNotesSkill_Execute_Read(t *testing.T) {
+	repo := newMockNotesRepo()
+	skill := notes.NewNotes(repo)
+
+	ctx := context.WithValue(context.Background(), "user_id", "user1")
+
+	// Create a note first
+	createResult, _ := skill.Execute(ctx, map[string]any{
+		"operation": "create",
+		"title":     "Test Note",
+		"content":   "Test content",
+	})
+	noteID := createResult.Metadata["note_id"].(string)
+
+	// Read the note
+	result, err := skill.Execute(ctx, map[string]any{
+		"operation": "read",
+		"id":        noteID,
+	})
+	if err != nil {
+		t.Fatalf("Execute() unexpected error: %v", err)
+	}
+	if result.Error != "" {
+		t.Errorf("Expected no error, got: %s", result.Error)
+	}
+	if result.Output == "" {
+		t.Error("Expected output from read operation")
+	}
+}
+
+func TestNotesSkill_Execute_ReadMissingID(t *testing.T) {
+	repo := newMockNotesRepo()
+	skill := notes.NewNotes(repo)
+
+	ctx := context.WithValue(context.Background(), "user_id", "user1")
+
+	result, err := skill.Execute(ctx, map[string]any{
+		"operation": "read",
+	})
+	if err != nil {
+		t.Fatalf("Execute() unexpected error: %v", err)
+	}
+	if result.Error == "" {
+		t.Error("Expected error for missing id")
+	}
+}
+
+func TestNotesSkill_Execute_ReadNotFound(t *testing.T) {
+	repo := newMockNotesRepo()
+	skill := notes.NewNotes(repo)
+
+	ctx := context.WithValue(context.Background(), "user_id", "user1")
+
+	result, err := skill.Execute(ctx, map[string]any{
+		"operation": "read",
+		"id":        "nonexistent",
+	})
+	if err != nil {
+		t.Fatalf("Execute() unexpected error: %v", err)
+	}
+	if result.Error == "" {
+		t.Error("Expected error for nonexistent note")
+	}
+}
+
+func TestNotesSkill_Execute_Update(t *testing.T) {
+	repo := newMockNotesRepo()
+	skill := notes.NewNotes(repo)
+
+	ctx := context.WithValue(context.Background(), "user_id", "user1")
+
+	// Create a note first
+	createResult, _ := skill.Execute(ctx, map[string]any{
+		"operation": "create",
+		"title":     "Original Title",
+		"content":   "Original content",
+	})
+	noteID := createResult.Metadata["note_id"].(string)
+
+	// Update the note
+	result, err := skill.Execute(ctx, map[string]any{
+		"operation": "update",
+		"id":        noteID,
+		"title":     "Updated Title",
+		"content":   "Updated content",
+	})
+	if err != nil {
+		t.Fatalf("Execute() unexpected error: %v", err)
+	}
+	if result.Error != "" {
+		t.Errorf("Expected no error, got: %s", result.Error)
+	}
+}
+
+func TestNotesSkill_Execute_UpdatePartial(t *testing.T) {
+	repo := newMockNotesRepo()
+	skill := notes.NewNotes(repo)
+
+	ctx := context.WithValue(context.Background(), "user_id", "user1")
+
+	// Create a note first
+	createResult, _ := skill.Execute(ctx, map[string]any{
+		"operation": "create",
+		"title":     "Original Title",
+		"content":   "Original content",
+	})
+	noteID := createResult.Metadata["note_id"].(string)
+
+	// Update only the title
+	result, err := skill.Execute(ctx, map[string]any{
+		"operation": "update",
+		"id":        noteID,
+		"title":     "New Title Only",
+	})
+	if err != nil {
+		t.Fatalf("Execute() unexpected error: %v", err)
+	}
+	if result.Error != "" {
+		t.Errorf("Expected no error, got: %s", result.Error)
+	}
+}
+
+func TestNotesSkill_Execute_UpdateWithTags(t *testing.T) {
+	repo := newMockNotesRepo()
+	skill := notes.NewNotes(repo)
+
+	ctx := context.WithValue(context.Background(), "user_id", "user1")
+
+	// Create a note first
+	createResult, _ := skill.Execute(ctx, map[string]any{
+		"operation": "create",
+		"title":     "Test",
+		"content":   "Test",
+	})
+	noteID := createResult.Metadata["note_id"].(string)
+
+	// Update with tags
+	result, err := skill.Execute(ctx, map[string]any{
+		"operation": "update",
+		"id":        noteID,
+		"tags":      []interface{}{"updated", "tagged"},
+	})
+	if err != nil {
+		t.Fatalf("Execute() unexpected error: %v", err)
+	}
+	if result.Error != "" {
+		t.Errorf("Expected no error, got: %s", result.Error)
+	}
+}
+
+func TestNotesSkill_Execute_UpdateMissingID(t *testing.T) {
+	repo := newMockNotesRepo()
+	skill := notes.NewNotes(repo)
+
+	ctx := context.WithValue(context.Background(), "user_id", "user1")
+
+	result, err := skill.Execute(ctx, map[string]any{
+		"operation": "update",
+		"title":     "New Title",
+	})
+	if err != nil {
+		t.Fatalf("Execute() unexpected error: %v", err)
+	}
+	if result.Error == "" {
+		t.Error("Expected error for missing id")
+	}
+}
+
+func TestNotesSkill_Execute_UpdateNotFound(t *testing.T) {
+	repo := newMockNotesRepo()
+	skill := notes.NewNotes(repo)
+
+	ctx := context.WithValue(context.Background(), "user_id", "user1")
+
+	result, err := skill.Execute(ctx, map[string]any{
+		"operation": "update",
+		"id":        "nonexistent",
+		"title":     "New Title",
+	})
+	if err != nil {
+		t.Fatalf("Execute() unexpected error: %v", err)
+	}
+	if result.Error == "" {
+		t.Error("Expected error for nonexistent note")
+	}
+}
+
+func TestNotesSkill_Execute_Delete(t *testing.T) {
+	repo := newMockNotesRepo()
+	skill := notes.NewNotes(repo)
+
+	ctx := context.WithValue(context.Background(), "user_id", "user1")
+
+	// Create a note first
+	createResult, _ := skill.Execute(ctx, map[string]any{
+		"operation": "create",
+		"title":     "To Delete",
+		"content":   "Will be deleted",
+	})
+	noteID := createResult.Metadata["note_id"].(string)
+
+	// Delete the note
+	result, err := skill.Execute(ctx, map[string]any{
+		"operation": "delete",
+		"id":        noteID,
+	})
+	if err != nil {
+		t.Fatalf("Execute() unexpected error: %v", err)
+	}
+	if result.Error != "" {
+		t.Errorf("Expected no error, got: %s", result.Error)
+	}
+}
+
+func TestNotesSkill_Execute_DeleteMissingID(t *testing.T) {
+	repo := newMockNotesRepo()
+	skill := notes.NewNotes(repo)
+
+	ctx := context.WithValue(context.Background(), "user_id", "user1")
+
+	result, err := skill.Execute(ctx, map[string]any{
+		"operation": "delete",
+	})
+	if err != nil {
+		t.Fatalf("Execute() unexpected error: %v", err)
+	}
+	if result.Error == "" {
+		t.Error("Expected error for missing id")
+	}
+}
+
+func TestNotesSkill_Execute_DeleteNotFound(t *testing.T) {
+	repo := newMockNotesRepo()
+	skill := notes.NewNotes(repo)
+
+	ctx := context.WithValue(context.Background(), "user_id", "user1")
+
+	result, err := skill.Execute(ctx, map[string]any{
+		"operation": "delete",
+		"id":        "nonexistent",
+	})
+	if err != nil {
+		t.Fatalf("Execute() unexpected error: %v", err)
+	}
+	if result.Error == "" {
+		t.Error("Expected error for nonexistent note")
+	}
+}
+
+func TestNotesSkill_Execute_List(t *testing.T) {
+	repo := newMockNotesRepo()
+	skill := notes.NewNotes(repo)
+
+	ctx := context.WithValue(context.Background(), "user_id", "user1")
+
+	// Create multiple notes
+	skill.Execute(ctx, map[string]any{
+		"operation": "create",
+		"title":     "Note 1",
+		"content":   "Content 1",
+		"tags":      []interface{}{"tag1"},
+	})
+	skill.Execute(ctx, map[string]any{
+		"operation": "create",
+		"title":     "Note 2",
+		"content":   "Content 2",
+	})
+
+	// List notes
+	result, err := skill.Execute(ctx, map[string]any{
+		"operation": "list",
+	})
+	if err != nil {
+		t.Fatalf("Execute() unexpected error: %v", err)
+	}
+	if result.Error != "" {
+		t.Errorf("Expected no error, got: %s", result.Error)
+	}
+	if result.Output == "" {
+		t.Error("Expected output from list operation")
+	}
+	if result.Metadata["count"] != 2 {
+		t.Errorf("Expected count 2, got %v", result.Metadata["count"])
+	}
+}
+
+func TestNotesSkill_Execute_ListEmpty(t *testing.T) {
+	repo := newMockNotesRepo()
+	skill := notes.NewNotes(repo)
+
+	ctx := context.WithValue(context.Background(), "user_id", "user1")
+
+	result, err := skill.Execute(ctx, map[string]any{
+		"operation": "list",
+	})
+	if err != nil {
+		t.Fatalf("Execute() unexpected error: %v", err)
+	}
+	if result.Error != "" {
+		t.Errorf("Expected no error, got: %s", result.Error)
+	}
+	if result.Output != "No notes found" {
+		t.Errorf("Expected 'No notes found', got: %s", result.Output)
+	}
+}
