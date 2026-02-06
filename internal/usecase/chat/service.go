@@ -3,10 +3,10 @@ package chat
 import (
 	"context"
 	"fmt"
-	"log/slog" // Structured logging
-	"time"     // For time.Now()
+	"time" // For time.Now()
 
 	"nuimanbot/internal/domain"
+	"nuimanbot/internal/infrastructure/requestid"
 )
 
 // LLMService defines the interface for LLM interactions required by the ChatService.
@@ -74,6 +74,15 @@ func getConversationID(platform domain.Platform, platformUID string) string {
 
 // ProcessMessage processes an incoming message, interacts with LLM/skills/memory, and returns an outgoing message.
 func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.IncomingMessage) (domain.OutgoingMessage, error) {
+	// Add request ID to context for correlation
+	ctx, reqID := requestid.MustFromContext(ctx)
+	logger := requestid.Logger(ctx)
+
+	logger.Info("Processing message",
+		"platform", incomingMsg.Platform,
+		"user", incomingMsg.PlatformUID,
+	)
+
 	// 1. Validate Input
 	validatedInput, err := s.securityService.ValidateInput(ctx, incomingMsg.Text, 32768) // Max 32KB for now
 	if err != nil {
@@ -175,7 +184,7 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 		// TokenCount:  llmRequest.Tokens(), // TODO: Calculate actual token count
 	}
 	if err := s.memoryRepo.SaveMessage(ctx, conversationID, incomingMsg.PlatformUID, incomingMsg.Platform, incomingStoredMsg); err != nil {
-		slog.Error("Error saving incoming message to memory",
+		logger.Error("Error saving incoming message to memory",
 			"conversation_id", conversationID,
 			"error", err,
 		)
@@ -189,7 +198,7 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 		TokenCount: finalResponse.Usage.CompletionTokens, // Using LLM's reported tokens
 	}
 	if err := s.memoryRepo.SaveMessage(ctx, conversationID, incomingMsg.PlatformUID, incomingMsg.Platform, outgoingStoredMsg); err != nil {
-		slog.Error("Error saving outgoing message to memory",
+		logger.Error("Error saving outgoing message to memory",
 			"conversation_id", conversationID,
 			"error", err,
 		)
@@ -199,8 +208,8 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 	outgoingMsg := domain.OutgoingMessage{
 		RecipientID: incomingMsg.PlatformUID, // Send back to the same user
 		Content:     responseContent,
-		Format:      "markdown", // Assuming LLM returns markdown
-		Metadata:    nil,
+		Format:      "markdown",                          // Assuming LLM returns markdown
+		Metadata:    map[string]any{"request_id": reqID}, // Include request ID for correlation
 	}
 
 	return outgoingMsg, nil
