@@ -205,19 +205,19 @@ func initializeLLMService(cfg *config.NuimanBotConfig) (domain.LLMService, error
 	// Try provider-specific configs first (new way)
 	// Check OpenAI
 	if cfg.LLM.OpenAI.APIKey.Value() != "" {
-		log.Println("Initializing OpenAI LLM provider")
+		slog.Info("Initializing LLM provider", "provider", "openai", "source", "legacy_config")
 		return openai.New(&cfg.LLM.OpenAI), nil
 	}
 
 	// Check Ollama
 	if cfg.LLM.Ollama.BaseURL != "" {
-		log.Println("Initializing Ollama LLM provider")
+		slog.Info("Initializing LLM provider", "provider", "ollama", "source", "legacy_config")
 		return ollama.New(&cfg.LLM.Ollama), nil
 	}
 
 	// Check Anthropic
 	if cfg.LLM.Anthropic.APIKey.Value() != "" {
-		log.Println("Initializing Anthropic LLM provider")
+		slog.Info("Initializing LLM provider", "provider", "anthropic", "source", "legacy_config")
 		// Convert to generic provider config for Anthropic
 		providerCfg := &config.LLMProviderConfig{
 			Type:   domain.LLMProviderAnthropic,
@@ -283,9 +283,9 @@ func registerBuiltInSkills(registry skill.SkillRegistry, notesRepo *sqlite.Notes
 		if err := registry.Register(w); err != nil {
 			return fmt.Errorf("failed to register weather skill: %w", err)
 		}
-		log.Println("Weather skill registered")
+		slog.Info("Skill registered", "skill", "weather")
 	} else {
-		log.Println("Weather skill skipped (OPENWEATHERMAP_API_KEY not set)")
+		slog.Warn("Skill skipped", "skill", "weather", "reason", "OPENWEATHERMAP_API_KEY not set")
 	}
 
 	// Register WebSearch skill
@@ -293,14 +293,14 @@ func registerBuiltInSkills(registry skill.SkillRegistry, notesRepo *sqlite.Notes
 	if err := registry.Register(ws); err != nil {
 		return fmt.Errorf("failed to register websearch skill: %w", err)
 	}
-	log.Println("WebSearch skill registered")
+	slog.Info("Skill registered", "skill", "websearch")
 
 	// Register Notes skill
 	notesSkill := notes.NewNotes(notesRepo)
 	if err := registry.Register(notesSkill); err != nil {
 		return fmt.Errorf("failed to register notes skill: %w", err)
 	}
-	log.Println("Notes skill registered")
+	slog.Info("Skill registered", "skill", "notes")
 
 	slog.Info("Registered built-in skills successfully")
 	return nil
@@ -331,8 +331,11 @@ func initializeDatabase(db *sql.DB) error {
 			conversation_id TEXT NOT NULL,
 			role TEXT NOT NULL,
 			content TEXT NOT NULL,
+			tool_calls TEXT,
+			tool_results TEXT,
 			token_count INTEGER DEFAULT 0,
-			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+			timestamp TIMESTAMP NOT NULL,
+			FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
 		)
 	`)
 	if err != nil {
@@ -379,7 +382,45 @@ func initializeDatabase(db *sql.DB) error {
 		return fmt.Errorf("failed to create notes index: %w", err)
 	}
 
-	log.Println("Database schema initialized successfully")
+	// Create index on messages for efficient conversation message retrieval
+	_, err = db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_messages_conversation_timestamp
+		ON messages(conversation_id, timestamp)
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to create messages conversation index: %w", err)
+	}
+
+	// Create index on messages for efficient token-based retrieval (GetRecentMessages)
+	_, err = db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_messages_conversation_tokens
+		ON messages(conversation_id, timestamp DESC, token_count)
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to create messages token index: %w", err)
+	}
+
+	// Create index on conversations for efficient user conversation listing
+	_, err = db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_conversations_user_updated
+		ON conversations(user_id, updated_at DESC)
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to create conversations user index: %w", err)
+	}
+
+	// Create unique index on users for platform-specific user lookups
+	// Note: This is redundant with the UNIQUE constraint in the table definition,
+	// but explicit indexes can help with query planning
+	_, err = db.Exec(`
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_users_platform_uid
+		ON users(platform, platform_uid)
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to create users platform index: %w", err)
+	}
+
+	slog.Info("Database schema initialized successfully")
 	return nil
 }
 
@@ -404,7 +445,7 @@ func (app *application) Run(ctx context.Context) error {
 
 			// Start Telegram gateway in background
 			go func() {
-				log.Println("Starting Telegram gateway...")
+				slog.Info("Starting gateway", "platform", "telegram")
 				if err := telegramGateway.Start(ctx); err != nil {
 					slog.Error("Telegram gateway error", "error", err)
 				}
@@ -423,7 +464,7 @@ func (app *application) Run(ctx context.Context) error {
 
 			// Start Slack gateway in background
 			go func() {
-				log.Println("Starting Slack gateway...")
+				slog.Info("Starting gateway", "platform", "slack")
 				if err := slackGateway.Start(ctx); err != nil {
 					slog.Error("Slack gateway error", "error", err)
 				}
