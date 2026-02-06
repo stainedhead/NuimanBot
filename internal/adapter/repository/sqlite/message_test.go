@@ -17,6 +17,12 @@ func setupTestDB(t *testing.T) *sql.DB {
 		t.Fatalf("Failed to open test database: %v", err)
 	}
 
+	// Enable foreign key constraints (required for CASCADE)
+	_, err = db.Exec("PRAGMA foreign_keys = ON")
+	if err != nil {
+		t.Fatalf("Failed to enable foreign keys: %v", err)
+	}
+
 	// Create schema
 	schema := `
 	CREATE TABLE conversations (
@@ -321,5 +327,405 @@ func TestSaveMessage_Integration(t *testing.T) {
 
 	if messages[0].ID != msg.ID {
 		t.Errorf("Expected message ID %s, got %s", msg.ID, messages[0].ID)
+	}
+}
+
+// TestInit tests the Init method (schema initialization)
+func TestInit(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	repo := NewMessageRepository(db)
+	ctx := context.Background()
+
+	// Init should not error even if tables already exist
+	err := repo.Init(ctx)
+	if err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+
+	// Verify tables exist by querying them
+	_, err = db.Exec("SELECT 1 FROM conversations LIMIT 1")
+	if err != nil {
+		t.Errorf("Conversations table should exist after Init: %v", err)
+	}
+
+	_, err = db.Exec("SELECT 1 FROM messages LIMIT 1")
+	if err != nil {
+		t.Errorf("Messages table should exist after Init: %v", err)
+	}
+}
+
+// TestGetConversation tests retrieving a full conversation
+func TestGetConversation(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	repo := NewMessageRepository(db)
+	ctx := context.Background()
+	convID := "test-conv-5"
+
+	// Create conversation with messages
+	_, err := db.Exec(
+		"INSERT INTO conversations (id, user_id, platform, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+		convID, "user1", "cli", time.Now(), time.Now(),
+	)
+	if err != nil {
+		t.Fatalf("Failed to create conversation: %v", err)
+	}
+
+	// Insert messages
+	baseTime := time.Now()
+	for i := 1; i <= 3; i++ {
+		_, err := db.Exec(
+			`INSERT INTO messages (id, conversation_id, role, content, tool_calls, tool_results, token_count, timestamp)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			"msg"+string(rune('0'+i)), convID, "user", "Message "+string(rune('0'+i)),
+			"[]", "[]", 10, baseTime.Add(time.Duration(i)*time.Minute),
+		)
+		if err != nil {
+			t.Fatalf("Failed to insert message: %v", err)
+		}
+	}
+
+	// Test GetConversation
+	conv, err := repo.GetConversation(ctx, convID)
+	if err != nil {
+		t.Fatalf("GetConversation failed: %v", err)
+	}
+
+	if len(conv.Messages) != 3 {
+		t.Fatalf("Expected 3 messages, got %d", len(conv.Messages))
+	}
+
+	// Verify chronological order
+	for i := 0; i < 3; i++ {
+		expectedID := "msg" + string(rune('1'+i))
+		if conv.Messages[i].ID != expectedID {
+			t.Errorf("Message at position %d: expected %s, got %s", i, expectedID, conv.Messages[i].ID)
+		}
+	}
+}
+
+// TestGetConversation_NotFound tests GetConversation with non-existent conversation
+func TestGetConversation_NotFound(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	repo := NewMessageRepository(db)
+	ctx := context.Background()
+
+	conv, err := repo.GetConversation(ctx, "non-existent")
+	if err == nil {
+		t.Error("GetConversation should return error for non-existent conversation")
+	}
+	if conv != nil {
+		t.Error("GetConversation should return nil conversation for non-existent ID")
+	}
+}
+
+// TestGetConversation_WithToolCalls tests conversation retrieval with tool calls
+func TestGetConversation_WithToolCalls(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	repo := NewMessageRepository(db)
+	ctx := context.Background()
+	convID := "test-conv-6"
+
+	// Create conversation
+	_, err := db.Exec(
+		"INSERT INTO conversations (id, user_id, platform, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+		convID, "user1", "cli", time.Now(), time.Now(),
+	)
+	if err != nil {
+		t.Fatalf("Failed to create conversation: %v", err)
+	}
+
+	// Insert message with tool calls and tool results
+	toolCallsJSON := `[{"tool_name":"calculator","arguments":{"a":5,"b":3}}]`
+	toolResultsJSON := `[{"tool_name":"calculator","output":"8"}]`
+
+	_, err = db.Exec(
+		`INSERT INTO messages (id, conversation_id, role, content, tool_calls, tool_results, token_count, timestamp)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		"msg1", convID, "assistant", "Using calculator", toolCallsJSON, toolResultsJSON, 20, time.Now(),
+	)
+	if err != nil {
+		t.Fatalf("Failed to insert message: %v", err)
+	}
+
+	conv, err := repo.GetConversation(ctx, convID)
+	if err != nil {
+		t.Fatalf("GetConversation failed: %v", err)
+	}
+
+	if len(conv.Messages) != 1 {
+		t.Fatalf("Expected 1 message, got %d", len(conv.Messages))
+	}
+
+	// Verify tool calls and results are populated
+	// The actual parsing is done in GetConversation - we verify non-empty
+	if len(conv.Messages[0].ToolCalls) == 0 {
+		t.Error("Expected tool calls to be parsed")
+	}
+	if len(conv.Messages[0].ToolResults) == 0 {
+		t.Error("Expected tool results to be parsed")
+	}
+}
+
+// TestDeleteConversation tests conversation deletion
+func TestDeleteConversation(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	repo := NewMessageRepository(db)
+	ctx := context.Background()
+	convID := "test-conv-7"
+
+	// Create conversation with messages
+	_, err := db.Exec(
+		"INSERT INTO conversations (id, user_id, platform, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+		convID, "user1", "cli", time.Now(), time.Now(),
+	)
+	if err != nil {
+		t.Fatalf("Failed to create conversation: %v", err)
+	}
+
+	_, err = db.Exec(
+		`INSERT INTO messages (id, conversation_id, role, content, tool_calls, tool_results, token_count, timestamp)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		"msg1", convID, "user", "Test message", "[]", "[]", 10, time.Now(),
+	)
+	if err != nil {
+		t.Fatalf("Failed to insert message: %v", err)
+	}
+
+	// Delete conversation
+	err = repo.DeleteConversation(ctx, convID)
+	if err != nil {
+		t.Fatalf("DeleteConversation failed: %v", err)
+	}
+
+	// Verify conversation is deleted
+	var count int
+	err = db.QueryRow("SELECT COUNT(*) FROM conversations WHERE id = ?", convID).Scan(&count)
+	if err != nil {
+		t.Fatalf("Failed to query conversations: %v", err)
+	}
+	if count != 0 {
+		t.Error("Expected conversation to be deleted")
+	}
+
+	// Verify messages are deleted (CASCADE)
+	err = db.QueryRow("SELECT COUNT(*) FROM messages WHERE conversation_id = ?", convID).Scan(&count)
+	if err != nil {
+		t.Fatalf("Failed to query messages: %v", err)
+	}
+	if count != 0 {
+		t.Error("Expected messages to be deleted via CASCADE")
+	}
+}
+
+// TestDeleteConversation_NotFound tests deleting non-existent conversation
+func TestDeleteConversation_NotFound(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	repo := NewMessageRepository(db)
+	ctx := context.Background()
+
+	// Deleting non-existent conversation should not error
+	err := repo.DeleteConversation(ctx, "non-existent")
+	if err != nil {
+		t.Errorf("DeleteConversation should not error for non-existent conversation: %v", err)
+	}
+}
+
+// TestListConversations tests listing conversations for a user
+func TestListConversations(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	repo := NewMessageRepository(db)
+	ctx := context.Background()
+	userID := "user1"
+
+	// Create multiple conversations for the user
+	conversations := []struct {
+		id       string
+		platform string
+	}{
+		{"conv1", "cli"},
+		{"conv2", "telegram"},
+		{"conv3", "slack"},
+	}
+
+	baseTime := time.Now()
+	for i, conv := range conversations {
+		_, err := db.Exec(
+			"INSERT INTO conversations (id, user_id, platform, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+			conv.id, userID, conv.platform,
+			baseTime.Add(time.Duration(i)*time.Minute),
+			baseTime.Add(time.Duration(i)*time.Minute),
+		)
+		if err != nil {
+			t.Fatalf("Failed to create conversation %s: %v", conv.id, err)
+		}
+	}
+
+	// Create conversation for different user (should not be listed)
+	_, err := db.Exec(
+		"INSERT INTO conversations (id, user_id, platform, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+		"other-conv", "user2", "cli", baseTime, baseTime,
+	)
+	if err != nil {
+		t.Fatalf("Failed to create other user's conversation: %v", err)
+	}
+
+	// List conversations
+	result, err := repo.ListConversations(ctx, userID)
+	if err != nil {
+		t.Fatalf("ListConversations failed: %v", err)
+	}
+
+	if len(result) != 3 {
+		t.Fatalf("Expected 3 conversations, got %d", len(result))
+	}
+
+	// Verify conversations are for the correct user
+	for _, conv := range result {
+		if conv.UserID != userID {
+			t.Errorf("Expected user_id %s, got %s", userID, conv.UserID)
+		}
+	}
+
+	// Verify ordering (most recent first - by updated_at DESC)
+	// Last created should be first in results
+	if result[0].ID != "conv3" {
+		t.Errorf("Expected first conversation to be conv3 (most recent), got %s", result[0].ID)
+	}
+}
+
+// TestListConversations_Empty tests listing for user with no conversations
+func TestListConversations_Empty(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	repo := NewMessageRepository(db)
+	ctx := context.Background()
+
+	result, err := repo.ListConversations(ctx, "non-existent-user")
+	if err != nil {
+		t.Fatalf("ListConversations should not error for user with no conversations: %v", err)
+	}
+
+	if len(result) != 0 {
+		t.Errorf("Expected 0 conversations, got %d", len(result))
+	}
+}
+
+// TestSaveMessage_MultipleMessages tests saving multiple messages to same conversation
+func TestSaveMessage_MultipleMessages(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	repo := NewMessageRepository(db)
+	ctx := context.Background()
+	convID := "test-conv-8"
+	userID := "user1"
+	platform := domain.PlatformCLI
+
+	// Save first message (creates conversation)
+	msg1 := domain.StoredMessage{
+		ID:         "msg1",
+		Role:       "user",
+		Content:    "First message",
+		TokenCount: 10,
+		Timestamp:  time.Now(),
+	}
+
+	err := repo.SaveMessage(ctx, convID, userID, platform, msg1)
+	if err != nil {
+		t.Fatalf("SaveMessage failed for first message: %v", err)
+	}
+
+	// Save second message (conversation already exists)
+	msg2 := domain.StoredMessage{
+		ID:         "msg2",
+		Role:       "assistant",
+		Content:    "Second message",
+		TokenCount: 15,
+		Timestamp:  time.Now().Add(1 * time.Minute),
+	}
+
+	err = repo.SaveMessage(ctx, convID, userID, platform, msg2)
+	if err != nil {
+		t.Fatalf("SaveMessage failed for second message: %v", err)
+	}
+
+	// Verify both messages exist
+	conv, err := repo.GetConversation(ctx, convID)
+	if err != nil {
+		t.Fatalf("GetConversation failed: %v", err)
+	}
+
+	if len(conv.Messages) != 2 {
+		t.Fatalf("Expected 2 messages, got %d", len(conv.Messages))
+	}
+}
+
+// TestSaveMessage_WithToolCallsAndResults tests saving messages with tool data
+func TestSaveMessage_WithToolCallsAndResults(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	repo := NewMessageRepository(db)
+	ctx := context.Background()
+	convID := "test-conv-9"
+	userID := "user1"
+	platform := domain.PlatformCLI
+
+	msg := domain.StoredMessage{
+		ID:         "msg1",
+		Role:       "assistant",
+		Content:    "Using calculator",
+		TokenCount: 20,
+		Timestamp:  time.Now(),
+		ToolCalls: []domain.ToolCall{
+			{
+				ToolName:  "calculator",
+				Arguments: map[string]any{"a": 5, "b": 3},
+			},
+		},
+		ToolResults: []domain.ToolResult{
+			{
+				ToolName: "calculator",
+				Output:   "8",
+			},
+		},
+	}
+
+	err := repo.SaveMessage(ctx, convID, userID, platform, msg)
+	if err != nil {
+		t.Fatalf("SaveMessage with tool data failed: %v", err)
+	}
+
+	// Verify message was saved with tool data
+	conv, err := repo.GetConversation(ctx, convID)
+	if err != nil {
+		t.Fatalf("GetConversation failed: %v", err)
+	}
+
+	if len(conv.Messages) != 1 {
+		t.Fatalf("Expected 1 message, got %d", len(conv.Messages))
+	}
+
+	if len(conv.Messages[0].ToolCalls) != 1 {
+		t.Errorf("Expected 1 tool call, got %d", len(conv.Messages[0].ToolCalls))
+	}
+
+	if len(conv.Messages[0].ToolResults) != 1 {
+		t.Errorf("Expected 1 tool result, got %d", len(conv.Messages[0].ToolResults))
 	}
 }
