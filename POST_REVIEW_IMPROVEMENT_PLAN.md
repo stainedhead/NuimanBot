@@ -782,7 +782,7 @@ TestTelegramGateway_RateLimiting()
 **Priority:** 🟡 HIGH
 **Estimated Effort:** 5 days
 **Start Date:** 2026-02-06
-**Progress:** 50.0% (4/8 tasks complete)
+**Progress:** 62.5% (5/8 tasks complete)
 **Parallel Execution:** Tasks 3.1-3.4 can run concurrently
 
 **Dependencies:** Phase 1 and 2 must be complete
@@ -1130,15 +1130,256 @@ environments:
 
 ---
 
-#### Task 3.5-3.8: Additional Production Features ⏳
+#### Task 3.5: Request ID Propagation ✅
+**Status:** COMPLETE (Completed: 2026-02-06)
+**Commit:** 4439014
+**Priority:** 🟠 MEDIUM
+**Effort:** 0.5 days
+**Dependencies:** None
+**Can Run in Parallel:** Yes
+
+**Problem:**
+- No correlation IDs for distributed tracing
+- Difficult to correlate log entries across service boundaries
+- Cannot trace requests end-to-end through the system
+
+**Solution:**
+```go
+// Request ID context utilities
+package requestid
+
+func Generate() string {
+    b := make([]byte, 16)
+    rand.Read(b)
+    return hex.EncodeToString(b)
+}
+
+func WithRequestID(ctx context.Context, id string) context.Context {
+    if id == "" { id = Generate() }
+    return context.WithValue(ctx, requestIDKey, id)
+}
+
+func MustFromContext(ctx context.Context) (context.Context, string) {
+    if id := FromContext(ctx); id != "" {
+        return ctx, id
+    }
+    id := Generate()
+    return WithRequestID(ctx, id), id
+}
+
+func Logger(ctx context.Context) *slog.Logger {
+    if attrs := LogAttrs(ctx); attrs != nil {
+        return slog.With(attrs...)
+    }
+    return slog.Default()
+}
+
+// Usage in chat service
+func (s *Service) ProcessMessage(ctx context.Context, msg *domain.IncomingMessage) (domain.OutgoingMessage, error) {
+    ctx, reqID := requestid.MustFromContext(ctx)
+    logger := requestid.Logger(ctx)
+
+    logger.Info("Processing message", "platform", msg.Platform)
+    // ... rest of function uses logger with request ID
+
+    return domain.OutgoingMessage{
+        Content:  responseContent,
+        Metadata: map[string]any{"request_id": reqID},
+    }, nil
+}
+```
+
+**Acceptance Criteria:**
+- [x] Request ID generation with crypto/rand (16-byte hex)
+- [x] Context propagation with WithRequestID/FromContext/MustFromContext
+- [x] Logger factory with automatic request ID attributes
+- [x] Integrated into chat service ProcessMessage()
+- [x] Request ID threaded through entire call chain via context
+- [x] All log statements use request ID logger
+- [x] Request ID included in outgoing message metadata
+- [x] 14 comprehensive tests, 95.0% coverage
+
+**Test Coverage:** 95.0% (14 tests)
+
+**Implementation Notes:**
+- Uses crypto/rand for secure unique ID generation (16 bytes = 32 hex chars)
+- MustFromContext generates ID if missing, ensuring it always exists
+- Logger() returns slog.Default() when no request ID present (safe fallback)
+- LogAttrs() returns nil when no ID (prevents unnecessary attribute creation)
+- Tested concurrent ID generation (100 goroutines, all unique)
+- Verified propagation through multiple call stack levels
+- Chat service now uses logger instead of slog throughout
+
+---
+
+#### Task 3.6: Error Categorization ⏳
 **Status:** PENDING
 **Priority:** 🟠 MEDIUM
-**Effort:** 1.5 days total
+**Effort:** 0.5 days
 
-- **3.5:** Request ID Propagation (correlation IDs in logs)
-- **3.6:** Error Categorization (user errors vs system errors)
-- **3.7:** Configuration Validation on Startup
-- **3.8:** Secret Rotation Support (vault key rotation)
+**Problem:**
+- All errors treated the same (user errors vs system errors)
+- No structured error codes for client handling
+- Difficult to generate meaningful user-facing error messages
+
+**Solution:**
+```go
+// Error categories
+type ErrorCategory string
+
+const (
+    ErrorCategoryUser     ErrorCategory = "user_error"      // Bad input, invalid request
+    ErrorCategorySystem   ErrorCategory = "system_error"    // Internal failures
+    ErrorCategoryExternal ErrorCategory = "external_error"  // API failures, timeouts
+    ErrorCategoryAuth     ErrorCategory = "auth_error"      // Permission denied
+)
+
+type CategorizedError struct {
+    Category    ErrorCategory
+    Code        string
+    Message     string
+    UserMessage string
+    Cause       error
+}
+
+// Usage
+func (s *Service) ValidateInput(input string) error {
+    if len(input) > maxLength {
+        return &CategorizedError{
+            Category:    ErrorCategoryUser,
+            Code:        "INPUT_TOO_LONG",
+            Message:     fmt.Sprintf("input exceeds max length of %d", maxLength),
+            UserMessage: "Your message is too long. Please keep it under 4096 characters.",
+        }
+    }
+}
+```
+
+**Acceptance Criteria:**
+- [ ] Define error categories and codes
+- [ ] Implement CategorizedError type
+- [ ] Update all error returns to use categories
+- [ ] Add user-facing error messages
+- [ ] Test error categorization and messages
+- [ ] Test coverage > 80%
+
+---
+
+#### Task 3.7: Configuration Validation on Startup ⏳
+**Status:** PENDING
+**Priority:** 🟠 MEDIUM
+**Effort:** 0.25 days
+
+**Problem:**
+- Configuration errors discovered at runtime
+- No validation of required fields on startup
+- Difficult to diagnose missing/invalid config
+
+**Solution:**
+```go
+// Validate config on startup
+func ValidateConfig(cfg *NuimanBotConfig) error {
+    var errs []error
+
+    if cfg.Server.Port < 1 || cfg.Server.Port > 65535 {
+        errs = append(errs, fmt.Errorf("invalid port: %d", cfg.Server.Port))
+    }
+
+    if cfg.Security.EncryptionKey == "" {
+        errs = append(errs, fmt.Errorf("encryption key is required"))
+    }
+
+    if len(cfg.LLM.Providers) == 0 {
+        errs = append(errs, fmt.Errorf("at least one LLM provider required"))
+    }
+
+    if len(errs) > 0 {
+        return fmt.Errorf("config validation failed: %w", errors.Join(errs...))
+    }
+
+    return nil
+}
+
+// Call from main.go
+func main() {
+    cfg, err := config.Load()
+    if err != nil {
+        log.Fatalf("Failed to load config: %v", err)
+    }
+
+    if err := config.ValidateConfig(cfg); err != nil {
+        log.Fatalf("Config validation failed: %v", err)
+    }
+}
+```
+
+**Acceptance Criteria:**
+- [ ] Validate all required fields
+- [ ] Validate field ranges and formats
+- [ ] Return all validation errors together
+- [ ] Fail fast on startup with clear error messages
+- [ ] Test coverage > 90%
+
+---
+
+#### Task 3.8: Secret Rotation Support ⏳
+**Status:** PENDING
+**Priority:** 🟠 MEDIUM
+**Effort:** 0.25 days
+
+**Problem:**
+- No support for rotating encryption keys
+- Changing vault key requires re-encrypting all data
+- No graceful migration path for key changes
+
+**Solution:**
+```go
+// Multi-version key support
+type Vault struct {
+    keys map[int]*EncryptionKey
+    currentVersion int
+}
+
+func (v *Vault) Encrypt(data []byte) ([]byte, error) {
+    key := v.keys[v.currentVersion]
+    encrypted, err := key.Encrypt(data)
+    if err != nil {
+        return nil, err
+    }
+
+    // Prepend version byte
+    versioned := append([]byte{byte(v.currentVersion)}, encrypted...)
+    return versioned, nil
+}
+
+func (v *Vault) Decrypt(data []byte) ([]byte, error) {
+    if len(data) < 1 {
+        return nil, fmt.Errorf("invalid data")
+    }
+
+    version := int(data[0])
+    key, ok := v.keys[version]
+    if !ok {
+        return nil, fmt.Errorf("unknown key version: %d", version)
+    }
+
+    return key.Decrypt(data[1:])
+}
+
+// Background re-encryption job
+func (v *Vault) RotateKeys(ctx context.Context) error {
+    // 1. Add new key version
+    // 2. Re-encrypt all data with new key
+    // 3. Remove old key after grace period
+}
+```
+
+**Acceptance Criteria:**
+- [ ] Support multiple key versions
+- [ ] Prepend version byte to encrypted data
+- [ ] Decrypt with correct version key
+- [ ] Background re-encryption job
+- [ ] Test coverage > 85%
 
 ---
 
