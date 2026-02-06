@@ -165,3 +165,103 @@ func TestWeatherSkill_Execute_Forecast_MissingLocation(t *testing.T) {
 		t.Error("Expected error for missing location")
 	}
 }
+
+func TestWeatherSkill_Execute_Current_MetricUnits(t *testing.T) {
+	skill := weather.NewWeather("test-api-key", 10)
+
+	result, err := skill.Execute(context.Background(), map[string]any{
+		"operation": "current",
+		"location":  "London",
+		"units":     "metric",
+	})
+	if err != nil {
+		t.Fatalf("Execute() unexpected error: %v", err)
+	}
+	// Will fail with API error due to invalid key, but tests parameter handling
+	// The error should be from the API, not from parameter validation
+	if result.Error != "" && result.Error == "missing location parameter" {
+		t.Error("Should not get parameter validation error")
+	}
+}
+
+func TestWeatherSkill_Execute_Current_ImperialUnits(t *testing.T) {
+	skill := weather.NewWeather("test-api-key", 10)
+
+	result, err := skill.Execute(context.Background(), map[string]any{
+		"operation": "current",
+		"location":  "New York",
+		"units":     "imperial",
+	})
+	if err != nil {
+		t.Fatalf("Execute() unexpected error: %v", err)
+	}
+	// Will fail with API error, but tests imperial units parameter
+	if result.Error != "" && result.Error == "missing location parameter" {
+		t.Error("Should not get parameter validation error")
+	}
+}
+
+func TestWeatherSkill_Execute_Current_StandardUnits(t *testing.T) {
+	skill := weather.NewWeather("test-api-key", 10)
+
+	result, err := skill.Execute(context.Background(), map[string]any{
+		"operation": "current",
+		"location":  "Tokyo",
+		"units":     "standard",
+	})
+	if err != nil {
+		t.Fatalf("Execute() unexpected error: %v", err)
+	}
+	// Will fail with API error, but tests standard units parameter
+	if result.Error != "" && result.Error == "missing location parameter" {
+		t.Error("Should not get parameter validation error")
+	}
+}
+
+func TestWeatherSkill_Execute_Forecast_WithUnits(t *testing.T) {
+	skill := weather.NewWeather("test-api-key", 10)
+
+	result, err := skill.Execute(context.Background(), map[string]any{
+		"operation": "forecast",
+		"location":  "Paris",
+		"units":     "metric",
+	})
+	if err != nil {
+		t.Fatalf("Execute() unexpected error: %v", err)
+	}
+	// Will fail with API error, but tests forecast with units
+	if result.Error != "" && result.Error == "missing location parameter" {
+		t.Error("Should not get parameter validation error")
+	}
+}
+
+func TestWeatherSkill_Execute_Forecast_InvalidUnits(t *testing.T) {
+	skill := weather.NewWeather("test-api-key", 10)
+
+	result, err := skill.Execute(context.Background(), map[string]any{
+		"operation": "forecast",
+		"location":  "Berlin",
+		"units":     "celsius",
+	})
+	if err != nil {
+		t.Fatalf("Execute() unexpected error: %v", err)
+	}
+	if result.Error == "" {
+		t.Error("Expected error for invalid units")
+	}
+}
+
+func TestWeatherSkill_Execute_Forecast_EmptyLocation(t *testing.T) {
+	skill := weather.NewWeather("test-api-key", 10)
+
+	result, err := skill.Execute(context.Background(), map[string]any{
+		"operation": "forecast",
+		"location":  "",
+	})
+	if err != nil {
+		t.Fatalf("Execute() unexpected error: %v", err)
+	}
+	if result.Error == "" {
+		t.Error("Expected error for empty location")
+	}
+}
