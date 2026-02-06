@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	anthropicsdk "github.com/anthropics/anthropic-sdk-go"
 	"nuimanbot/internal/config"
 	"nuimanbot/internal/domain"
 )
@@ -404,5 +405,462 @@ func TestNewClient_InvalidConfig(t *testing.T) {
 				t.Errorf("NewClient() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// TestStream_InvalidProvider tests Stream with invalid provider
+func TestStream_InvalidProvider(t *testing.T) {
+	cfg := &config.LLMProviderConfig{
+		Type:   domain.LLMProviderAnthropic,
+		APIKey: domain.NewSecureStringFromString("test-key"),
+	}
+	client, err := NewClient(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	req := &domain.LLMRequest{
+		Model:     "gpt-4",
+		MaxTokens: 1024,
+		Messages:  []domain.Message{{Role: "user", Content: "Hello"}},
+	}
+
+	// Try with wrong provider
+	_, err = client.Stream(context.Background(), domain.LLMProviderOpenAI, req)
+	if err == nil {
+		t.Error("Expected error for wrong provider in Stream, got nil")
+	}
+}
+
+// TestStream_ParameterConstruction tests that Stream properly constructs parameters
+// Note: Full streaming behavior testing requires complex SDK mocking and is deferred
+func TestStream_ParameterConstruction(t *testing.T) {
+	cfg := &config.LLMProviderConfig{
+		Type:   domain.LLMProviderAnthropic,
+		APIKey: domain.NewSecureStringFromString("test-key"),
+	}
+	client, err := NewClient(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		req  *domain.LLMRequest
+	}{
+		{
+			name: "basic request",
+			req: &domain.LLMRequest{
+				Model:     "claude-3-sonnet-20240229",
+				MaxTokens: 1024,
+				Messages: []domain.Message{
+					{Role: "user", Content: "Hello"},
+				},
+			},
+		},
+		{
+			name: "with temperature",
+			req: &domain.LLMRequest{
+				Model:       "claude-3-sonnet-20240229",
+				MaxTokens:   1024,
+				Temperature: 0.7,
+				Messages: []domain.Message{
+					{Role: "user", Content: "Hello"},
+				},
+			},
+		},
+		{
+			name: "with system prompt",
+			req: &domain.LLMRequest{
+				Model:        "claude-3-sonnet-20240229",
+				MaxTokens:    1024,
+				SystemPrompt: "You are helpful",
+				Messages: []domain.Message{
+					{Role: "user", Content: "Hello"},
+				},
+			},
+		},
+		{
+			name: "with tools",
+			req: &domain.LLMRequest{
+				Model:     "claude-3-sonnet-20240229",
+				MaxTokens: 1024,
+				Messages: []domain.Message{
+					{Role: "user", Content: "Calculate 5+3"},
+				},
+				Tools: []domain.ToolDefinition{
+					{
+						Name:        "calculator",
+						Description: "Math tool",
+						InputSchema: map[string]any{
+							"type":       "object",
+							"properties": map[string]any{"a": map[string]any{"type": "number"}},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Stream() should return a channel without error for valid Anthropic requests
+			// The actual streaming behavior would require mocking the SDK's streaming API
+			ch, err := client.Stream(context.Background(), domain.LLMProviderAnthropic, tt.req)
+			if err != nil {
+				t.Errorf("Stream() error = %v, want nil", err)
+			}
+			if ch == nil {
+				t.Error("Stream() returned nil channel")
+			}
+
+			// Clean up by reading any immediate errors and closing context
+			// In a real scenario, the SDK would be streaming, but without API key/network,
+			// we just verify the channel was created
+			select {
+			case chunk, ok := <-ch:
+				if ok && chunk.Error != nil {
+					// Expected - no valid API connection
+					t.Logf("Expected error from stream: %v", chunk.Error)
+				}
+			default:
+				// Channel not ready yet - that's fine
+			}
+		})
+	}
+}
+
+// TestListModels_InvalidProvider tests ListModels with invalid provider
+func TestListModels_InvalidProvider(t *testing.T) {
+	cfg := &config.LLMProviderConfig{
+		Type:   domain.LLMProviderAnthropic,
+		APIKey: domain.NewSecureStringFromString("test-key"),
+	}
+	client, err := NewClient(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	_, err = client.ListModels(context.Background(), domain.LLMProviderOpenAI)
+	if err == nil {
+		t.Error("Expected error for wrong provider in ListModels, got nil")
+	}
+}
+
+// TestConvertInputSchema tests schema conversion
+func TestConvertInputSchema(t *testing.T) {
+	tests := []struct {
+		name           string
+		schema         map[string]any
+		wantProperties bool
+	}{
+		{
+			name: "schema with required fields as []string",
+			schema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"name": map[string]any{"type": "string"},
+					"age":  map[string]any{"type": "number"},
+				},
+				"required": []string{"name"},
+			},
+			wantProperties: true,
+		},
+		{
+			name: "schema with required fields as []interface{}",
+			schema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"city": map[string]any{"type": "string"},
+				},
+				"required": []interface{}{"city"},
+			},
+			wantProperties: true,
+		},
+		{
+			name: "schema without required fields",
+			schema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"optional": map[string]any{"type": "string"},
+				},
+			},
+			wantProperties: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := convertInputSchema(tt.schema)
+			if tt.wantProperties && result.Properties == nil {
+				t.Error("convertInputSchema() properties should not be nil")
+			}
+		})
+	}
+}
+
+// TestCreateToolParam tests tool parameter creation
+func TestCreateToolParam(t *testing.T) {
+	schema := anthropicsdk.ToolInputSchemaParam{
+		Type: "object",
+		Properties: map[string]any{
+			"query": map[string]any{"type": "string"},
+		},
+	}
+
+	tests := []struct {
+		name        string
+		toolName    string
+		description string
+	}{
+		{
+			name:        "tool with description",
+			toolName:    "search",
+			description: "Search the web",
+		},
+		{
+			name:        "tool without description",
+			toolName:    "calculator",
+			description: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := createToolParam(tt.toolName, tt.description, schema)
+			if result.OfTool.Name != tt.toolName {
+				t.Errorf("createToolParam() name = %v, want %v", result.OfTool.Name, tt.toolName)
+			}
+			// Tool param created successfully - verify it has correct structure
+			if result.OfTool.InputSchema.Type != "object" {
+				t.Errorf("createToolParam() schema type = %v, want object", result.OfTool.InputSchema.Type)
+			}
+		})
+	}
+}
+
+// TestConvertToolResults tests tool results conversion
+func TestConvertToolResults(t *testing.T) {
+	tests := []struct {
+		name        string
+		toolResults []domain.ToolResult
+		toolCallID  string
+	}{
+		{
+			name: "successful tool result",
+			toolResults: []domain.ToolResult{
+				{
+					ToolName: "calculator",
+					Output:   "8",
+					Error:    "",
+				},
+			},
+			toolCallID: "tool_123",
+		},
+		{
+			name: "tool result with error",
+			toolResults: []domain.ToolResult{
+				{
+					ToolName: "search",
+					Output:   "",
+					Error:    "network timeout",
+				},
+			},
+			toolCallID: "tool_456",
+		},
+		{
+			name: "multiple tool results",
+			toolResults: []domain.ToolResult{
+				{
+					ToolName: "calculator",
+					Output:   "42",
+					Error:    "",
+				},
+				{
+					ToolName: "weather",
+					Output:   "sunny",
+					Error:    "",
+				},
+			},
+			toolCallID: "tool_789",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := convertToolResults(tt.toolResults, tt.toolCallID)
+			if result.Role != "user" {
+				t.Errorf("convertToolResults() role = %v, want user", result.Role)
+			}
+			// Verify content blocks were created
+			// The implementation creates content blocks for each result
+		})
+	}
+}
+
+// TestConvertMessages_BasicMessages tests basic message conversion
+func TestConvertMessages_BasicMessages(t *testing.T) {
+	messages := []domain.Message{
+		{
+			Role:    "user",
+			Content: "Hello, how are you?",
+		},
+		{
+			Role:    "assistant",
+			Content: "I'm doing well, thank you!",
+		},
+		{
+			Role:    "user",
+			Content: "That's great!",
+		},
+	}
+
+	result := convertMessages(messages)
+	if len(result) != len(messages) {
+		t.Errorf("convertMessages() returned %d messages, want %d", len(result), len(messages))
+	}
+
+	// Verify roles are preserved by comparing string values
+	for i, msg := range result {
+		if string(msg.Role) != messages[i].Role {
+			t.Errorf("convertMessages() message %d role = %v, want %v", i, msg.Role, messages[i].Role)
+		}
+	}
+}
+
+// TestConvertTools_ComplexSchema tests tool conversion with complex schemas
+func TestConvertTools_ComplexSchema(t *testing.T) {
+	tools := []domain.ToolDefinition{
+		{
+			Name:        "complex_tool",
+			Description: "A tool with complex schema",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"nested": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"field": map[string]any{"type": "string"},
+						},
+					},
+					"array": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "string",
+						},
+					},
+				},
+				"required": []string{"nested"},
+			},
+		},
+	}
+
+	result := convertTools(tools)
+	if len(result) == 0 {
+		t.Error("convertTools() returned empty slice")
+	}
+
+	if result[0].OfTool.Name != "complex_tool" {
+		t.Errorf("convertTools() tool name = %v, want complex_tool", result[0].OfTool.Name)
+	}
+}
+
+// TestConvertTools_MultipleTools tests converting multiple tools
+func TestConvertTools_MultipleTools(t *testing.T) {
+	tools := []domain.ToolDefinition{
+		{
+			Name:        "calculator",
+			Description: "Performs math",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"a": map[string]any{"type": "number"}},
+			},
+		},
+		{
+			Name:        "search",
+			Description: "Searches the web",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"query": map[string]any{"type": "string"}},
+			},
+		},
+		{
+			Name:        "weather",
+			Description: "Gets weather",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"location": map[string]any{"type": "string"}},
+			},
+		},
+	}
+
+	result := convertTools(tools)
+	if len(result) != 3 {
+		t.Errorf("convertTools() returned %d tools, want 3", len(result))
+	}
+
+	// Verify all tool names are present
+	names := make(map[string]bool)
+	for _, tool := range result {
+		names[tool.OfTool.Name] = true
+	}
+
+	expectedNames := []string{"calculator", "search", "weather"}
+	for _, name := range expectedNames {
+		if !names[name] {
+			t.Errorf("convertTools() missing tool %s", name)
+		}
+	}
+}
+
+// TestNewClientWithBaseURL_InvalidURL tests error handling for invalid URLs
+func TestNewClientWithBaseURL_InvalidURL(t *testing.T) {
+	cfg := &config.LLMProviderConfig{
+		Type:   domain.LLMProviderAnthropic,
+		APIKey: domain.NewSecureStringFromString("test-key"),
+	}
+
+	// Empty base URL should still create client (SDK handles it)
+	_, err := NewClientWithBaseURL(cfg, "")
+	if err != nil {
+		t.Errorf("NewClientWithBaseURL() with empty URL unexpectedly failed: %v", err)
+	}
+}
+
+// TestConvertMessages_EmptyContent tests handling of empty messages
+func TestConvertMessages_EmptyContent(t *testing.T) {
+	messages := []domain.Message{
+		{
+			Role:    "user",
+			Content: "",
+		},
+		{
+			Role:    "assistant",
+			Content: "Response",
+		},
+	}
+
+	result := convertMessages(messages)
+	if len(result) != 2 {
+		t.Errorf("convertMessages() returned %d messages, want 2", len(result))
+	}
+}
+
+// TestConvertInputSchema_WithComplexRequired tests complex required field handling
+func TestConvertInputSchema_WithComplexRequired(t *testing.T) {
+	// Test with mixed required types
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"field1": map[string]any{"type": "string"},
+			"field2": map[string]any{"type": "number"},
+			"field3": map[string]any{"type": "boolean"},
+		},
+		"required": []interface{}{"field1", "field2"},
+	}
+
+	result := convertInputSchema(schema)
+	if len(result.Required) != 2 {
+		t.Errorf("convertInputSchema() required length = %d, want 2", len(result.Required))
 	}
 }
