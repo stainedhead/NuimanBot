@@ -40,6 +40,25 @@ type LLMDefaultModelConfig struct {
 	Fallbacks []string `yaml:"fallbacks"`
 }
 
+// AnthropicProviderConfig holds Anthropic-specific provider configuration.
+type AnthropicProviderConfig struct {
+	APIKey domain.SecureString `yaml:"api_key"`
+}
+
+// OpenAIProviderConfig holds OpenAI-specific provider configuration.
+type OpenAIProviderConfig struct {
+	APIKey       domain.SecureString `yaml:"api_key"`
+	BaseURL      string              `yaml:"base_url"`
+	DefaultModel string              `yaml:"default_model"`
+	Organization string              `yaml:"organization"`
+}
+
+// OllamaProviderConfig holds Ollama-specific provider configuration.
+type OllamaProviderConfig struct {
+	BaseURL      string `yaml:"base_url"`
+	DefaultModel string `yaml:"default_model"`
+}
+
 // LLMConfig encapsulates all LLM-related configurations.
 
 type LLMConfig struct {
@@ -49,18 +68,9 @@ type LLMConfig struct {
 
 	Providers []LLMProviderConfig `yaml:"providers"`
 
-	Anthropic struct {
-		APIKey domain.SecureString `yaml:"api_key"`
-	} `yaml:"anthropic"`
-
-	OpenAI struct {
-		APIKey  domain.SecureString `yaml:"api_key"`
-		BaseURL string              `yaml:"base_url"`
-	} `yaml:"openai"`
-
-	Ollama struct {
-		BaseURL string `yaml:"base_url"`
-	} `yaml:"ollama"`
+	Anthropic AnthropicProviderConfig `yaml:"anthropic"`
+	OpenAI    OpenAIProviderConfig    `yaml:"openai"`
+	Ollama    OllamaProviderConfig    `yaml:"ollama"`
 
 	Bedrock struct {
 		AWSRegion string `yaml:"aws_region"`

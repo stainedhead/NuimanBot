@@ -56,10 +56,14 @@ func LoadConfig(configPaths ...string) (*NuimanBotConfig, error) {
 	// Debug: Print all settings before unmarshaling
 	fmt.Printf("Viper settings before unmarshal: %+v\n", v.AllSettings())
 
-	// Get all settings and remove providers (we'll handle manually)
+	// Get all settings and remove providers and provider-specific configs (we'll handle manually)
 	allSettings := v.AllSettings()
 	if llmSettings, ok := allSettings["llm"].(map[string]interface{}); ok {
 		delete(llmSettings, "providers")
+		delete(llmSettings, "anthropic")
+		delete(llmSettings, "openai")
+		delete(llmSettings, "ollama")
+		delete(llmSettings, "bedrock")
 	}
 
 	decoderConfig := &mapstructure.DecoderConfig{
@@ -116,12 +120,32 @@ func LoadConfig(configPaths ...string) (*NuimanBotConfig, error) {
 	// Load providers from environment variables
 	loadProvidersFromEnv(&cfg)
 
-	// Manually populate SecureString fields from viper
+	// Manually populate provider-specific configs from viper
+	// Anthropic
 	if v.IsSet("llm.anthropic.api_key") {
 		cfg.LLM.Anthropic.APIKey = domain.NewSecureStringFromString(v.GetString("llm.anthropic.api_key"))
 	}
+
+	// OpenAI
 	if v.IsSet("llm.openai.api_key") {
 		cfg.LLM.OpenAI.APIKey = domain.NewSecureStringFromString(v.GetString("llm.openai.api_key"))
+	}
+	if v.IsSet("llm.openai.base_url") {
+		cfg.LLM.OpenAI.BaseURL = v.GetString("llm.openai.base_url")
+	}
+	if v.IsSet("llm.openai.default_model") {
+		cfg.LLM.OpenAI.DefaultModel = v.GetString("llm.openai.default_model")
+	}
+	if v.IsSet("llm.openai.organization") {
+		cfg.LLM.OpenAI.Organization = v.GetString("llm.openai.organization")
+	}
+
+	// Ollama
+	if v.IsSet("llm.ollama.base_url") {
+		cfg.LLM.Ollama.BaseURL = v.GetString("llm.ollama.base_url")
+	}
+	if v.IsSet("llm.ollama.default_model") {
+		cfg.LLM.Ollama.DefaultModel = v.GetString("llm.ollama.default_model")
 	}
 	if v.IsSet("gateways.telegram.token") {
 		cfg.Gateways.Telegram.Token = domain.NewSecureStringFromString(v.GetString("gateways.telegram.token"))

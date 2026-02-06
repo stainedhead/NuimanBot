@@ -204,6 +204,61 @@ func TestLoadConfig_MissingEncryptionKey(t *testing.T) {
 
 }
 
+func TestLoadConfig_OpenAIConfig(t *testing.T) {
+	tempDir := t.TempDir()
+	configFilePath := filepath.Join(tempDir, "config.yaml")
+	configContent := `
+server:
+  log_level: info
+security:
+  input_max_length: 1024
+llm:
+  openai:
+    api_key: sk-test-openai-key
+    base_url: https://api.openai.com/v1
+    default_model: gpt-4o
+    organization: org-test123
+  ollama:
+    base_url: http://localhost:11434
+    default_model: llama2
+`
+	err := os.WriteFile(configFilePath, []byte(configContent), 0o644)
+	if err != nil {
+		t.Fatalf("Failed to write temp config file: %v", err)
+	}
+
+	if err := os.Setenv("NUIMANBOT_ENCRYPTION_KEY", "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD="); err != nil {
+		t.Fatalf("Failed to set env var: %v", err)
+	}
+
+	cfg, err := config.LoadConfig(tempDir)
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+
+	// Test OpenAI config
+	if cfg.LLM.OpenAI.APIKey.Value() != "sk-test-openai-key" {
+		t.Errorf("Expected OpenAI APIKey 'sk-test-openai-key', got '%s'", cfg.LLM.OpenAI.APIKey.Value())
+	}
+	if cfg.LLM.OpenAI.BaseURL != "https://api.openai.com/v1" {
+		t.Errorf("Expected OpenAI BaseURL 'https://api.openai.com/v1', got '%s'", cfg.LLM.OpenAI.BaseURL)
+	}
+	if cfg.LLM.OpenAI.DefaultModel != "gpt-4o" {
+		t.Errorf("Expected OpenAI DefaultModel 'gpt-4o', got '%s'", cfg.LLM.OpenAI.DefaultModel)
+	}
+	if cfg.LLM.OpenAI.Organization != "org-test123" {
+		t.Errorf("Expected OpenAI Organization 'org-test123', got '%s'", cfg.LLM.OpenAI.Organization)
+	}
+
+	// Test Ollama config
+	if cfg.LLM.Ollama.BaseURL != "http://localhost:11434" {
+		t.Errorf("Expected Ollama BaseURL 'http://localhost:11434', got '%s'", cfg.LLM.Ollama.BaseURL)
+	}
+	if cfg.LLM.Ollama.DefaultModel != "llama2" {
+		t.Errorf("Expected Ollama DefaultModel 'llama2', got '%s'", cfg.LLM.Ollama.DefaultModel)
+	}
+}
+
 func TestLoadConfig_MixedSources(t *testing.T) {
 
 	tempDir := t.TempDir()
