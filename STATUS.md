@@ -2,7 +2,7 @@
 
 **Last Updated:** 2026-02-06
 **Build Status:** ✅ STABLE
-**Test Status:** 🟡 MOSTLY PASSING (config tests need work)
+**Test Status:** ✅ ALL PASSING
 
 ---
 
@@ -33,20 +33,18 @@ $ go build -o bin/nuimanbot ./cmd/nuimanbot
 
 ## Test Suite Summary
 
-### Passing Modules: ✅
+### All Test Suites: ✅ PASSING
 - `internal/adapter/gateway/cli` - CLI Gateway tests pass
+- `internal/config` - ✅ **Config loader tests pass (4/4)** ⭐ FIXED
+  - ✅ `TestLoadConfig_FromFile` - PASS
+  - ✅ `TestLoadConfig_FromEnv` - PASS
+  - ✅ `TestLoadConfig_MixedSources` - PASS
+  - ✅ `TestLoadConfig_MissingEncryptionKey` - PASS
 - `internal/infrastructure/crypto` - Encryption/vault tests pass
-- `internal/skills/calculator` - Calculator skill tests pass (12/12) ✅
-- `internal/skills/datetime` - DateTime skill tests pass (10/10) ✅
+- `internal/skills/calculator` - Calculator skill tests pass (12/12)
+- `internal/skills/datetime` - DateTime skill tests pass (10/10)
 - `internal/usecase/security` - Security service tests pass
 - `internal/usecase/skill` - Skill execution service tests pass
-
-### Failing Modules: 🔴
-- `internal/config` - Config loader tests (3/4 failing)
-  - ✅ `TestLoadConfig_FromFile` - PASS
-  - 🔴 `TestLoadConfig_FromEnv` - FAIL (env vars not loading)
-  - 🔴 `TestLoadConfig_MixedSources` - FAIL (env overrides not working)
-  - 🔴 `TestLoadConfig_MissingEncryptionKey` - FAIL (no validation)
 
 ---
 
@@ -91,7 +89,7 @@ imports nuimanbot/internal/config from loader.go: import cycle not allowed
 - No special permissions required
 - Clean input/output using `SkillResult` structure
 
-### 4. DateTime Skill Implementation ✅ COMPLETE
+### 4. DateTime Skill Implementation ✅ COMPLETE (Session 1)
 **Implementation:** Full TDD cycle (Red-Green-Refactor)
 - ✅ RED: Wrote comprehensive tests first (10 test cases)
 - ✅ GREEN: Implemented datetime skill to pass all tests
@@ -102,6 +100,39 @@ imports nuimanbot/internal/config from loader.go: import cycle not allowed
 - Flexible formatting with Go time layout strings
 - No special permissions required
 - Proper error handling for invalid operations
+
+### 5. Configuration Loader Fixed ✅ COMPLETE (Session 2)
+**Problem:** Configuration loader had multiple critical issues preventing deployment flexibility
+
+**Issues Fixed:**
+1. **Environment Variable Loading** - Env vars weren't being read
+   - Root cause: Viper's AutomaticEnv() naming mismatch
+   - Solution: Added explicit `applyEnvOverrides()` using `os.Getenv()`
+
+2. **Environment Variable Precedence** - File values overriding env vars
+   - Root cause: No explicit precedence handling
+   - Solution: Apply env vars after file load for proper override
+
+3. **Missing Encryption Key Validation** - No startup check
+   - Root cause: Validation never implemented
+   - Solution: Added mandatory `NUIMANBOT_ENCRYPTION_KEY` check
+
+4. **Provider/Skills Loading** - Complex structures not loading from env
+   - Root cause: Viper array handling, mapstructure SecureString issues
+   - Solution: Manual `loadProvidersFromEnv()` and `loadSkillsFromEnv()`
+
+**Test Results:**
+- Before: 1/4 tests passing
+- After: 4/4 tests passing ✅
+
+**Configuration Now Supports:**
+- ✅ YAML config file only
+- ✅ Environment variables only (no file needed)
+- ✅ Mixed mode (file + env override, env wins)
+- ✅ Secure string handling for all sensitive values
+- ✅ LLM provider arrays from env
+- ✅ Skills configuration from env
+- ✅ Mandatory encryption key validation
 
 ---
 
@@ -146,11 +177,11 @@ imports nuimanbot/internal/config from loader.go: import cycle not allowed
    - Command parsing basic
    - Needs end-to-end testing with chat service
 
-2. **Configuration Agent** - ⚠️ **NEEDS WORK**
+2. **Configuration Agent** - ✅ **COMPLETE**
    - File loading: ✅ Working
-   - Env var loading: 🔴 Broken (needs fix)
-   - Env var override: 🔴 Not working
-   - Validation: 🔴 Missing encryption key check
+   - Env var loading: ✅ Fixed and tested
+   - Env var override: ✅ Working (proper precedence)
+   - Validation: ✅ Encryption key check added
 
 ### PENDING ⏳
 1. **Main Application Assembly** - Dependency injection not done
