@@ -20,6 +20,7 @@ import (
 	"nuimanbot/internal/domain"
 	"nuimanbot/internal/infrastructure/audit"
 	"nuimanbot/internal/infrastructure/crypto"
+	"nuimanbot/internal/infrastructure/health"
 	anthropic "nuimanbot/internal/infrastructure/llm/anthropic"
 	ollama "nuimanbot/internal/infrastructure/llm/ollama"
 	openai "nuimanbot/internal/infrastructure/llm/openai"
@@ -46,6 +47,7 @@ type application struct {
 	SkillRegistry         skill.SkillRegistry
 	Vault                 domain.CredentialVault
 	SkillExecutionService *skill.Service
+	HealthServer          *health.Server
 	DB                    *sql.DB
 }
 
@@ -134,6 +136,11 @@ func main() {
 		log.Fatalf("Failed to create LLM service: %v", err)
 	}
 
+	// 8.5. Initialize Health Check Server
+	healthServer := health.NewServer(db, llmService, vaultPath)
+	healthServer.SetVersion("1.0.0") // TODO: Get from build info
+	slog.Info("Health check server initialized")
+
 	// 9. Initialize Skill System
 	skillRegistry := skill.NewInMemoryRegistry()
 
@@ -157,6 +164,7 @@ func main() {
 		SkillRegistry:         skillRegistry,
 		ChatService:           chatService,
 		SkillExecutionService: skillExecutionService,
+		HealthServer:          healthServer,
 		DB:                    db,
 	}
 
@@ -431,6 +439,16 @@ func initializeDatabase(db *sql.DB) error {
 
 // Run starts the main application services.
 func (app *application) Run(ctx context.Context) error {
+	// Start health check server on port 8080
+	if err := app.HealthServer.Start(":8080"); err != nil {
+		slog.Error("Failed to start health check server", "error", err)
+	}
+	defer func() {
+		if err := app.HealthServer.Stop(); err != nil {
+			slog.Error("Failed to stop health check server", "error", err)
+		}
+	}()
+
 	// Track active gateways for proper shutdown
 	var gateways []domain.Gateway
 
