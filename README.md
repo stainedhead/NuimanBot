@@ -5,11 +5,12 @@ An AI agent framework built with Clean Architecture principles, featuring LLM in
 ## Features
 
 - **Clean Architecture**: Strict layer separation (Domain, Use Case, Adapter, Infrastructure)
-- **LLM Integration**: Support for Anthropic Claude (OpenAI, Ollama planned)
-- **Extensible Skills**: Plugin-based skill system with built-in calculator and datetime skills
-- **Multiple Gateways**: CLI interface (Telegram, Slack planned)
+- **Multi-LLM Support**: Anthropic Claude, OpenAI GPT, and Ollama (local models)
+- **Rich Skill Library**: 5 built-in skills (calculator, datetime, weather, web search, notes)
+- **Multiple Gateways**: CLI, Telegram, and Slack interfaces with concurrent operation
+- **RBAC System**: Role-based access control with user management
 - **Secure Credentials**: AES-256-GCM encrypted credential vault
-- **SQLite Storage**: Persistent conversation history and user data
+- **SQLite Storage**: Persistent conversations, users, and notes with full CRUD
 - **Configuration**: YAML file + environment variable override support
 - **Test Coverage**: ~80% coverage with comprehensive unit, integration, and E2E tests
 
@@ -19,7 +20,13 @@ An AI agent framework built with Clean Architecture principles, featuring LLM in
 
 - Go 1.21 or later
 - SQLite3
-- Anthropic API key (for LLM functionality)
+- At least one LLM provider API key:
+  - Anthropic Claude (recommended)
+  - OpenAI GPT
+  - Ollama (for local models, no API key needed)
+- Optional: OpenWeatherMap API key (for weather skill)
+- Optional: Telegram Bot Token (for Telegram gateway)
+- Optional: Slack Bot/App Tokens (for Slack gateway)
 
 ### Installation
 
@@ -55,22 +62,39 @@ storage:
   dsn: "./data/nuimanbot.db"
 
 llm:
-  default_model:
-    primary: anthropic/claude-sonnet
-  providers:
-    - id: anthropic-main
-      type: anthropic
-      api_key: "your-api-key-here"
+  # Provider-specific configurations (recommended)
+  anthropic:
+    api_key: "sk-ant-your-key-here"
+  openai:
+    api_key: "sk-your-openai-key"
+    base_url: "https://api.openai.com/v1"  # optional
+  ollama:
+    base_url: "http://localhost:11434"  # for local models
 
 gateways:
   cli:
     debug_mode: false
+  telegram:
+    enabled: true
+    token: "your-telegram-bot-token"
+    allowed_ids: [123456789]  # optional: restrict to specific users
+  slack:
+    enabled: true
+    bot_token: "xoxb-your-bot-token"
+    app_token: "xapp-your-app-token"  # required for Socket Mode
 
 skills:
   entries:
     calculator:
       enabled: true
     datetime:
+      enabled: true
+    weather:
+      enabled: true
+      # Set OPENWEATHERMAP_API_KEY environment variable
+    websearch:
+      enabled: true
+    notes:
       enabled: true
 ```
 
@@ -80,10 +104,27 @@ skills:
 # Required
 export NUIMANBOT_ENCRYPTION_KEY="your-32-byte-encryption-key-here"
 
-# LLM Configuration
-export NUIMANBOT_LLM_PROVIDERS_0_ID="anthropic-main"
-export NUIMANBOT_LLM_PROVIDERS_0_TYPE="anthropic"
-export NUIMANBOT_LLM_PROVIDERS_0_APIKEY="your-anthropic-api-key"
+# LLM Configuration (choose one or more)
+# Anthropic
+export NUIMANBOT_LLM_ANTHROPIC_APIKEY="sk-ant-your-key"
+
+# OpenAI
+export NUIMANBOT_LLM_OPENAI_APIKEY="sk-your-openai-key"
+export NUIMANBOT_LLM_OPENAI_BASEURL="https://api.openai.com/v1"  # optional
+
+# Ollama (local models)
+export NUIMANBOT_LLM_OLLAMA_BASEURL="http://localhost:11434"
+
+# Gateway Configuration
+export NUIMANBOT_GATEWAYS_TELEGRAM_ENABLED="true"
+export NUIMANBOT_GATEWAYS_TELEGRAM_TOKEN="your-telegram-bot-token"
+
+export NUIMANBOT_GATEWAYS_SLACK_ENABLED="true"
+export NUIMANBOT_GATEWAYS_SLACK_BOTTOKEN="xoxb-your-bot-token"
+export NUIMANBOT_GATEWAYS_SLACK_APPTOKEN="xapp-your-app-token"
+
+# Skills Configuration
+export OPENWEATHERMAP_API_KEY="your-openweathermap-key"  # for weather skill
 
 # Optional overrides
 export NUIMANBOT_SERVER_LOGLEVEL="debug"
@@ -96,8 +137,19 @@ export NUIMANBOT_SECURITY_INPUTMAXLENGTH="8192"
 # Ensure encryption key is set
 export NUIMANBOT_ENCRYPTION_KEY="12345678901234567890123456789012"
 
-# Set your Anthropic API key
-export NUIMANBOT_LLM_PROVIDERS_0_APIKEY="sk-ant-your-key-here"
+# Choose your LLM provider:
+
+# Option A: Anthropic Claude
+export NUIMANBOT_LLM_ANTHROPIC_APIKEY="sk-ant-your-key-here"
+
+# Option B: OpenAI GPT
+export NUIMANBOT_LLM_OPENAI_APIKEY="sk-your-openai-key"
+
+# Option C: Ollama (local)
+export NUIMANBOT_LLM_OLLAMA_BASEURL="http://localhost:11434"
+
+# Optional: Weather skill
+export OPENWEATHERMAP_API_KEY="your-weather-api-key"
 
 # Run the application
 ./bin/nuimanbot
@@ -109,12 +161,17 @@ The CLI will start and you can interact with the bot:
 NuimanBot starting...
 Config file used: ./config.yaml
 2026/02/06 12:00:00 Database schema initialized successfully
-2026/02/06 12:00:00 Registered 2 built-in skills
+2026/02/06 12:00:00 Calculator skill registered
+2026/02/06 12:00:00 DateTime skill registered
+2026/02/06 12:00:00 Weather skill registered
+2026/02/06 12:00:00 WebSearch skill registered
+2026/02/06 12:00:00 Notes skill registered
+2026/02/06 12:00:00 Registered built-in skills successfully
 2026/02/06 12:00:00 NuimanBot initialized with:
 2026/02/06 12:00:00   Log Level: info
 2026/02/06 12:00:00   Debug Mode: false
 2026/02/06 12:00:00   LLM Provider: anthropic
-2026/02/06 12:00:00   Skills Registered: 2
+2026/02/06 12:00:00   Skills Registered: 5
 
 Starting CLI Gateway...
 Type your messages below. Commands:
@@ -164,6 +221,7 @@ NuimanBot implements comprehensive security measures to protect against common a
 ### Calculator
 Performs basic arithmetic operations:
 - **Operations**: add, subtract, multiply, divide
+- **Permissions**: None required
 - **Usage**: "What is 5 plus 3?", "Calculate 20 divided by 4"
 
 ### DateTime
@@ -172,7 +230,39 @@ Provides current date and time information:
   - `now` - Current time in RFC3339 format
   - `format` - Custom time formatting
   - `unix` - Unix timestamp
+- **Permissions**: None required
 - **Usage**: "What time is it?", "Give me the current date"
+
+### Weather
+Get current weather and forecasts for any location:
+- **Operations**:
+  - `current` - Current weather conditions
+  - `forecast` - 5-day weather forecast
+- **Parameters**: location (required), units (metric/imperial/standard)
+- **Permissions**: Network
+- **Requirements**: OPENWEATHERMAP_API_KEY environment variable
+- **Usage**: "What's the weather in London?", "Give me the forecast for Tokyo"
+
+### Web Search
+Perform web searches using DuckDuckGo:
+- **Operations**: search
+- **Parameters**: query (required), limit (1-50, default: 5)
+- **Permissions**: Network
+- **Requirements**: None (uses public DuckDuckGo API)
+- **Usage**: "Search for golang clean architecture", "Find information about AI agents"
+
+### Notes
+Create, read, update, and delete personal notes:
+- **Operations**:
+  - `create` - Create a new note
+  - `read` - Read a note by ID
+  - `update` - Update an existing note
+  - `delete` - Delete a note
+  - `list` - List all notes
+- **Parameters**: title, content, tags (optional)
+- **Permissions**: Write
+- **Storage**: SQLite with user isolation
+- **Usage**: "Create a note titled 'Meeting' with content 'Q1 planning session'", "List my notes"
 
 ## Development
 
@@ -187,14 +277,18 @@ Provides current date and time information:
 │   ├── usecase/           # Application business logic
 │   │   ├── chat/          # Chat service orchestration
 │   │   ├── security/      # Security & encryption
-│   │   └── skill/         # Skill execution framework
+│   │   ├── user/          # User management
+│   │   ├── notes/         # Notes repository interface
+│   │   └── skill/         # Skill execution framework with RBAC
 │   ├── adapter/           # Interface adapters
 │   │   ├── gateway/       # CLI, Telegram, Slack gateways
-│   │   └── repository/    # SQLite repositories
+│   │   └── repository/    # SQLite repositories (users, messages, notes)
 │   └── infrastructure/    # External concerns
 │       ├── crypto/        # AES encryption, vault
-│       └── llm/           # LLM provider clients
-├── internal/skills/       # Built-in skills
+│       ├── llm/           # LLM provider clients (Anthropic, OpenAI, Ollama)
+│       ├── weather/       # OpenWeatherMap client
+│       └── search/        # DuckDuckGo search client
+├── internal/skills/       # Built-in skills (calculator, datetime, weather, websearch, notes)
 │   ├── calculator/
 │   └── datetime/
 ├── config.yaml            # Configuration file
