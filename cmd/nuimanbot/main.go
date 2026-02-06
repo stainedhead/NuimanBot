@@ -68,6 +68,12 @@ func main() {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
+	// Validate configuration on startup
+	if err := config.Validate(cfg); err != nil {
+		log.Fatalf("Configuration validation failed: %v", err)
+	}
+	slog.Info("Configuration validated successfully")
+
 	// 2. Initialize Structured Logging
 	logFormat := "text"
 	if cfg.Server.Debug {
