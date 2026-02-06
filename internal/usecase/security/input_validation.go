@@ -10,12 +10,120 @@ import (
 
 // DefaultInputValidator implements the InputValidator interface.
 type DefaultInputValidator struct {
-	// Add configurable patterns for injection detection if needed
+	// Pre-allocated patterns for prompt injection detection
+	jailbreakPatterns  []string
+	rolePatterns       []string
+	disclosurePatterns []string
+	outputPatterns     []string
+	promptPatterns     []string // Combined patterns for prompt injection
+
+	// Pre-allocated patterns for command injection detection
+	metacharacters    []string
+	dangerousCommands []string
+	sensitivePaths    []string
 }
 
 // NewDefaultInputValidator creates a new instance of DefaultInputValidator.
 func NewDefaultInputValidator() *DefaultInputValidator {
-	return &DefaultInputValidator{}
+	v := &DefaultInputValidator{}
+
+	// Initialize prompt injection patterns once
+	v.jailbreakPatterns = []string{
+		"ignore previous instructions",
+		"ignore all previous",
+		"disregard previous",
+		"forget previous",
+		"new instructions:",
+		"system override",
+		"reset instructions",
+		"clear instructions",
+		"override previous",
+	}
+
+	v.rolePatterns = []string{
+		"you are now",
+		"act as if you are",
+		"pretend you are",
+		"as an ai model",
+		"you must now",
+		"from now on",
+		"act as",
+		"behave as",
+		"roleplay as",
+	}
+
+	v.disclosurePatterns = []string{
+		"reveal your prompt",
+		"show your instructions",
+		"what are your rules",
+		"repeat your system prompt",
+		"tell me your guidelines",
+		"print your configuration",
+		"show your system prompt",
+		"repeat your instructions",
+		"what is your system message",
+		"show me your prompt",
+	}
+
+	v.outputPatterns = []string{
+		"output raw",
+		"return unfiltered",
+		"bypass filter",
+		"skip validation",
+		"ignore safety",
+		"disable safety",
+		"without filter",
+		"unfiltered response",
+	}
+
+	// Pre-combine all prompt patterns for faster lookup
+	v.promptPatterns = make([]string, 0, len(v.jailbreakPatterns)+len(v.rolePatterns)+len(v.disclosurePatterns)+len(v.outputPatterns))
+	v.promptPatterns = append(v.promptPatterns, v.jailbreakPatterns...)
+	v.promptPatterns = append(v.promptPatterns, v.rolePatterns...)
+	v.promptPatterns = append(v.promptPatterns, v.disclosurePatterns...)
+	v.promptPatterns = append(v.promptPatterns, v.outputPatterns...)
+
+	// Initialize command injection patterns once
+	v.metacharacters = []string{
+		";", "&&", "||", "|", "`", "$(",
+		"$(", "${", ")", ">>", ">", "<<", "<",
+		"\n", "\r",
+	}
+
+	v.dangerousCommands = []string{
+		// File operations
+		"rm ", "mv ", "cp ", "dd ", "shred ",
+		// Permission changes
+		"chmod ", "chown ", "chgrp ",
+		// Privilege escalation
+		"sudo ", "su ", "doas ",
+		// Network operations
+		"wget ", "curl ", "nc ", "netcat ", "telnet ", "ssh ", "scp ",
+		// Shell invocations
+		"bash ", "sh ", "zsh ", "fish ", "dash ",
+		"powershell ", "pwsh ", "cmd ", "command.com ",
+		// System manipulation
+		"kill ", "pkill ", "systemctl ", "service ",
+		"reboot ", "shutdown ", "halt ", "poweroff ",
+		// Package management
+		"apt ", "yum ", "dnf ", "pacman ", "brew ",
+		// Encoding/decoding (often used in attacks)
+		"base64 ", "xxd ", "od ",
+		// Process inspection
+		"ps ", "top ", "htop ",
+		// File inspection
+		"cat ", "less ", "more ", "head ", "tail ",
+	}
+
+	v.sensitivePaths = []string{
+		"/etc/passwd", "/etc/shadow", "/etc/sudoers",
+		"/root/", "/.ssh/", "~/.ssh/",
+		"/bin/", "/sbin/", "/usr/bin/", "/usr/sbin/",
+		"c:\\windows\\", "c:\\system32\\",
+		"/proc/", "/sys/",
+	}
+
+	return v
 }
 
 // ValidateInput sanitizes and validates user input according to defined rules.
@@ -56,64 +164,8 @@ func (v *DefaultInputValidator) ValidateInput(ctx context.Context, input string,
 func (v *DefaultInputValidator) detectPromptInjection(input string) bool {
 	lowerInput := strings.ToLower(input)
 
-	// Jailbreak attempts - trying to override previous instructions
-	jailbreakPatterns := []string{
-		"ignore previous instructions",
-		"ignore all previous",
-		"disregard previous",
-		"forget previous",
-		"new instructions:",
-		"system override",
-		"reset instructions",
-		"clear instructions",
-		"override previous",
-	}
-
-	// Role manipulation - trying to change the AI's behavior or role
-	rolePatterns := []string{
-		"you are now",
-		"act as if you are",
-		"pretend you are",
-		"as an ai model",
-		"you must now",
-		"from now on",
-		"act as",
-		"behave as",
-		"roleplay as",
-	}
-
-	// Information disclosure attempts - trying to reveal system prompts or instructions
-	disclosurePatterns := []string{
-		"reveal your prompt",
-		"show your instructions",
-		"what are your rules",
-		"repeat your system prompt",
-		"tell me your guidelines",
-		"print your configuration",
-		"show your system prompt",
-		"repeat your instructions",
-		"what is your system message",
-		"show me your prompt",
-	}
-
-	// Output manipulation - trying to bypass filters or safety measures
-	outputPatterns := []string{
-		"output raw",
-		"return unfiltered",
-		"bypass filter",
-		"skip validation",
-		"ignore safety",
-		"disable safety",
-		"without filter",
-		"unfiltered response",
-	}
-
-	// Check all pattern categories
-	allPatterns := append(jailbreakPatterns, rolePatterns...)
-	allPatterns = append(allPatterns, disclosurePatterns...)
-	allPatterns = append(allPatterns, outputPatterns...)
-
-	for _, pattern := range allPatterns {
+	// Check pre-allocated combined patterns
+	for _, pattern := range v.promptPatterns {
 		if strings.Contains(lowerInput, pattern) {
 			return true
 		}
@@ -127,64 +179,22 @@ func (v *DefaultInputValidator) detectPromptInjection(input string) bool {
 func (v *DefaultInputValidator) detectCommandInjection(input string) bool {
 	lowerInput := strings.ToLower(input)
 
-	// Shell metacharacters - characters used for command chaining and injection
-	metacharacters := []string{
-		";", "&&", "||", "|", "`", "$(",
-		"$(", "${", ")", ">>", ">", "<<", "<",
-		"\n", "\r",
-	}
-
-	// Dangerous commands - expanded list of commands that could be malicious
-	dangerousCommands := []string{
-		// File operations
-		"rm ", "mv ", "cp ", "dd ", "shred ",
-		// Permission changes
-		"chmod ", "chown ", "chgrp ",
-		// Privilege escalation
-		"sudo ", "su ", "doas ",
-		// Network operations
-		"wget ", "curl ", "nc ", "netcat ", "telnet ", "ssh ", "scp ",
-		// Shell invocations
-		"bash ", "sh ", "zsh ", "fish ", "dash ",
-		"powershell ", "pwsh ", "cmd ", "command.com ",
-		// System manipulation
-		"kill ", "pkill ", "systemctl ", "service ",
-		"reboot ", "shutdown ", "halt ", "poweroff ",
-		// Package management
-		"apt ", "yum ", "dnf ", "pacman ", "brew ",
-		// Encoding/decoding (often used in attacks)
-		"base64 ", "xxd ", "od ",
-		// Process inspection
-		"ps ", "top ", "htop ",
-		// File inspection
-		"cat ", "less ", "more ", "head ", "tail ",
-	}
-
-	// Sensitive paths - file paths that should never be accessed
-	sensitivePaths := []string{
-		"/etc/passwd", "/etc/shadow", "/etc/sudoers",
-		"/root/", "/.ssh/", "~/.ssh/",
-		"/bin/", "/sbin/", "/usr/bin/", "/usr/sbin/",
-		"c:\\windows\\", "c:\\system32\\",
-		"/proc/", "/sys/",
-	}
-
-	// Check metacharacters
-	for _, meta := range metacharacters {
+	// Check pre-allocated metacharacters
+	for _, meta := range v.metacharacters {
 		if strings.Contains(input, meta) {
 			return true
 		}
 	}
 
-	// Check dangerous commands
-	for _, cmd := range dangerousCommands {
+	// Check pre-allocated dangerous commands
+	for _, cmd := range v.dangerousCommands {
 		if strings.Contains(lowerInput, cmd) {
 			return true
 		}
 	}
 
-	// Check sensitive paths
-	for _, path := range sensitivePaths {
+	// Check pre-allocated sensitive paths
+	for _, path := range v.sensitivePaths {
 		if strings.Contains(lowerInput, path) {
 			return true
 		}
