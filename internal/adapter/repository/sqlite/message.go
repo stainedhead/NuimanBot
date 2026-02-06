@@ -193,22 +193,80 @@ func (r *MessageRepository) GetConversation(ctx context.Context, convID string) 
 }
 
 // GetRecentMessages retrieves messages up to a token limit.
-// This is a simplified implementation for MVP. A more advanced version would
-// calculate token counts dynamically and fetch messages in reverse chronological order
-// until the limit is reached.
+// Uses a window function to calculate running token totals and stops fetching
+// when the limit is reached. Returns messages in chronological order (oldest first).
 func (r *MessageRepository) GetRecentMessages(ctx context.Context, convID string, maxTokens int) ([]domain.StoredMessage, error) {
-	// For MVP, we'll just fetch all messages and let the usecase layer handle trimming based on token count.
-	// This is inefficient for large conversations, but simpler for now.
-	conversation, err := r.GetConversation(ctx, convID)
-	if err != nil {
-		// If conversation doesn't exist yet, return empty message list (new conversation)
-		if errors.Is(err, domain.ErrNotFound) {
-			return []domain.StoredMessage{}, nil
-		}
-		return nil, err
+	// Early return for zero or negative token limit
+	if maxTokens <= 0 {
+		return []domain.StoredMessage{}, nil
 	}
-	// TODO: Implement more efficient token-based retrieval in reverse chronological order.
-	return conversation.Messages, nil
+
+	// Use a CTE with window function to calculate running token totals
+	// in reverse chronological order, then filter and return in chronological order
+	const selectSQL = `
+	WITH cumulative_tokens AS (
+		SELECT
+			id, conversation_id, role, content, tool_calls, tool_results, token_count, timestamp,
+			SUM(token_count) OVER (ORDER BY timestamp DESC) AS running_total
+		FROM messages
+		WHERE conversation_id = ?
+		ORDER BY timestamp DESC
+	)
+	SELECT id, conversation_id, role, content, tool_calls, tool_results, token_count, timestamp
+	FROM cumulative_tokens
+	WHERE running_total <= ?
+	ORDER BY timestamp ASC;`
+
+	rows, err := r.db.QueryContext(ctx, selectSQL, convID, maxTokens)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query recent messages for conversation %s: %w", convID, err)
+	}
+	defer func() {
+		if cle := rows.Close(); cle != nil {
+			log.Printf("error closing rows in GetRecentMessages: %v", cle)
+		}
+	}()
+
+	var messages []domain.StoredMessage
+	for rows.Next() {
+		var msg domain.StoredMessage
+		var convID string
+		var toolCallsJSON, toolResultsJSON []byte
+
+		err := rows.Scan(
+			&msg.ID,
+			&convID,
+			&msg.Role,
+			&msg.Content,
+			&toolCallsJSON,
+			&toolResultsJSON,
+			&msg.TokenCount,
+			&msg.Timestamp,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan message row: %w", err)
+		}
+
+		// Unmarshal tool calls and results
+		if len(toolCallsJSON) > 0 && string(toolCallsJSON) != "null" {
+			if err := json.Unmarshal(toolCallsJSON, &msg.ToolCalls); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal tool calls: %w", err)
+			}
+		}
+		if len(toolResultsJSON) > 0 && string(toolResultsJSON) != "null" {
+			if err := json.Unmarshal(toolResultsJSON, &msg.ToolResults); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal tool results: %w", err)
+			}
+		}
+
+		messages = append(messages, msg)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating message rows: %w", err)
+	}
+
+	return messages, nil
 }
 
 // DeleteConversation removes a conversation and its associated messages.
