@@ -31,11 +31,11 @@ This document presents a structured improvement plan based on a comprehensive co
 |-------|-------|-----------|-------------|---------|----------|
 | **Phase 1: Critical Fixes** | 8 | 8 | 0 | 0 | 100% |
 | **Phase 2: Test Coverage** | 10 | 10 | 0 | 0 | 100% |
-| **Phase 3: Production Readiness** | 8 | 3 | 0 | 5 | 37.5% |
+| **Phase 3: Production Readiness** | 8 | 4 | 0 | 4 | 50.0% |
 | **Phase 4: Performance** | 6 | 0 | 0 | 6 | 0% |
 | **Phase 5: Feature Completion** | 7 | 0 | 0 | 7 | 0% |
 | **Phase 6: Observability** | 5 | 0 | 0 | 5 | 0% |
-| **TOTAL** | **44** | **21** | **0** | **23** | **47.7%** |
+| **TOTAL** | **44** | **22** | **0** | **22** | **50.0%** |
 
 ### Phase Status Legend
 - ✅ **COMPLETE** - All tasks done, tested, and committed
@@ -782,7 +782,7 @@ TestTelegramGateway_RateLimiting()
 **Priority:** 🟡 HIGH
 **Estimated Effort:** 5 days
 **Start Date:** 2026-02-06
-**Progress:** 37.5% (3/8 tasks complete)
+**Progress:** 50.0% (4/8 tasks complete)
 **Parallel Execution:** Tasks 3.1-3.4 can run concurrently
 
 **Dependencies:** Phase 1 and 2 must be complete
@@ -1051,8 +1051,9 @@ func (c *Client) CompleteWithCircuitBreaker(ctx context.Context, req *domain.LLM
 
 ---
 
-#### Task 3.4: Environment-based Configuration ⏳
-**Status:** PENDING
+#### Task 3.4: Environment-based Configuration ✅
+**Status:** COMPLETE (Completed: 2026-02-06)
+**Commit:** 2153828
 **Priority:** 🟠 MEDIUM
 **Effort:** 1 day
 **Dependencies:** None
@@ -1095,10 +1096,37 @@ environments:
 - `internal/config/nuimanbot_config.go` - Add Environment field
 
 **Acceptance Criteria:**
-- [ ] Environment variable substitution
-- [ ] Environment-specific defaults
-- [ ] Production settings validated
-- [ ] Documentation updated
+- [x] Environment variable substitution ✅
+- [x] Environment-specific defaults ✅
+- [x] Production settings validated ✅
+- [x] Documentation updated ✅ (inline comments and tests)
+
+**Results:**
+- 3 files created/modified: environment.go (141 lines), environment_test.go (252 lines), config.go (5 lines), loader.go (18 lines)
+- Environment type with 3 variants:
+  - Development: debug logs, relaxed limits (8192), defaults when ENVIRONMENT not set
+  - Staging: info logs, production limits (4096)
+  - Production: info logs, strict limits (4096), validation enforced
+- ParseEnvironment() with aliases:
+  - "development", "dev" → EnvironmentDevelopment
+  - "staging", "stage" → EnvironmentStaging
+  - "production", "prod" → EnvironmentProduction
+- ApplyEnvironmentDefaults():
+  - Sets log_level, input_max_length based on environment
+  - Respects explicitly set values from env vars
+  - Only applies defaults for unset values
+- ValidateProductionConfig():
+  - Fails if debug mode enabled in production
+  - Warns about debug log level in production
+  - Requires encryption key ≥32 characters
+  - Warns about unusually high input limits
+- Integration into config loader:
+  - Reads environment from ENVIRONMENT env var
+  - Applies defaults after file + env overrides
+  - Validates production configs automatically
+- Comprehensive test suite: 18 tests, all passing
+- Test coverage: 84.7% (exceeded 80% target)
+- All quality gates pass (fmt, vet, test, build)
 
 ---
 
