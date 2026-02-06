@@ -1,0 +1,29 @@
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - errcheck      # Check error returns
+    - gosimple      # Simplify code
+    - govet         # Suspicious constructs
+    - ineffassign   # Unused assignments
+    - staticcheck   # Static analysis
+    - unused        # Unused code
+    - gofmt         # Formatting
+    - goimports     # Import organization
+    - misspell      # Spelling errors
+    - gocritic      # Code quality
+
+linters-settings:
+  errcheck:
+    check-blank: true
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - style
+      - performance
+
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0
