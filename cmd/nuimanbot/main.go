@@ -23,6 +23,9 @@ import (
 	openai "nuimanbot/internal/infrastructure/llm/openai"
 	"nuimanbot/internal/skills/calculator"
 	"nuimanbot/internal/skills/datetime"
+	"nuimanbot/internal/skills/notes"
+	"nuimanbot/internal/skills/weather"
+	"nuimanbot/internal/skills/websearch"
 	"nuimanbot/internal/usecase/chat"
 	"nuimanbot/internal/usecase/memory"
 	"nuimanbot/internal/usecase/security"
@@ -99,6 +102,9 @@ func main() {
 	// 5. Initialize Memory Repository
 	memoryRepo := sqlite.NewMessageRepository(db)
 
+	// 5.5. Initialize Notes Repository
+	notesRepo := sqlite.NewNotesRepository(db)
+
 	// 6. Initialize LLM Service
 	llmService, err := initializeLLMService(cfg)
 	if err != nil {
@@ -109,7 +115,7 @@ func main() {
 	skillRegistry := skill.NewInMemoryRegistry()
 
 	// Register built-in skills
-	if err := registerBuiltInSkills(skillRegistry); err != nil {
+	if err := registerBuiltInSkills(skillRegistry, notesRepo); err != nil {
 		log.Fatalf("Failed to register skills: %v", err)
 	}
 
@@ -236,7 +242,7 @@ func initializeLLMService(cfg *config.NuimanBotConfig) (domain.LLMService, error
 }
 
 // registerBuiltInSkills registers all built-in skills with the registry.
-func registerBuiltInSkills(registry skill.SkillRegistry) error {
+func registerBuiltInSkills(registry skill.SkillRegistry, notesRepo *sqlite.NotesRepository) error {
 	// Register Calculator skill
 	calc := calculator.NewCalculator()
 	if err := registry.Register(calc); err != nil {
@@ -249,7 +255,33 @@ func registerBuiltInSkills(registry skill.SkillRegistry) error {
 		return fmt.Errorf("failed to register datetime skill: %w", err)
 	}
 
-	log.Printf("Registered %d built-in skills", 2)
+	// Register Weather skill (if API key is available)
+	weatherAPIKey := os.Getenv("OPENWEATHERMAP_API_KEY")
+	if weatherAPIKey != "" {
+		w := weather.NewWeather(weatherAPIKey, 10)
+		if err := registry.Register(w); err != nil {
+			return fmt.Errorf("failed to register weather skill: %w", err)
+		}
+		log.Println("Weather skill registered")
+	} else {
+		log.Println("Weather skill skipped (OPENWEATHERMAP_API_KEY not set)")
+	}
+
+	// Register WebSearch skill
+	ws := websearch.NewWebSearch(10)
+	if err := registry.Register(ws); err != nil {
+		return fmt.Errorf("failed to register websearch skill: %w", err)
+	}
+	log.Println("WebSearch skill registered")
+
+	// Register Notes skill
+	notesSkill := notes.NewNotes(notesRepo)
+	if err := registry.Register(notesSkill); err != nil {
+		return fmt.Errorf("failed to register notes skill: %w", err)
+	}
+	log.Println("Notes skill registered")
+
+	log.Printf("Registered built-in skills successfully")
 	return nil
 }
 
@@ -299,6 +331,31 @@ func initializeDatabase(db *sql.DB) error {
 	`)
 	if err != nil {
 		return fmt.Errorf("failed to create conversations table: %w", err)
+	}
+
+	// Create notes table
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS notes (
+			id TEXT PRIMARY KEY,
+			user_id TEXT NOT NULL,
+			title TEXT NOT NULL,
+			content TEXT NOT NULL,
+			tags TEXT,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY(user_id) REFERENCES users(id)
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to create notes table: %w", err)
+	}
+
+	// Create index on user_id for faster note lookups
+	_, err = db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_notes_user_id ON notes(user_id)
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to create notes index: %w", err)
 	}
 
 	log.Println("Database schema initialized successfully")
