@@ -23,7 +23,15 @@ var ErrInternal = errors.New("internal error")
 // ErrUserNotFound is returned when a user is not found.
 var ErrUserNotFound = errors.New("user not found")
 
+// ErrSkillNotFound is returned when a requested skill is not found.
+var ErrSkillNotFound = errors.New("skill not found")
+
+// ErrInsufficientPermissions is returned when a user lacks permission to execute an action.
+var ErrInsufficientPermissions = errors.New("insufficient permissions")
+
+// ErrCannotDeleteLastAdmin is returned when attempting to delete the last admin user.
+var ErrCannotDeleteLastAdmin = errors.New("cannot delete last admin user")
+
 // Other potential errors could be added here as needed, e.g.:
-// ErrSkillNotFound
 // ErrLLMProviderNotConfigured
 // ErrCredentialRotationFailed

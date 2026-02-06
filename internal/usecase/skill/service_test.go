@@ -265,3 +265,257 @@ func TestListSkillsForUser(t *testing.T) {
 		t.Errorf("Listed skills mismatch: got %+v", listedSkills)
 	}
 }
+
+// RBAC Permission Tests
+
+func TestExecuteWithUser_AdminCanExecuteAllSkills(t *testing.T) {
+	mockSkill := &MockSkill{
+		NameFunc: func() string { return "admin.user" },
+		ExecuteFunc: func(ctx context.Context, params map[string]any) (*domain.SkillResult, error) {
+			return &domain.SkillResult{Output: "admin command executed"}, nil
+		},
+	}
+	mockRegistry := &MockSkillRegistry{
+		GetFunc: func(name string) (domain.Skill, error) { return mockSkill, nil },
+	}
+	mockSecurity := &MockSecurityService{
+		AuditFunc: func(ctx context.Context, event *domain.AuditEvent) error { return nil },
+	}
+	svc := NewService(&config.SkillsSystemConfig{}, mockRegistry, mockSecurity)
+
+	adminUser := &domain.User{
+		ID:   "admin1",
+		Role: domain.RoleAdmin,
+	}
+
+	ctx := context.Background()
+	result, err := svc.ExecuteWithUser(ctx, adminUser, "admin.user", nil)
+
+	if err != nil {
+		t.Errorf("Admin should be able to execute admin skills, got error: %v", err)
+	}
+	if result == nil || result.Output != "admin command executed" {
+		t.Errorf("Expected admin command result, got: %v", result)
+	}
+}
+
+func TestExecuteWithUser_UserCannotExecuteAdminSkills(t *testing.T) {
+	mockSkill := &MockSkill{
+		NameFunc: func() string { return "admin.user" },
+	}
+	mockRegistry := &MockSkillRegistry{
+		GetFunc: func(name string) (domain.Skill, error) { return mockSkill, nil },
+	}
+	auditEvents := make(chan domain.AuditEvent, 1)
+	mockSecurity := &MockSecurityService{
+		AuditFunc: func(ctx context.Context, event *domain.AuditEvent) error {
+			auditEvents <- *event
+			return nil
+		},
+	}
+	svc := NewService(&config.SkillsSystemConfig{}, mockRegistry, mockSecurity)
+
+	regularUser := &domain.User{
+		ID:   "user1",
+		Role: domain.RoleUser,
+	}
+
+	ctx := context.Background()
+	_, err := svc.ExecuteWithUser(ctx, regularUser, "admin.user", nil)
+
+	if !errors.Is(err, domain.ErrInsufficientPermissions) {
+		t.Errorf("Expected ErrInsufficientPermissions, got: %v", err)
+	}
+
+	// Verify audit event for permission denial
+	select {
+	case event := <-auditEvents:
+		if event.Action != "skill_execution_denied" {
+			t.Errorf("Expected 'skill_execution_denied' action, got %s", event.Action)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Timeout waiting for audit event")
+	}
+}
+
+func TestExecuteWithUser_UserCanExecuteUserSkills(t *testing.T) {
+	mockSkill := &MockSkill{
+		NameFunc: func() string { return "weather" },
+		ExecuteFunc: func(ctx context.Context, params map[string]any) (*domain.SkillResult, error) {
+			return &domain.SkillResult{Output: "sunny"}, nil
+		},
+	}
+	mockRegistry := &MockSkillRegistry{
+		GetFunc: func(name string) (domain.Skill, error) { return mockSkill, nil },
+	}
+	mockSecurity := &MockSecurityService{
+		AuditFunc: func(ctx context.Context, event *domain.AuditEvent) error { return nil },
+	}
+	svc := NewService(&config.SkillsSystemConfig{}, mockRegistry, mockSecurity)
+
+	regularUser := &domain.User{
+		ID:   "user1",
+		Role: domain.RoleUser,
+	}
+
+	ctx := context.Background()
+	result, err := svc.ExecuteWithUser(ctx, regularUser, "weather", nil)
+
+	if err != nil {
+		t.Errorf("User should be able to execute user-level skills, got error: %v", err)
+	}
+	if result == nil || result.Output != "sunny" {
+		t.Errorf("Expected weather result, got: %v", result)
+	}
+}
+
+func TestExecuteWithUser_GuestCanOnlyExecuteGuestSkills(t *testing.T) {
+	mockSkill := &MockSkill{
+		NameFunc: func() string { return "calculator" },
+		ExecuteFunc: func(ctx context.Context, params map[string]any) (*domain.SkillResult, error) {
+			return &domain.SkillResult{Output: "5"}, nil
+		},
+	}
+	mockRegistry := &MockSkillRegistry{
+		GetFunc: func(name string) (domain.Skill, error) { return mockSkill, nil },
+	}
+	mockSecurity := &MockSecurityService{
+		AuditFunc: func(ctx context.Context, event *domain.AuditEvent) error { return nil },
+	}
+	svc := NewService(&config.SkillsSystemConfig{}, mockRegistry, mockSecurity)
+
+	guestUser := &domain.User{
+		ID:   "guest1",
+		Role: domain.RoleGuest,
+	}
+
+	ctx := context.Background()
+	result, err := svc.ExecuteWithUser(ctx, guestUser, "calculator", nil)
+
+	if err != nil {
+		t.Errorf("Guest should be able to execute guest-level skills, got error: %v", err)
+	}
+	if result == nil || result.Output != "5" {
+		t.Errorf("Expected calculator result, got: %v", result)
+	}
+}
+
+func TestExecuteWithUser_GuestCannotExecuteUserSkills(t *testing.T) {
+	mockSkill := &MockSkill{
+		NameFunc: func() string { return "weather" },
+	}
+	mockRegistry := &MockSkillRegistry{
+		GetFunc: func(name string) (domain.Skill, error) { return mockSkill, nil },
+	}
+	mockSecurity := &MockSecurityService{
+		AuditFunc: func(ctx context.Context, event *domain.AuditEvent) error { return nil },
+	}
+	svc := NewService(&config.SkillsSystemConfig{}, mockRegistry, mockSecurity)
+
+	guestUser := &domain.User{
+		ID:   "guest1",
+		Role: domain.RoleGuest,
+	}
+
+	ctx := context.Background()
+	_, err := svc.ExecuteWithUser(ctx, guestUser, "weather", nil)
+
+	if !errors.Is(err, domain.ErrInsufficientPermissions) {
+		t.Errorf("Expected ErrInsufficientPermissions, got: %v", err)
+	}
+}
+
+func TestExecuteWithUser_AllowedSkillsWhitelist(t *testing.T) {
+	mockSkill := &MockSkill{
+		NameFunc: func() string { return "calculator" },
+		ExecuteFunc: func(ctx context.Context, params map[string]any) (*domain.SkillResult, error) {
+			return &domain.SkillResult{Output: "5"}, nil
+		},
+	}
+	mockRegistry := &MockSkillRegistry{
+		GetFunc: func(name string) (domain.Skill, error) { return mockSkill, nil },
+	}
+	mockSecurity := &MockSecurityService{
+		AuditFunc: func(ctx context.Context, event *domain.AuditEvent) error { return nil },
+	}
+	svc := NewService(&config.SkillsSystemConfig{}, mockRegistry, mockSecurity)
+
+	// User with AllowedSkills whitelist - only calculator and datetime allowed
+	restrictedUser := &domain.User{
+		ID:            "user1",
+		Role:          domain.RoleUser,
+		AllowedSkills: []string{"calculator", "datetime"},
+	}
+
+	ctx := context.Background()
+
+	// Should be able to execute calculator (in whitelist)
+	result, err := svc.ExecuteWithUser(ctx, restrictedUser, "calculator", nil)
+	if err != nil {
+		t.Errorf("Should be able to execute whitelisted skill, got error: %v", err)
+	}
+	if result == nil {
+		t.Error("Expected result for whitelisted skill")
+	}
+}
+
+func TestExecuteWithUser_AllowedSkillsBlocksNonWhitelisted(t *testing.T) {
+	mockSkill := &MockSkill{
+		NameFunc: func() string { return "weather" },
+	}
+	mockRegistry := &MockSkillRegistry{
+		GetFunc: func(name string) (domain.Skill, error) { return mockSkill, nil },
+	}
+	mockSecurity := &MockSecurityService{
+		AuditFunc: func(ctx context.Context, event *domain.AuditEvent) error { return nil },
+	}
+	svc := NewService(&config.SkillsSystemConfig{}, mockRegistry, mockSecurity)
+
+	// User with AllowedSkills whitelist - only calculator and datetime allowed
+	restrictedUser := &domain.User{
+		ID:            "user1",
+		Role:          domain.RoleUser,
+		AllowedSkills: []string{"calculator", "datetime"},
+	}
+
+	ctx := context.Background()
+
+	// Should NOT be able to execute weather (not in whitelist)
+	_, err := svc.ExecuteWithUser(ctx, restrictedUser, "weather", nil)
+	if !errors.Is(err, domain.ErrInsufficientPermissions) {
+		t.Errorf("Expected ErrInsufficientPermissions for non-whitelisted skill, got: %v", err)
+	}
+}
+
+func TestExecuteWithUser_EmptyAllowedSkillsAllowsAllForRole(t *testing.T) {
+	mockSkill := &MockSkill{
+		NameFunc: func() string { return "weather" },
+		ExecuteFunc: func(ctx context.Context, params map[string]any) (*domain.SkillResult, error) {
+			return &domain.SkillResult{Output: "sunny"}, nil
+		},
+	}
+	mockRegistry := &MockSkillRegistry{
+		GetFunc: func(name string) (domain.Skill, error) { return mockSkill, nil },
+	}
+	mockSecurity := &MockSecurityService{
+		AuditFunc: func(ctx context.Context, event *domain.AuditEvent) error { return nil },
+	}
+	svc := NewService(&config.SkillsSystemConfig{}, mockRegistry, mockSecurity)
+
+	// User with empty AllowedSkills - should allow all skills for their role
+	unrestrictedUser := &domain.User{
+		ID:            "user1",
+		Role:          domain.RoleUser,
+		AllowedSkills: []string{}, // Empty = all allowed
+	}
+
+	ctx := context.Background()
+	result, err := svc.ExecuteWithUser(ctx, unrestrictedUser, "weather", nil)
+
+	if err != nil {
+		t.Errorf("Empty AllowedSkills should allow all role skills, got error: %v", err)
+	}
+	if result == nil || result.Output != "sunny" {
+		t.Errorf("Expected weather result, got: %v", result)
+	}
+}

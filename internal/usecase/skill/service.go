@@ -30,26 +30,23 @@ func NewService(cfg *config.SkillsSystemConfig, registry SkillRegistry, security
 }
 
 // Execute runs a registered skill with given parameters.
+// This method does not perform permission checks - use ExecuteWithUser for RBAC.
 func (s *Service) Execute(ctx context.Context, skillName string, params map[string]any) (*domain.SkillResult, error) {
 	skill, err := s.registry.Get(skillName)
 	if err != nil {
 		return nil, fmt.Errorf("skill '%s' not found: %w", skillName, err)
 	}
 
-	// TODO: Implement permission checks using securitySvc.
-	// For MVP, assume all skills are allowed or permissions are handled by caller.
-
 	// TODO: Implement timeout logic for skill execution (from config).
 	// Currently, the skill's own context will manage its timeout.
 
 	// Audit the skill execution
 	if err := s.securitySvc.Audit(ctx, &domain.AuditEvent{
-		Timestamp: time.Now(), // Added timestamp
+		Timestamp: time.Now(),
 		Action:    fmt.Sprintf("skill_execute:%s", skillName),
 		Resource:  skillName,
-		Outcome:   "attempt", // Will be updated to success/failure later
+		Outcome:   "attempt",
 		Details:   map[string]any{"params": params},
-		// UserID, Platform, etc. would come from context
 	}); err != nil {
 		log.Printf("Error auditing skill execution attempt: %v", err)
 	}
@@ -58,7 +55,7 @@ func (s *Service) Execute(ctx context.Context, skillName string, params map[stri
 	if err != nil {
 		// Audit failure
 		if auditErr := s.securitySvc.Audit(ctx, &domain.AuditEvent{
-			Timestamp: time.Now(), // Added timestamp
+			Timestamp: time.Now(),
 			Action:    fmt.Sprintf("skill_execute:%s", skillName),
 			Resource:  skillName,
 			Outcome:   "failure",
@@ -71,7 +68,7 @@ func (s *Service) Execute(ctx context.Context, skillName string, params map[stri
 
 	// Audit success
 	if auditErr := s.securitySvc.Audit(ctx, &domain.AuditEvent{
-		Timestamp: time.Now(), // Added timestamp
+		Timestamp: time.Now(),
 		Action:    fmt.Sprintf("skill_execute:%s", skillName),
 		Resource:  skillName,
 		Outcome:   "success",
@@ -81,6 +78,71 @@ func (s *Service) Execute(ctx context.Context, skillName string, params map[stri
 	}
 
 	return result, nil
+}
+
+// ExecuteWithUser runs a registered skill with given parameters after checking permissions.
+// This method enforces RBAC based on the user's role and AllowedSkills whitelist.
+func (s *Service) ExecuteWithUser(ctx context.Context, user *domain.User, skillName string, params map[string]any) (*domain.SkillResult, error) {
+	// Check permissions first
+	if err := s.checkPermission(user, skillName); err != nil {
+		// Audit permission denial for security monitoring
+		s.auditPermissionDenial(ctx, user, skillName, err)
+		return nil, err
+	}
+
+	// Permission check passed, execute the skill
+	return s.Execute(ctx, skillName, params)
+}
+
+// auditPermissionDenial logs a permission denial event for security monitoring.
+func (s *Service) auditPermissionDenial(ctx context.Context, user *domain.User, skillName string, err error) {
+	if auditErr := s.securitySvc.Audit(ctx, &domain.AuditEvent{
+		Timestamp: time.Now(),
+		Action:    "skill_execution_denied",
+		Resource:  skillName,
+		Outcome:   "denied",
+		Details: map[string]any{
+			"user_id":   user.ID,
+			"user_role": string(user.Role),
+			"reason":    err.Error(),
+		},
+	}); auditErr != nil {
+		log.Printf("Error auditing permission denial: %v", auditErr)
+	}
+}
+
+// checkPermission checks if a user has permission to execute a skill.
+// Permission is granted if:
+//  1. The user's role meets or exceeds the required role for the skill
+//  2. If the user has an AllowedSkills whitelist, the skill must be in it
+func (s *Service) checkPermission(user *domain.User, skillName string) error {
+	// Get required role for this skill (default to RoleUser if not specified)
+	requiredRole := DefaultSkillPermission
+	if role, ok := SkillPermissions[skillName]; ok {
+		requiredRole = role
+	}
+
+	// Check if user's role is sufficient
+	if !user.Role.HasPermission(requiredRole) {
+		return domain.ErrInsufficientPermissions
+	}
+
+	// If AllowedSkills whitelist is set, verify skill is whitelisted
+	if len(user.AllowedSkills) > 0 && !s.isSkillWhitelisted(skillName, user.AllowedSkills) {
+		return domain.ErrInsufficientPermissions
+	}
+
+	return nil
+}
+
+// isSkillWhitelisted checks if a skill is in the user's AllowedSkills whitelist.
+func (s *Service) isSkillWhitelisted(skillName string, allowedSkills []string) bool {
+	for _, allowed := range allowedSkills {
+		if allowed == skillName {
+			return true
+		}
+	}
+	return false
 }
 
 // ListSkills returns all registered skills for a given user.
