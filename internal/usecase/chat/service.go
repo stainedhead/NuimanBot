@@ -84,7 +84,15 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 		return domain.OutgoingMessage{}, fmt.Errorf("failed to get recent messages: %w", err)
 	}
 
-	// 3. Prepare LLM Request (simple version for now)
+	// 3. Get available skills and convert to tools
+	// Note: Using PlatformUID as user identifier for skill permissions
+	skills, err := s.skillExecService.ListSkills(ctx, incomingMsg.PlatformUID)
+	if err != nil {
+		return domain.OutgoingMessage{}, fmt.Errorf("failed to list skills: %w", err)
+	}
+	tools := convertSkillsToTools(skills)
+
+	// 4. Prepare LLM Request with tools
 	llmMessages := []domain.Message{}
 	// Add system prompt if any (TODO: from config)
 	// Add history
@@ -95,24 +103,60 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 	llmMessages = append(llmMessages, domain.Message{Role: "user", Content: incomingMsg.Text})
 
 	llmRequest := &domain.LLMRequest{
-		Model:       "claude-3-sonnet-20240229", // TODO: Get from config/user preferences
-		Messages:    llmMessages,
-		MaxTokens:   1024, // TODO: From config
-		Temperature: 0.7,  // TODO: From config
-		// Tools:       nil, // TODO: Integrate skills as tools
-		// SystemPrompt: "You are a helpful AI assistant.", // TODO: From config
+		Model:        "claude-3-sonnet-20240229", // TODO: Get from config/user preferences
+		Messages:     llmMessages,
+		MaxTokens:    1024,                              // TODO: From config
+		Temperature:  0.7,                               // TODO: From config
+		Tools:        tools,                             // Skills exposed as tools
+		SystemPrompt: "You are a helpful AI assistant.", // TODO: From config
 	}
 
-	// 4. Get LLM Response
-	llmResponse, err := s.llmService.Complete(ctx, domain.LLMProviderAnthropic, llmRequest) // TODO: Route dynamically
-	if err != nil {
-		return domain.OutgoingMessage{}, fmt.Errorf("LLM completion failed: %w", err)
+	// 5. Tool calling loop (max 5 iterations)
+	const maxToolIterations = 5
+	var finalResponse *domain.LLMResponse
+
+	for iteration := 0; iteration < maxToolIterations; iteration++ {
+		// Get LLM Response
+		llmResponse, err := s.llmService.Complete(ctx, domain.LLMProviderAnthropic, llmRequest) // TODO: Route dynamically
+		if err != nil {
+			return domain.OutgoingMessage{}, fmt.Errorf("LLM completion failed: %w", err)
+		}
+
+		// No tool calls - we're done
+		if len(llmResponse.ToolCalls) == 0 {
+			finalResponse = llmResponse
+			break
+		}
+
+		// Execute tool calls
+		toolResults := s.executeToolCalls(ctx, llmResponse.ToolCalls)
+
+		// Add assistant message with tool calls to conversation
+		llmMessages = append(llmMessages, domain.Message{
+			Role:    "assistant",
+			Content: llmResponse.Content,
+		})
+
+		// Add tool results as user message
+		// Note: We need to format tool results properly for the LLM
+		// For now, we'll add them as text content
+		toolResultsText := formatToolResults(toolResults)
+		llmMessages = append(llmMessages, domain.Message{
+			Role:    "user",
+			Content: toolResultsText,
+		})
+
+		// Update request with new messages
+		llmRequest.Messages = llmMessages
 	}
 
-	// 5. Process LLM Response (tool calls, content)
-	// TODO: Handle tool calls by skillExecService
-	// For now, just return LLM content
-	responseContent := llmResponse.Content
+	// If we hit max iterations, use last response
+	if finalResponse == nil {
+		return domain.OutgoingMessage{}, fmt.Errorf("max tool calling iterations exceeded")
+	}
+
+	// 6. Process final LLM Response
+	responseContent := finalResponse.Content
 
 	// 6. Save new messages to memory (incoming and outgoing)
 	incomingStoredMsg := domain.StoredMessage{
@@ -131,7 +175,7 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 		Role:       "assistant",
 		Content:    responseContent,
 		Timestamp:  time.Now(),
-		TokenCount: llmResponse.Usage.CompletionTokens, // Using LLM's reported tokens
+		TokenCount: finalResponse.Usage.CompletionTokens, // Using LLM's reported tokens
 	}
 	if err := s.memoryRepo.SaveMessage(ctx, incomingMsg.ID, outgoingStoredMsg); err != nil {
 		log.Printf("Error saving outgoing message to memory: %v", err)
