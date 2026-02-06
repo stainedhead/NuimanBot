@@ -13,14 +13,16 @@ const (
 
 // TelegramConfig configures the Telegram Gateway.
 type TelegramConfig struct {
+	Enabled    bool                `yaml:"enabled"`
 	Token      domain.SecureString `yaml:"token"`
 	WebhookURL string              `yaml:"webhook_url"`
 	AllowedIDs []int64             `yaml:"allowed_ids"`
-	DMPolicy   DMPolicy
+	DMPolicy   DMPolicy            `yaml:"dm_policy"`
 }
 
 // SlackConfig configures the Slack Gateway.
 type SlackConfig struct {
+	Enabled     bool                `yaml:"enabled"`
 	BotToken    domain.SecureString `yaml:"bot_token"`
 	AppToken    domain.SecureString `yaml:"app_token"`
 	WorkspaceID string              `yaml:"workspace_id"`

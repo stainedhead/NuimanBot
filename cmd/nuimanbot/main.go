@@ -12,11 +12,15 @@ import (
 	_ "github.com/mattn/go-sqlite3" // SQLite driver
 
 	"nuimanbot/internal/adapter/gateway/cli"
+	"nuimanbot/internal/adapter/gateway/slack"
+	"nuimanbot/internal/adapter/gateway/telegram"
 	"nuimanbot/internal/adapter/repository/sqlite"
 	"nuimanbot/internal/config"
 	"nuimanbot/internal/domain"
 	"nuimanbot/internal/infrastructure/crypto"
 	anthropic "nuimanbot/internal/infrastructure/llm/anthropic"
+	ollama "nuimanbot/internal/infrastructure/llm/ollama"
+	openai "nuimanbot/internal/infrastructure/llm/openai"
 	"nuimanbot/internal/skills/calculator"
 	"nuimanbot/internal/skills/datetime"
 	"nuimanbot/internal/usecase/chat"
@@ -147,26 +151,88 @@ func main() {
 	fmt.Println("NuimanBot stopped gracefully.")
 }
 
+// connectGateway connects a gateway to the chat service
+func (app *application) connectGateway(gw domain.Gateway) {
+	gw.OnMessage(func(msgCtx context.Context, msg domain.IncomingMessage) error {
+		// Process message through chat service
+		response, err := app.ChatService.ProcessMessage(msgCtx, &msg)
+		if err != nil {
+			log.Printf("[%s] Error processing message: %v", gw.Platform(), err)
+			// Send error message back to user
+			errorMsg := domain.OutgoingMessage{
+				RecipientID: msg.PlatformUID,
+				Content:     fmt.Sprintf("Error: %s", err.Error()),
+				Format:      "text",
+				Metadata:    msg.Metadata, // Preserve metadata for response routing
+			}
+			return gw.Send(msgCtx, errorMsg)
+		}
+
+		// Send successful response
+		return gw.Send(msgCtx, response)
+	})
+}
+
 // initializeLLMService initializes the LLM service based on configuration.
 func initializeLLMService(cfg *config.NuimanBotConfig) (domain.LLMService, error) {
-	if len(cfg.LLM.Providers) == 0 {
-		return nil, fmt.Errorf("no LLM providers configured")
+	// Try provider-specific configs first (new way)
+	// Check OpenAI
+	if cfg.LLM.OpenAI.APIKey.Value() != "" {
+		log.Println("Initializing OpenAI LLM provider")
+		return openai.New(&cfg.LLM.OpenAI), nil
 	}
 
-	// For MVP, use the first provider
-	// TODO: Implement provider selection based on default_model config
-	provider := &cfg.LLM.Providers[0]
-
-	switch provider.Type {
-	case domain.LLMProviderAnthropic:
-		return anthropic.NewClient(provider)
-	case domain.LLMProviderOpenAI:
-		return nil, fmt.Errorf("OpenAI provider not yet implemented")
-	case domain.LLMProviderOllama:
-		return nil, fmt.Errorf("Ollama provider not yet implemented")
-	default:
-		return nil, fmt.Errorf("unsupported LLM provider: %s", provider.Type)
+	// Check Ollama
+	if cfg.LLM.Ollama.BaseURL != "" {
+		log.Println("Initializing Ollama LLM provider")
+		return ollama.New(&cfg.LLM.Ollama), nil
 	}
+
+	// Check Anthropic
+	if cfg.LLM.Anthropic.APIKey.Value() != "" {
+		log.Println("Initializing Anthropic LLM provider")
+		// Convert to generic provider config for Anthropic
+		providerCfg := &config.LLMProviderConfig{
+			Type:   domain.LLMProviderAnthropic,
+			APIKey: cfg.LLM.Anthropic.APIKey,
+		}
+		return anthropic.NewClient(providerCfg)
+	}
+
+	// Fallback to generic Providers array (old way)
+	if len(cfg.LLM.Providers) > 0 {
+		// For MVP, use the first provider
+		// TODO: Implement provider selection based on default_model config
+		provider := &cfg.LLM.Providers[0]
+
+		switch provider.Type {
+		case domain.LLMProviderAnthropic:
+			log.Printf("Initializing Anthropic LLM provider (from Providers array)")
+			return anthropic.NewClient(provider)
+		case domain.LLMProviderOpenAI:
+			log.Printf("Initializing OpenAI LLM provider (from Providers array)")
+			// Convert generic provider config to OpenAI-specific config
+			openaiCfg := &config.OpenAIProviderConfig{
+				APIKey:  provider.APIKey,
+				BaseURL: provider.BaseURL,
+			}
+			return openai.New(openaiCfg), nil
+		case domain.LLMProviderOllama:
+			log.Printf("Initializing Ollama LLM provider (from Providers array)")
+			// Ollama doesn't need API key, just BaseURL
+			ollamaCfg := &config.OllamaProviderConfig{
+				BaseURL: provider.BaseURL,
+			}
+			if ollamaCfg.BaseURL == "" {
+				ollamaCfg.BaseURL = "http://localhost:11434" // Default Ollama URL
+			}
+			return ollama.New(ollamaCfg), nil
+		default:
+			return nil, fmt.Errorf("unsupported LLM provider: %s", provider.Type)
+		}
+	}
+
+	return nil, fmt.Errorf("no LLM providers configured (set llm.openai.api_key, llm.ollama.base_url, or llm.anthropic.api_key)")
 }
 
 // registerBuiltInSkills registers all built-in skills with the registry.
@@ -241,27 +307,51 @@ func initializeDatabase(db *sql.DB) error {
 
 // Run starts the main application services.
 func (app *application) Run(ctx context.Context) error {
-	// For MVP, we start the CLI gateway directly.
+	// Track active gateways for proper shutdown
+	var gateways []domain.Gateway
+
+	// Initialize CLI gateway
 	cliGateway := cli.NewGateway(&app.Config.Gateways.CLI)
+	app.connectGateway(cliGateway)
+	gateways = append(gateways, cliGateway)
 
-	// Connect CLI gateway to chat service
-	cliGateway.OnMessage(func(msgCtx context.Context, msg domain.IncomingMessage) error {
-		// Process message through chat service
-		response, err := app.ChatService.ProcessMessage(msgCtx, &msg)
+	// Initialize Telegram gateway if enabled
+	if app.Config.Gateways.Telegram.Enabled {
+		telegramGateway, err := telegram.New(&app.Config.Gateways.Telegram)
 		if err != nil {
-			log.Printf("Error processing message: %v", err)
-			// Send error message back to user
-			errorMsg := domain.OutgoingMessage{
-				RecipientID: msg.PlatformUID,
-				Content:     fmt.Sprintf("Error: %s", err.Error()),
-				Format:      "text",
-			}
-			return cliGateway.Send(msgCtx, errorMsg)
-		}
+			log.Printf("Warning: Failed to create Telegram gateway: %v", err)
+		} else {
+			app.connectGateway(telegramGateway)
+			gateways = append(gateways, telegramGateway)
 
-		// Send successful response
-		return cliGateway.Send(msgCtx, response)
-	})
+			// Start Telegram gateway in background
+			go func() {
+				log.Println("Starting Telegram gateway...")
+				if err := telegramGateway.Start(ctx); err != nil {
+					log.Printf("Telegram gateway error: %v", err)
+				}
+			}()
+		}
+	}
+
+	// Initialize Slack gateway if enabled
+	if app.Config.Gateways.Slack.Enabled {
+		slackGateway, err := slack.New(&app.Config.Gateways.Slack)
+		if err != nil {
+			log.Printf("Warning: Failed to create Slack gateway: %v", err)
+		} else {
+			app.connectGateway(slackGateway)
+			gateways = append(gateways, slackGateway)
+
+			// Start Slack gateway in background
+			go func() {
+				log.Println("Starting Slack gateway...")
+				if err := slackGateway.Start(ctx); err != nil {
+					log.Printf("Slack gateway error: %v", err)
+				}
+			}()
+		}
+	}
 
 	// Log startup information
 	log.Printf("NuimanBot initialized with:")

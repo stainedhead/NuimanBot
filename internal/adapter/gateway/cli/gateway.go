@@ -17,6 +17,8 @@ import (
 type Gateway struct {
 	Cfg            *config.CLIConfig
 	messageHandler domain.MessageHandler
+	adminHandler   *AdminCommandHandler
+	currentUser    *domain.User // Current CLI user for admin commands
 	// stdin/stdout for testing purposes
 	Reader io.Reader
 	Writer io.Writer
@@ -86,6 +88,39 @@ func (g *Gateway) Start(ctx context.Context) error {
 				return nil
 			}
 
+			// Check if this is an admin command
+			if IsAdminCommand(input) {
+				if g.adminHandler == nil {
+					if _, err := fmt.Fprintln(g.Writer, "Error: Admin commands not available."); err != nil {
+						fmt.Fprintf(os.Stderr, "Error writing to CLI output: %v\n", err)
+					}
+					continue
+				}
+
+				// Use current user or default to a non-admin for authorization
+				user := g.currentUser
+				if user == nil {
+					// Default CLI user (non-admin) for security
+					user = &domain.User{
+						ID:   "cli_default",
+						Role: domain.RoleUser,
+					}
+				}
+
+				// Handle admin command
+				result, err := g.adminHandler.HandleAdminCommand(ctx, user, input)
+				if err != nil {
+					if _, writeErr := fmt.Fprintf(g.Writer, "Error: %v\n", err); writeErr != nil {
+						fmt.Fprintf(os.Stderr, "Error writing to CLI output: %v\n", writeErr)
+					}
+				} else {
+					if _, writeErr := fmt.Fprintln(g.Writer, result); writeErr != nil {
+						fmt.Fprintf(os.Stderr, "Error writing to CLI output: %v\n", writeErr)
+					}
+				}
+				continue
+			}
+
 			if g.messageHandler == nil {
 				if _, err := fmt.Fprintln(g.Writer, "Error: Message handler not set. Cannot process input."); err != nil {
 					fmt.Fprintf(os.Stderr, "Error writing to CLI output: %v\n", err)
@@ -136,4 +171,14 @@ func (g *Gateway) Send(ctx context.Context, msg domain.OutgoingMessage) error {
 // OnMessage registers a handler for incoming messages.
 func (g *Gateway) OnMessage(handler domain.MessageHandler) {
 	g.messageHandler = handler
+}
+
+// SetAdminHandler sets the admin command handler for the gateway.
+func (g *Gateway) SetAdminHandler(handler *AdminCommandHandler) {
+	g.adminHandler = handler
+}
+
+// SetCurrentUser sets the current user for admin command authorization.
+func (g *Gateway) SetCurrentUser(user *domain.User) {
+	g.currentUser = user
 }
