@@ -26,6 +26,10 @@ func (r *InMemoryRegistry) Register(skill domain.Skill) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if skill == nil {
+		return fmt.Errorf("cannot register nil skill")
+	}
+
 	if _, exists := r.skills[skill.Name()]; exists {
 		return fmt.Errorf("skill with name '%s' already registered", skill.Name())
 	}
@@ -40,7 +44,7 @@ func (r *InMemoryRegistry) Get(name string) (domain.Skill, error) {
 
 	skill, ok := r.skills[name]
 	if !ok {
-		return nil, fmt.Errorf("skill '%s' not found", name)
+		return nil, fmt.Errorf("skill not found: %s", name)
 	}
 	return skill, nil
 }
