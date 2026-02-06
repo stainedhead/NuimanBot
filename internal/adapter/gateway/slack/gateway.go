@@ -3,7 +3,7 @@ package slack
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"strconv"
 	"time"
 
@@ -63,7 +63,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 	// Handle events
 	go g.handleEvents(ctx)
 
-	log.Println("Slack gateway started, beginning Socket Mode connection...")
+	slog.Info("Gateway started", "platform", "slack", "mode", "socket_mode")
 
 	// Start Socket Mode (this blocks)
 	return g.socketClient.Run()
@@ -72,7 +72,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 // Stop gracefully shuts down the Slack gateway.
 func (g *Gateway) Stop(ctx context.Context) error {
 	if g.cancel != nil {
-		log.Println("Stopping Slack gateway...")
+		slog.Info("Stopping gateway", "platform", "slack")
 		g.cancel()
 	}
 	return nil
@@ -147,7 +147,7 @@ func (g *Gateway) handleEvents(ctx context.Context) {
 				g.handleSlackEvent(ctx, eventsAPIEvent.InnerEvent)
 
 			case socketmode.EventTypeHello:
-				log.Println("Slack: Connected to Socket Mode")
+				slog.Info("Connected to Socket Mode", "platform", "slack")
 			}
 		}
 	}
@@ -190,7 +190,10 @@ func (g *Gateway) handleMessage(ctx context.Context, userID, text, channel, ts, 
 	// Call message handler if registered
 	if g.messageHandler != nil {
 		if err := g.messageHandler(ctx, incomingMsg); err != nil {
-			log.Printf("Slack: Error handling message: %v", err)
+			slog.Error("Error handling message",
+				"platform", "slack",
+				"error", err,
+			)
 		}
 	}
 }

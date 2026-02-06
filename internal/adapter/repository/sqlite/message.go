@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log" // Added log
+	"log/slog" // Structured logging
 
 	"time"
 
@@ -68,7 +68,7 @@ func (r *MessageRepository) SaveMessage(ctx context.Context, convID string, user
 	}
 	defer func() {
 		if rbe := tx.Rollback(); rbe != nil {
-			log.Printf("rollback error in SaveMessage: %v", rbe)
+			slog.Error("Rollback error in SaveMessage", "error", rbe)
 		}
 	}()
 
@@ -150,7 +150,7 @@ func (r *MessageRepository) GetConversation(ctx context.Context, convID string) 
 	}
 	defer func() {
 		if cle := rows.Close(); cle != nil {
-			log.Printf("rows close error in GetConversation: %v", cle)
+			slog.Error("Rows close error in GetConversation", "error", cle)
 		}
 	}()
 
@@ -223,7 +223,7 @@ func (r *MessageRepository) GetRecentMessages(ctx context.Context, convID string
 	}
 	defer func() {
 		if cle := rows.Close(); cle != nil {
-			log.Printf("error closing rows in GetRecentMessages: %v", cle)
+			slog.Error("Rows close error in GetRecentMessages", "error", cle)
 		}
 	}()
 
@@ -277,7 +277,7 @@ func (r *MessageRepository) DeleteConversation(ctx context.Context, convID strin
 	}
 	defer func() {
 		if rbe := tx.Rollback(); rbe != nil {
-			log.Printf("rollback error in DeleteConversation: %v", rbe)
+			slog.Error("Rollback error in DeleteConversation", "error", rbe)
 		}
 	}()
 
@@ -305,7 +305,7 @@ func (r *MessageRepository) ListConversations(ctx context.Context, userID string
 	}
 	defer func() {
 		if cle := rows.Close(); cle != nil {
-			log.Printf("rows close error in ListConversations: %v", cle)
+			slog.Error("Rows close error in ListConversations", "error", cle)
 		}
 	}()
 

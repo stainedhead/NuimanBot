@@ -3,7 +3,7 @@ package telegram
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"strconv"
 	"time"
 
@@ -55,7 +55,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	g.cancel = cancel
 
-	log.Println("Telegram gateway started, beginning long polling...")
+	slog.Info("Gateway started", "platform", "telegram", "mode", "long_polling")
 
 	// Start polling (this blocks)
 	g.bot.Start(ctx)
@@ -66,7 +66,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 // Stop gracefully shuts down the Telegram gateway.
 func (g *Gateway) Stop(ctx context.Context) error {
 	if g.cancel != nil {
-		log.Println("Stopping Telegram gateway...")
+		slog.Info("Stopping gateway", "platform", "telegram")
 		g.cancel()
 	}
 	return nil
@@ -96,7 +96,10 @@ func (g *Gateway) handleUpdate(ctx context.Context, b *bot.Bot, update *models.U
 			}
 		}
 		if !allowed {
-			log.Printf("Telegram: Ignoring message from unauthorized user %d", msg.From.ID)
+			slog.Warn("Ignoring message from unauthorized user",
+				"platform", "telegram",
+				"user_id", msg.From.ID,
+			)
 			return
 		}
 	}
@@ -121,7 +124,10 @@ func (g *Gateway) handleUpdate(ctx context.Context, b *bot.Bot, update *models.U
 	// Call message handler if registered
 	if g.messageHandler != nil {
 		if err := g.messageHandler(ctx, incomingMsg); err != nil {
-			log.Printf("Telegram: Error handling message: %v", err)
+			slog.Error("Error handling message",
+				"platform", "telegram",
+				"error", err,
+			)
 		}
 	}
 }

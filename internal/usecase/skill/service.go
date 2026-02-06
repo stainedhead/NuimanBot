@@ -3,7 +3,7 @@ package skill
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"nuimanbot/internal/config"
@@ -48,7 +48,7 @@ func (s *Service) Execute(ctx context.Context, skillName string, params map[stri
 		Outcome:   "attempt",
 		Details:   map[string]any{"params": params},
 	}); err != nil {
-		log.Printf("Error auditing skill execution attempt: %v", err)
+		slog.Error("Error auditing skill execution attempt", "error", err)
 	}
 
 	result, err := skill.Execute(ctx, params)
@@ -61,7 +61,7 @@ func (s *Service) Execute(ctx context.Context, skillName string, params map[stri
 			Outcome:   "failure",
 			Details:   map[string]any{"params": params, "error": err.Error()},
 		}); auditErr != nil {
-			log.Printf("Error auditing skill execution failure: %v", auditErr)
+			slog.Error("Error auditing skill execution failure", "error", auditErr)
 		}
 		return nil, fmt.Errorf("failed to execute skill '%s': %w", skillName, err)
 	}
@@ -74,7 +74,7 @@ func (s *Service) Execute(ctx context.Context, skillName string, params map[stri
 		Outcome:   "success",
 		Details:   map[string]any{"params": params, "output_summary": result.Output},
 	}); auditErr != nil {
-		log.Printf("Error auditing skill execution success: %v", auditErr)
+		slog.Error("Error auditing skill execution success", "error", auditErr)
 	}
 
 	return result, nil
@@ -107,7 +107,7 @@ func (s *Service) auditPermissionDenial(ctx context.Context, user *domain.User, 
 			"reason":    err.Error(),
 		},
 	}); auditErr != nil {
-		log.Printf("Error auditing permission denial: %v", auditErr)
+		slog.Error("Error auditing permission denial", "error", auditErr)
 	}
 }
 

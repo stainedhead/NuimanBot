@@ -3,8 +3,8 @@ package chat
 import (
 	"context"
 	"fmt"
-	"log"  // For logging errors in defer functions etc.
-	"time" // For time.Now()
+	"log/slog" // Structured logging
+	"time"     // For time.Now()
 
 	"nuimanbot/internal/domain"
 )
@@ -175,7 +175,10 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 		// TokenCount:  llmRequest.Tokens(), // TODO: Calculate actual token count
 	}
 	if err := s.memoryRepo.SaveMessage(ctx, conversationID, incomingMsg.PlatformUID, incomingMsg.Platform, incomingStoredMsg); err != nil {
-		log.Printf("Error saving incoming message to memory: %v", err)
+		slog.Error("Error saving incoming message to memory",
+			"conversation_id", conversationID,
+			"error", err,
+		)
 	}
 
 	outgoingStoredMsg := domain.StoredMessage{
@@ -186,7 +189,10 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 		TokenCount: finalResponse.Usage.CompletionTokens, // Using LLM's reported tokens
 	}
 	if err := s.memoryRepo.SaveMessage(ctx, conversationID, incomingMsg.PlatformUID, incomingMsg.Platform, outgoingStoredMsg); err != nil {
-		log.Printf("Error saving outgoing message to memory: %v", err)
+		slog.Error("Error saving outgoing message to memory",
+			"conversation_id", conversationID,
+			"error", err,
+		)
 	}
 
 	// 7. Return Outgoing Message

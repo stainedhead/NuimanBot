@@ -3,7 +3,7 @@ package security
 import (
 	"context"
 	"errors"
-	"log" // Added for logging in NoOpAuditor
+	"log/slog" // Structured logging
 	"time"
 
 	"nuimanbot/internal/domain"
@@ -108,7 +108,13 @@ func NewNoOpAuditor() *NoOpAuditor {
 }
 
 func (n *NoOpAuditor) Audit(ctx context.Context, event *domain.AuditEvent) error {
-	log.Printf("AUDIT: %s | User: %s | Action: %s | Resource: %s | Outcome: %s | Details: %v\n",
-		event.Timestamp.Format(time.RFC3339), event.UserID, event.Action, event.Resource, event.Outcome, event.Details)
+	slog.Info("AUDIT",
+		"timestamp", event.Timestamp.Format(time.RFC3339),
+		"user_id", event.UserID,
+		"action", event.Action,
+		"resource", event.Resource,
+		"outcome", event.Outcome,
+		"details", event.Details,
+	)
 	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -21,6 +22,7 @@ import (
 	anthropic "nuimanbot/internal/infrastructure/llm/anthropic"
 	ollama "nuimanbot/internal/infrastructure/llm/ollama"
 	openai "nuimanbot/internal/infrastructure/llm/openai"
+	"nuimanbot/internal/infrastructure/logger"
 	"nuimanbot/internal/skills/calculator"
 	"nuimanbot/internal/skills/datetime"
 	"nuimanbot/internal/skills/notes"
@@ -63,7 +65,23 @@ func main() {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
-	// 2. Initialize Credential Vault
+	// 2. Initialize Structured Logging
+	logFormat := "text"
+	if cfg.Server.Debug {
+		logFormat = "text" // Human-readable for development
+	} else {
+		logFormat = "json" // JSON for production
+	}
+	logger.Initialize(logger.Config{
+		Level:  logger.LogLevel(cfg.Server.LogLevel),
+		Format: logFormat,
+	})
+	slog.Info("Logger initialized",
+		"level", cfg.Server.LogLevel,
+		"format", logFormat,
+	)
+
+	// 3. Initialize Credential Vault
 	vaultPath := cfg.Security.VaultPath
 	if vaultPath == "" {
 		vaultPath = "./data/vault.enc" // Default path
@@ -73,7 +91,7 @@ func main() {
 		log.Fatalf("Failed to create credential vault: %v", err)
 	}
 
-	// 3. Initialize Security Service
+	// 4. Initialize Security Service
 	inputValidator := security.NewDefaultInputValidator()
 	auditor := security.NewNoOpAuditor()
 	securityService := security.NewService(vault, inputValidator, auditor)
@@ -163,7 +181,10 @@ func (app *application) connectGateway(gw domain.Gateway) {
 		// Process message through chat service
 		response, err := app.ChatService.ProcessMessage(msgCtx, &msg)
 		if err != nil {
-			log.Printf("[%s] Error processing message: %v", gw.Platform(), err)
+			slog.Error("Error processing message",
+				"platform", gw.Platform(),
+				"error", err,
+			)
 			// Send error message back to user
 			errorMsg := domain.OutgoingMessage{
 				RecipientID: msg.PlatformUID,
@@ -213,10 +234,10 @@ func initializeLLMService(cfg *config.NuimanBotConfig) (domain.LLMService, error
 
 		switch provider.Type {
 		case domain.LLMProviderAnthropic:
-			log.Printf("Initializing Anthropic LLM provider (from Providers array)")
+			slog.Info("Initializing LLM provider", "provider", "anthropic", "source", "providers_array")
 			return anthropic.NewClient(provider)
 		case domain.LLMProviderOpenAI:
-			log.Printf("Initializing OpenAI LLM provider (from Providers array)")
+			slog.Info("Initializing LLM provider", "provider", "openai", "source", "providers_array")
 			// Convert generic provider config to OpenAI-specific config
 			openaiCfg := &config.OpenAIProviderConfig{
 				APIKey:  provider.APIKey,
@@ -224,7 +245,7 @@ func initializeLLMService(cfg *config.NuimanBotConfig) (domain.LLMService, error
 			}
 			return openai.New(openaiCfg), nil
 		case domain.LLMProviderOllama:
-			log.Printf("Initializing Ollama LLM provider (from Providers array)")
+			slog.Info("Initializing LLM provider", "provider", "ollama", "source", "providers_array")
 			// Ollama doesn't need API key, just BaseURL
 			ollamaCfg := &config.OllamaProviderConfig{
 				BaseURL: provider.BaseURL,
@@ -281,7 +302,7 @@ func registerBuiltInSkills(registry skill.SkillRegistry, notesRepo *sqlite.Notes
 	}
 	log.Println("Notes skill registered")
 
-	log.Printf("Registered built-in skills successfully")
+	slog.Info("Registered built-in skills successfully")
 	return nil
 }
 
@@ -376,7 +397,7 @@ func (app *application) Run(ctx context.Context) error {
 	if app.Config.Gateways.Telegram.Enabled {
 		telegramGateway, err := telegram.New(&app.Config.Gateways.Telegram)
 		if err != nil {
-			log.Printf("Warning: Failed to create Telegram gateway: %v", err)
+			slog.Warn("Failed to create Telegram gateway", "error", err)
 		} else {
 			app.connectGateway(telegramGateway)
 			gateways = append(gateways, telegramGateway)
@@ -385,7 +406,7 @@ func (app *application) Run(ctx context.Context) error {
 			go func() {
 				log.Println("Starting Telegram gateway...")
 				if err := telegramGateway.Start(ctx); err != nil {
-					log.Printf("Telegram gateway error: %v", err)
+					slog.Error("Telegram gateway error", "error", err)
 				}
 			}()
 		}
@@ -395,7 +416,7 @@ func (app *application) Run(ctx context.Context) error {
 	if app.Config.Gateways.Slack.Enabled {
 		slackGateway, err := slack.New(&app.Config.Gateways.Slack)
 		if err != nil {
-			log.Printf("Warning: Failed to create Slack gateway: %v", err)
+			slog.Warn("Failed to create Slack gateway", "error", err)
 		} else {
 			app.connectGateway(slackGateway)
 			gateways = append(gateways, slackGateway)
@@ -404,18 +425,19 @@ func (app *application) Run(ctx context.Context) error {
 			go func() {
 				log.Println("Starting Slack gateway...")
 				if err := slackGateway.Start(ctx); err != nil {
-					log.Printf("Slack gateway error: %v", err)
+					slog.Error("Slack gateway error", "error", err)
 				}
 			}()
 		}
 	}
 
 	// Log startup information
-	log.Printf("NuimanBot initialized with:")
-	log.Printf("  Log Level: %s", app.Config.Server.LogLevel)
-	log.Printf("  Debug Mode: %t", app.Config.Server.Debug)
-	log.Printf("  LLM Provider: %s", app.Config.LLM.Providers[0].Type)
-	log.Printf("  Skills Registered: %d", len(app.SkillRegistry.List()))
+	slog.Info("NuimanBot initialized",
+		"log_level", app.Config.Server.LogLevel,
+		"debug_mode", app.Config.Server.Debug,
+		"llm_provider", app.Config.LLM.Providers[0].Type,
+		"skills_registered", len(app.SkillRegistry.List()),
+	)
 
 	fmt.Println("\nStarting CLI Gateway...")
 	fmt.Println("Type your messages below. Commands:")
