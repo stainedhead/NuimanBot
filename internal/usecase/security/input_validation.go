@@ -2,10 +2,11 @@ package security
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
+
+	"nuimanbot/internal/domain"
 )
 
 // DefaultInputValidator implements the InputValidator interface.
@@ -130,27 +131,47 @@ func NewDefaultInputValidator() *DefaultInputValidator {
 func (v *DefaultInputValidator) ValidateInput(ctx context.Context, input string, maxLength int) (string, error) {
 	// Rule 1: Maximum input length
 	if len(input) > maxLength {
-		return "", fmt.Errorf("input exceeds maximum length of %d bytes", maxLength)
+		return "", domain.NewUserError(
+			"INPUT_TOO_LONG",
+			fmt.Sprintf("input exceeds maximum length of %d bytes", maxLength),
+			fmt.Sprintf("Your message is too long. Please keep it under %d characters.", maxLength),
+		)
 	}
 
 	// Rule 2: No null bytes
 	if strings.ContainsRune(input, '\x00') {
-		return "", errors.New("input contains null bytes")
+		return "", domain.NewUserError(
+			"INVALID_CHARACTERS",
+			"input contains null bytes",
+			"Your message contains invalid characters. Please remove them and try again.",
+		)
 	}
 
 	// Rule 3: UTF-8 validation
 	if !utf8.ValidString(input) {
-		return "", errors.New("input is not valid UTF-8")
+		return "", domain.NewUserError(
+			"INVALID_ENCODING",
+			"input is not valid UTF-8",
+			"Your message contains invalid text encoding. Please check your message and try again.",
+		)
 	}
 
 	// Rule 4: Prompt injection pattern detection
 	if v.detectPromptInjection(input) {
-		return "", errors.New("input detected as potential prompt injection")
+		return "", domain.NewUserError(
+			"SUSPICIOUS_INPUT",
+			"input detected as potential prompt injection",
+			"Your message appears to contain potentially harmful content. Please rephrase and try again.",
+		)
 	}
 
 	// Rule 5: Command injection pattern detection
 	if v.detectCommandInjection(input) {
-		return "", errors.New("input detected as potential command injection")
+		return "", domain.NewUserError(
+			"SUSPICIOUS_INPUT",
+			"input detected as potential command injection",
+			"Your message appears to contain potentially harmful content. Please rephrase and try again.",
+		)
 	}
 
 	// Basic sanitization: trim whitespace
