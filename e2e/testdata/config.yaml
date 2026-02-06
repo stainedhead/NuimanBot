@@ -1,0 +1,39 @@
+server:
+  log_level: debug
+  debug: true
+
+security:
+  input_max_length: 4096
+  token_rotation_hours: 24
+  vault_path: ""  # Will be set to temp path in tests
+  encryption_key: ""  # Will be set from env var in tests
+
+llm:
+  default_model:
+    primary: anthropic/claude-sonnet
+  providers:
+    - id: test-anthropic
+      type: anthropic
+      api_key: sk-test-key-e2e
+      name: Test Anthropic Provider
+
+gateways:
+  cli:
+    debug_mode: true
+    history_file: ""
+
+storage:
+  type: sqlite
+  dsn: ""  # Will be set to temp path in tests
+
+skills:
+  entries: {}
+
+mcp:
+  client:
+    timeout: 30s
+    max_retries: 3
+
+memory:
+  backend: builtin
+  citations: auto

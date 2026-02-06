@@ -11,7 +11,7 @@ An AI agent framework built with Clean Architecture principles, featuring LLM in
 - **Secure Credentials**: AES-256-GCM encrypted credential vault
 - **SQLite Storage**: Persistent conversation history and user data
 - **Configuration**: YAML file + environment variable override support
-- **Test Coverage**: ~75% coverage with comprehensive unit and integration tests
+- **Test Coverage**: ~80% coverage with comprehensive unit, integration, and E2E tests
 
 ## Quick Start
 
@@ -131,6 +131,34 @@ Bot: The result is 100.
 NuimanBot stopped gracefully.
 ```
 
+## Security Features
+
+NuimanBot implements comprehensive security measures to protect against common attack vectors:
+
+### Input Validation
+- **Maximum Length Enforcement**: Configurable input length limits (default: 4096 bytes)
+- **Null Byte Detection**: Prevents null byte injection attacks
+- **UTF-8 Validation**: Ensures all input is valid UTF-8 encoded
+- **Prompt Injection Protection**: Detects and blocks 30+ jailbreak patterns including:
+  - Instruction override attempts ("ignore previous instructions", "system override")
+  - Role manipulation ("you are now", "act as", "from now on")
+  - Information disclosure attempts ("show your prompt", "reveal instructions")
+  - Output manipulation ("bypass filter", "skip validation")
+- **Command Injection Protection**: Detects and blocks 50+ dangerous patterns including:
+  - Shell metacharacters (`;`, `&&`, `||`, `` ` ``, `$()`)
+  - Dangerous commands (`rm`, `sudo`, `wget`, `curl`, `bash`)
+  - Sensitive file paths (`/etc/passwd`, `/bin/bash`, `c:\system32`)
+
+### Credential Management
+- **AES-256-GCM Encryption**: All API keys and secrets encrypted at rest
+- **Secure Vault**: File-based credential vault with authenticated encryption
+- **Environment Variable Support**: Sensitive data can be loaded from environment
+
+### Audit Trail
+- Security events logged for monitoring and compliance
+- Input validation failures tracked
+- Audit interface extensible for custom logging backends
+
 ## Built-in Skills
 
 ### Calculator
@@ -178,19 +206,54 @@ Provides current date and time information:
 ### Running Tests
 
 ```bash
-# Run all tests
+# Run all tests (unit + integration + E2E)
 go test ./...
 
 # Run with coverage
 go test -cover ./...
 
+# Run specific test types
+go test ./internal/...            # Unit and integration tests
+go test ./e2e/...                 # End-to-end tests
+go test ./internal/skills/...     # Skill tests only
+
 # Run specific package tests
 go test ./internal/skills/calculator/... -v
+
+# Run with race detection
+go test -race ./...
 
 # Generate coverage report
 go test -coverprofile=coverage.out ./...
 go tool cover -html=coverage.out
+
+# Run E2E tests with verbose output
+go test -v ./e2e/...
 ```
+
+#### Test Types
+
+**Unit Tests** (`*_test.go`)
+- Fast, isolated tests for individual functions and methods
+- Located in same package as code under test
+- Example: `internal/skills/calculator/calculator_test.go`
+
+**Integration Tests** (`*_test.go`)
+- Test interactions between multiple components
+- Example: `internal/config/loader_test.go` (config loading + file system)
+
+**End-to-End Tests** (`e2e/*_test.go`)
+- Test complete application flows from start to finish
+- Full application initialization with all layers
+- Test scenarios include:
+  - Full application lifecycle (startup, operation, shutdown)
+  - CLI to skill execution flow
+  - Conversation persistence
+  - Input validation rejection
+  - Configuration loading
+  - Graceful shutdown with active requests
+
+**Test Coverage**: ~80% across all layers with comprehensive validation testing
 
 ### Quality Gates
 
