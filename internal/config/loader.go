@@ -53,8 +53,6 @@ func LoadConfig(configPaths ...string) (*NuimanBotConfig, error) {
 	}
 
 	var cfg NuimanBotConfig
-	// Debug: Print all settings before unmarshaling
-	fmt.Printf("Viper settings before unmarshal: %+v\n", v.AllSettings())
 
 	// Get all settings and remove providers and provider-specific configs (we'll handle manually)
 	allSettings := v.AllSettings()
