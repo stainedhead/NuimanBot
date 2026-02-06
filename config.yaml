@@ -1,0 +1,35 @@
+server:
+  log_level: info
+  debug: false
+
+security:
+  input_max_length: 4096
+  vault_path: "./data/vault.enc"
+
+storage:
+  type: sqlite
+  dsn: "./data/nuimanbot.db"
+
+llm:
+  default_model:
+    primary: anthropic/claude-sonnet
+  providers:
+    - id: anthropic-main
+      type: anthropic
+      api_key: "your-api-key-here"  # Set via NUIMANBOT_LLM_PROVIDERS_0_APIKEY env var
+
+gateways:
+  cli:
+    debug_mode: false
+    history_file: ".nuimanbot_history"
+
+skills:
+  entries:
+    calculator:
+      enabled: true
+    datetime:
+      enabled: true
+
+mcp:
+  client:
+    timeout: "30s"
