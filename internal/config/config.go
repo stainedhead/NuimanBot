@@ -4,8 +4,9 @@ import "nuimanbot/internal/domain"
 
 // ServerConfig holds server-related configuration.
 type ServerConfig struct {
-	LogLevel string `yaml:"log_level"`
-	Debug    bool   `yaml:"debug"`
+	Environment Environment `yaml:"environment"`
+	LogLevel    string      `yaml:"log_level"`
+	Debug       bool        `yaml:"debug"`
 }
 
 // SecurityConfig holds security-related configuration.

@@ -164,6 +164,21 @@ func LoadConfig(configPaths ...string) (*NuimanBotConfig, error) {
 	// Load skills from environment variables
 	loadSkillsFromEnv(&cfg)
 
+	// Set environment from env var if not set in config
+	if cfg.Server.Environment == "" {
+		cfg.Server.Environment = EnvironmentFromEnv()
+	}
+
+	// Apply environment-specific defaults
+	ApplyEnvironmentDefaults(&cfg)
+
+	// Validate production configuration
+	if cfg.Server.Environment.IsProduction() {
+		if err := ValidateProductionConfig(&cfg); err != nil {
+			return nil, fmt.Errorf("production config validation failed: %w", err)
+		}
+	}
+
 	return &cfg, nil
 }
 
@@ -171,6 +186,9 @@ func LoadConfig(configPaths ...string) (*NuimanBotConfig, error) {
 // Environment variables take precedence over file values.
 func applyEnvOverrides(cfg *NuimanBotConfig) {
 	// Server config
+	if val := os.Getenv("ENVIRONMENT"); val != "" {
+		cfg.Server.Environment = ParseEnvironment(val)
+	}
 	if val := os.Getenv("NUIMANBOT_SERVER_LOGLEVEL"); val != "" {
 		cfg.Server.LogLevel = val
 	}
