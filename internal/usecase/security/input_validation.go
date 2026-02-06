@@ -51,36 +51,144 @@ func (v *DefaultInputValidator) ValidateInput(ctx context.Context, input string,
 	return sanitizedInput, nil
 }
 
-// detectPromptInjection is a placeholder for detecting prompt injection patterns.
-// This would typically involve more sophisticated regex or ML-based detection.
+// detectPromptInjection detects prompt injection patterns using comprehensive keyword matching.
+// This implementation uses pattern matching for common jailbreak and manipulation attempts.
 func (v *DefaultInputValidator) detectPromptInjection(input string) bool {
 	lowerInput := strings.ToLower(input)
-	// Simple keywords for demonstration. In a real system, this would be robust.
-	if strings.Contains(lowerInput, "ignore previous instructions") ||
-		strings.Contains(lowerInput, "as an ai model") ||
-		strings.Contains(lowerInput, "system override") {
-		return true
-	}
-	return false
-}
 
-// detectCommandInjection is a placeholder for detecting command injection patterns.
-// This would involve checking for shell-specific metacharacters and commands.
-func (v *DefaultInputValidator) detectCommandInjection(input string) bool {
-	lowerInput := strings.ToLower(input)
-	// Simple checks for common shell commands/metacharacters.
-	// This list needs to be comprehensive and carefully maintained.
-	dangerousPatterns := []string{
-		";", "&&", "||", "`", "$(",
-		"rm ", "mv ", "cp ", "chmod ", "chown ", "sudo ",
-		"wget ", "curl ", "nc ", "bash ", "sh ", "powershell ",
-		"/etc/passwd", "/bin/bash",
+	// Jailbreak attempts - trying to override previous instructions
+	jailbreakPatterns := []string{
+		"ignore previous instructions",
+		"ignore all previous",
+		"disregard previous",
+		"forget previous",
+		"new instructions:",
+		"system override",
+		"reset instructions",
+		"clear instructions",
+		"override previous",
 	}
 
-	for _, pattern := range dangerousPatterns {
+	// Role manipulation - trying to change the AI's behavior or role
+	rolePatterns := []string{
+		"you are now",
+		"act as if you are",
+		"pretend you are",
+		"as an ai model",
+		"you must now",
+		"from now on",
+		"act as",
+		"behave as",
+		"roleplay as",
+	}
+
+	// Information disclosure attempts - trying to reveal system prompts or instructions
+	disclosurePatterns := []string{
+		"reveal your prompt",
+		"show your instructions",
+		"what are your rules",
+		"repeat your system prompt",
+		"tell me your guidelines",
+		"print your configuration",
+		"show your system prompt",
+		"repeat your instructions",
+		"what is your system message",
+		"show me your prompt",
+	}
+
+	// Output manipulation - trying to bypass filters or safety measures
+	outputPatterns := []string{
+		"output raw",
+		"return unfiltered",
+		"bypass filter",
+		"skip validation",
+		"ignore safety",
+		"disable safety",
+		"without filter",
+		"unfiltered response",
+	}
+
+	// Check all pattern categories
+	allPatterns := append(jailbreakPatterns, rolePatterns...)
+	allPatterns = append(allPatterns, disclosurePatterns...)
+	allPatterns = append(allPatterns, outputPatterns...)
+
+	for _, pattern := range allPatterns {
 		if strings.Contains(lowerInput, pattern) {
 			return true
 		}
 	}
+
+	return false
+}
+
+// detectCommandInjection detects command injection patterns using comprehensive checks
+// for shell metacharacters, dangerous commands, and sensitive file paths.
+func (v *DefaultInputValidator) detectCommandInjection(input string) bool {
+	lowerInput := strings.ToLower(input)
+
+	// Shell metacharacters - characters used for command chaining and injection
+	metacharacters := []string{
+		";", "&&", "||", "|", "`", "$(",
+		"$(", "${", ")", ">>", ">", "<<", "<",
+		"\n", "\r",
+	}
+
+	// Dangerous commands - expanded list of commands that could be malicious
+	dangerousCommands := []string{
+		// File operations
+		"rm ", "mv ", "cp ", "dd ", "shred ",
+		// Permission changes
+		"chmod ", "chown ", "chgrp ",
+		// Privilege escalation
+		"sudo ", "su ", "doas ",
+		// Network operations
+		"wget ", "curl ", "nc ", "netcat ", "telnet ", "ssh ", "scp ",
+		// Shell invocations
+		"bash ", "sh ", "zsh ", "fish ", "dash ",
+		"powershell ", "pwsh ", "cmd ", "command.com ",
+		// System manipulation
+		"kill ", "pkill ", "systemctl ", "service ",
+		"reboot ", "shutdown ", "halt ", "poweroff ",
+		// Package management
+		"apt ", "yum ", "dnf ", "pacman ", "brew ",
+		// Encoding/decoding (often used in attacks)
+		"base64 ", "xxd ", "od ",
+		// Process inspection
+		"ps ", "top ", "htop ",
+		// File inspection
+		"cat ", "less ", "more ", "head ", "tail ",
+	}
+
+	// Sensitive paths - file paths that should never be accessed
+	sensitivePaths := []string{
+		"/etc/passwd", "/etc/shadow", "/etc/sudoers",
+		"/root/", "/.ssh/", "~/.ssh/",
+		"/bin/", "/sbin/", "/usr/bin/", "/usr/sbin/",
+		"c:\\windows\\", "c:\\system32\\",
+		"/proc/", "/sys/",
+	}
+
+	// Check metacharacters
+	for _, meta := range metacharacters {
+		if strings.Contains(input, meta) {
+			return true
+		}
+	}
+
+	// Check dangerous commands
+	for _, cmd := range dangerousCommands {
+		if strings.Contains(lowerInput, cmd) {
+			return true
+		}
+	}
+
+	// Check sensitive paths
+	for _, path := range sensitivePaths {
+		if strings.Contains(lowerInput, path) {
+			return true
+		}
+	}
+
 	return false
 }

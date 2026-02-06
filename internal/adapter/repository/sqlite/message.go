@@ -204,6 +204,10 @@ func (r *MessageRepository) GetRecentMessages(ctx context.Context, convID string
 	// This is inefficient for large conversations, but simpler for now.
 	conversation, err := r.GetConversation(ctx, convID)
 	if err != nil {
+		// If conversation doesn't exist yet, return empty message list (new conversation)
+		if errors.Is(err, domain.ErrNotFound) {
+			return []domain.StoredMessage{}, nil
+		}
 		return nil, err
 	}
 	// TODO: Implement more efficient token-based retrieval in reverse chronological order.
