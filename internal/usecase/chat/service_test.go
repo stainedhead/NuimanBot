@@ -31,14 +31,14 @@ func (m *mockLLMService) ListModels(ctx context.Context, provider domain.LLMProv
 }
 
 type mockMemoryRepository struct {
-	saveMessageFunc       func(ctx context.Context, convID string, msg domain.StoredMessage) error
+	saveMessageFunc       func(ctx context.Context, convID string, userID string, platform domain.Platform, msg domain.StoredMessage) error
 	getConversationFunc   func(ctx context.Context, convID string) (*domain.Conversation, error)
 	getRecentMessagesFunc func(ctx context.Context, convID string, maxTokens int) ([]domain.StoredMessage, error)
 }
 
-func (m *mockMemoryRepository) SaveMessage(ctx context.Context, convID string, msg domain.StoredMessage) error {
+func (m *mockMemoryRepository) SaveMessage(ctx context.Context, convID string, userID string, platform domain.Platform, msg domain.StoredMessage) error {
 	if m.saveMessageFunc != nil {
-		return m.saveMessageFunc(ctx, convID, msg)
+		return m.saveMessageFunc(ctx, convID, userID, platform, msg)
 	}
 	return nil
 }

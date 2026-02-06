@@ -20,7 +20,7 @@ type LLMService interface {
 // MemoryRepository defines the interface for memory persistence required by the ChatService.
 // This is effectively a subset or exact copy of domain.MemoryRepository.
 type MemoryRepository interface {
-	SaveMessage(ctx context.Context, convID string, msg domain.StoredMessage) error
+	SaveMessage(ctx context.Context, convID string, userID string, platform domain.Platform, msg domain.StoredMessage) error
 	GetConversation(ctx context.Context, convID string) (*domain.Conversation, error)
 	GetRecentMessages(ctx context.Context, convID string, maxTokens int) ([]domain.StoredMessage, error)
 	DeleteConversation(ctx context.Context, convID string) error
@@ -67,6 +67,11 @@ func NewService(
 	}
 }
 
+// getConversationID generates a conversation ID based on platform and user
+func getConversationID(platform domain.Platform, platformUID string) string {
+	return string(platform) + ":" + platformUID
+}
+
 // ProcessMessage processes an incoming message, interacts with LLM/skills/memory, and returns an outgoing message.
 func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.IncomingMessage) (domain.OutgoingMessage, error) {
 	// 1. Validate Input
@@ -76,10 +81,13 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 	}
 	incomingMsg.Text = validatedInput // Use validated input
 
+	// Generate conversation ID from platform and user
+	conversationID := getConversationID(incomingMsg.Platform, incomingMsg.PlatformUID)
+
 	// 2. Load Conversation History
 	// For MVP, retrieve recent messages for context.
 	// TODO: Implement token-based trimming for context window management.
-	recentMessages, err := s.memoryRepo.GetRecentMessages(ctx, incomingMsg.ID, 4096) // Max 4096 tokens for now
+	recentMessages, err := s.memoryRepo.GetRecentMessages(ctx, conversationID, 4096) // Max 4096 tokens for now
 	if err != nil {
 		return domain.OutgoingMessage{}, fmt.Errorf("failed to get recent messages: %w", err)
 	}
@@ -160,13 +168,13 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 
 	// 6. Save new messages to memory (incoming and outgoing)
 	incomingStoredMsg := domain.StoredMessage{
-		ID:        incomingMsg.ID, // Reusing ID for simplicity in mock
+		ID:        incomingMsg.ID, // Use incoming message ID
 		Role:      "user",
 		Content:   incomingMsg.Text,
 		Timestamp: incomingMsg.Timestamp,
 		// TokenCount:  llmRequest.Tokens(), // TODO: Calculate actual token count
 	}
-	if err := s.memoryRepo.SaveMessage(ctx, incomingMsg.ID, incomingStoredMsg); err != nil {
+	if err := s.memoryRepo.SaveMessage(ctx, conversationID, incomingMsg.PlatformUID, incomingMsg.Platform, incomingStoredMsg); err != nil {
 		log.Printf("Error saving incoming message to memory: %v", err)
 	}
 
@@ -177,7 +185,7 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 		Timestamp:  time.Now(),
 		TokenCount: finalResponse.Usage.CompletionTokens, // Using LLM's reported tokens
 	}
-	if err := s.memoryRepo.SaveMessage(ctx, incomingMsg.ID, outgoingStoredMsg); err != nil {
+	if err := s.memoryRepo.SaveMessage(ctx, conversationID, incomingMsg.PlatformUID, incomingMsg.Platform, outgoingStoredMsg); err != nil {
 		log.Printf("Error saving outgoing message to memory: %v", err)
 	}
 

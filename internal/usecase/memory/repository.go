@@ -60,8 +60,9 @@ type MemoryQMDIndexPath struct {
 
 // MemoryRepository defines the contract for conversation memory persistence.
 type MemoryRepository interface {
-	// SaveMessage persists a message in a conversation
-	SaveMessage(ctx context.Context, convID string, msg domain.StoredMessage) error
+	// SaveMessage persists a message in a conversation.
+	// If the conversation does not exist, it is created with the provided userID and platform.
+	SaveMessage(ctx context.Context, convID string, userID string, platform domain.Platform, msg domain.StoredMessage) error
 
 	// GetConversation retrieves a full conversation
 	GetConversation(ctx context.Context, convID string) (*domain.Conversation, error)

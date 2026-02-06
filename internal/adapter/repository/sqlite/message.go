@@ -60,7 +60,8 @@ func (r *MessageRepository) Init(ctx context.Context) error {
 }
 
 // SaveMessage persists a message in a conversation.
-func (r *MessageRepository) SaveMessage(ctx context.Context, convID string, msg domain.StoredMessage) error {
+// If the conversation does not exist, it is created with the provided userID and platform.
+func (r *MessageRepository) SaveMessage(ctx context.Context, convID string, userID string, platform domain.Platform, msg domain.StoredMessage) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
@@ -80,14 +81,10 @@ func (r *MessageRepository) SaveMessage(ctx context.Context, convID string, msg 
 	}
 
 	if count == 0 {
-		// Need user_id and platform to create a new conversation.
-		// For now, we'll assume the conversation ID is sufficient and defer user_id/platform association to a higher layer or update later.
-		// A more robust solution would pass domain.Conversation to SaveMessage or have a separate CreateConversation method.
-		// For MVP, we'll use dummy values for user_id and platform if creating a new conversation.
-		// TODO: Refactor to ensure user_id and platform are available when creating a new conversation.
+		// Create conversation with proper user and platform context
 		_, err = tx.ExecContext(ctx,
 			`INSERT INTO conversations (id, user_id, platform, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
-			convID, "unknown", domain.PlatformCLI, time.Now(), time.Now()) // Using CLI as default, will be updated.
+			convID, userID, platform, time.Now(), time.Now())
 		if err != nil {
 			return fmt.Errorf("failed to insert new conversation: %w", err)
 		}
