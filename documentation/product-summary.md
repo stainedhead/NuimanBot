@@ -156,7 +156,7 @@ Infrastructure → Adapter → Use Case → Domain
 
 ## Built-in Tools
 
-### Core Tools (5)
+### Core Tools (5 - Infrastructure Layer)
 
 | Tool | Description | Permissions | Status |
 |-------|-------------|-------------|--------|
@@ -166,7 +166,7 @@ Infrastructure → Adapter → Use Case → Domain
 | **websearch** | DuckDuckGo web search | Network | ✅ |
 | **notes** | CRUD operations for personal notes | Write | ✅ |
 
-### Developer Productivity Tools (5)
+### Developer Productivity Tools (7 - Use Case Layer)
 
 | Tool | Description | Permissions | Coverage | Status |
 |-------|-------------|-------------|----------|--------|
@@ -175,6 +175,10 @@ Infrastructure → Adapter → Use Case → Domain
 | **doc_summarize** | LLM-powered doc summarization (files, URLs) | Read, Network | 50.5% | ✅ |
 | **summarize** | Web page and YouTube video summarization | Network | 76.3% | ✅ |
 | **coding_agent** | Orchestrate external coding CLIs (admin-only) | Shell | 85.4% | ✅ |
+| **executor** | Tool execution engine and orchestration | Internal | 90%+ | ✅ |
+| **common** | Shared utilities (rate limiting, validation, sanitization) | Internal | 95%+ | ✅ |
+
+**Total Tools: 12** (5 infrastructure + 7 use case)
 
 **Security Controls (All Tools):**
 - Custom-built (no external imports)
@@ -261,14 +265,43 @@ Infrastructure → Adapter → Use Case → Domain
 - ✅ **Phase 5**: Feature Completion (streaming, fallback, preferences, export, summarization)
 - ✅ **Phase 6**: Observability (metrics, tracing, error tracking, alerting, analytics)
 - ✅ **Phase 7.1**: CI/CD Pipeline (automated quality gates, security scanning)
-- ✅ **Agent Skills**: Complete implementation (Phases 0-8)
-  - Domain layer, infrastructure (parser, repository)
-  - Use case layer (registry with priority resolution, renderer with argument substitution)
-  - Adapter layer (CLI command handler, gateway integration)
-  - Configuration system with multi-user storage
-  - E2E integration with chat orchestrator
-  - 5 production-ready example skills
-  - 90%+ test coverage across all layers
+- ✅ **Agent Skills**: Complete implementation (Phases 0-2 + Phase 3)
+  - **Phase 0-2 (Basic System)**:
+    - Domain layer, infrastructure (parser, repository)
+    - Use case layer (registry with priority resolution, renderer with argument substitution)
+    - Adapter layer (CLI command handler, gateway integration)
+    - Configuration system with multi-user storage
+    - E2E integration with chat orchestrator
+    - 5 production-ready example skills
+    - 90%+ test coverage across all layers
+  - **Phase 3A - Subagent Execution** (6 tasks, 34h):
+    - Context forking with deep copy isolation
+    - Autonomous multi-step execution with LLM orchestration
+    - Resource limits (tokens, tool calls, timeout)
+    - Thread-safe lifecycle management
+    - Background execution with status monitoring
+  - **Phase 3B - Preprocessing** (5 tasks, 18h):
+    - Command blocks with !command syntax
+    - Sandboxed shell execution (5s timeout, 10KB limit)
+    - Whitelist-only commands (git, gh, ls, cat, grep)
+    - Shell metacharacter blocking
+    - Real-time data substitution
+  - **Phase 3C - Plugin System** (6 tasks, 10h):
+    - Plugin discovery and namespace management (org/skill-name)
+    - Dependency resolution with semantic versioning
+    - Security validation (collision detection, reserved words)
+    - Lifecycle management (install, uninstall, enable, disable)
+  - **Phase 3D - Skill Versioning** (4 tasks, 4h):
+    - Semantic version parsing and comparison
+    - Version constraint resolution (^, ~, =)
+    - Compatibility checking
+    - Latest version resolution
+  - **Phase 3E - Persistent Memory** (4 tasks, 4h):
+    - SQLite storage with multiple scopes (skill/user/global/session)
+    - JSON value serialization
+    - TTL and expiration support
+    - Automatic cleanup
+  - **Phase 3 Total**: 25 tasks, 40 files, 91 tests, 70 hours (77% faster than estimate)
 
 ### Current Phase (25% - Remaining on Hold)
 
@@ -302,10 +335,13 @@ The project is **production-ready** with 95.6% completion. Key achievements:
 | Document | Purpose |
 |----------|---------|
 | `README.md` | Quick start, installation, usage examples |
+| `support_docs/user-onboarding.md` | **User guide** - how to use NuimanBot and customize your experience |
+| `support_docs/install-and-setup.md` | Installation and system configuration |
+| `support_docs/cli-admin-guide.md` | CLI administration - user management and permissions |
+| `support_docs/skills-guide.md` | **Agent Skills user guide** - creating and using skills |
 | `documentation/product-summary.md` | This document - executive overview |
 | `documentation/product-details.md` | Detailed requirements, workflows, constraints |
 | `documentation/technical-details.md` | Architecture, system design, API documentation |
-| `support_docs/skills-guide.md` | **Agent Skills user guide** - creating and using skills |
 | `AGENTS.md` | Development guidelines for AI agents |
 | `POST_REVIEW_IMPROVEMENT_PLAN.md` | Implementation progress tracking |
 

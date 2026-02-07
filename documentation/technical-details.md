@@ -361,6 +361,278 @@ type AuditEvent struct {
 3. UTF-8 validation
 4. Pattern matching (regex-based)
 
+### Phase 3 Advanced Features Architecture
+
+#### 4. Subagent Execution Service (`internal/usecase/skill/subagent/`)
+
+**Responsibilities:**
+- Context forking with deep copy isolation
+- Autonomous multi-step execution with LLM orchestration
+- Resource limit enforcement (tokens, tool calls, timeout)
+- Background execution management
+
+**Architecture:**
+```go
+type SubagentExecutor struct {
+    llmService    domain.LLMService
+    toolService   domain.ToolExecutionService
+    forker        *ContextForker
+}
+
+type LifecycleManager struct {
+    executor       SubagentExecutor
+    registry       map[string]*runningSubagent  // Thread-safe
+    mu             sync.RWMutex
+    monitoringHook func(string, domain.SubagentStatus)
+}
+```
+
+**Context Forking:**
+```go
+func (f *ContextForker) Fork(
+    original *domain.SubagentContext,
+) (*domain.SubagentContext, error)
+```
+
+- Deep copy of conversation history (prevents cross-contamination)
+- Deep copy of allowed tools (independent tool restrictions)
+- Proper timestamp initialization
+- Metadata preservation
+
+**Autonomous Execution Loop:**
+```go
+func (e *SubagentExecutor) Execute(
+    ctx context.Context,
+    subagentCtx *domain.SubagentContext,
+) (*domain.SubagentResult, error)
+```
+
+1. Validate resource limits
+2. **Multi-step loop** (max iterations based on tool call limit):
+   - Call LLM with conversation history and allowed tools
+   - Check token usage against limit
+   - If tool calls requested:
+     - Execute tools (enforcing restrictions)
+     - Add tool results to conversation
+     - Increment tool call counter
+   - If no tool calls: final response achieved
+3. Aggregate results with step tracking
+4. Return SubagentResult with conversation, steps, resource usage
+
+**Thread-Safe Lifecycle Management:**
+- RWMutex for concurrent access to registry
+- Start: Spawn goroutine, register in map
+- Cancel: Context cancellation, graceful shutdown
+- GetStatus: Read-only access with RLock
+- ListRunning: Snapshot of all running subagents
+- Shutdown: 30s timeout for cleanup
+
+**Performance:**
+- Context forking: ~50 ns/op (deep copy efficiency)
+- Lifecycle operations: ~5.86 ms/op
+- Concurrent execution: 10 agents in ~11.77 ms
+
+#### 5. Preprocessing Infrastructure (`internal/infrastructure/skill/` & `internal/infrastructure/preprocess/`)
+
+**Responsibilities:**
+- Parse !command blocks from SKILL.md files
+- Execute commands in security sandbox
+- Substitute command outputs into skill templates
+
+**Parser Architecture:**
+```go
+type PreprocessParser struct{}
+
+func (p *PreprocessParser) Parse(content string) ([]domain.PreprocessCommand, error)
+```
+
+- Scans for `!command` markers using bufio.Scanner
+- Extracts commands until `!end` or empty line
+- Returns slice of PreprocessCommand entities
+
+**Sandbox Architecture:**
+```go
+type CommandSandbox struct {
+    whitelist  []string  // git, gh, ls, cat, grep
+    timeout    time.Duration  // 5 seconds
+    maxOutput  int  // 10KB
+}
+
+func (s *CommandSandbox) Execute(
+    ctx context.Context,
+    cmd domain.PreprocessCommand,
+) (*domain.CommandResult, error)
+```
+
+**Security Constraints:**
+1. **Whitelist enforcement**: Only git, gh, ls, cat, grep allowed
+2. **Shell metacharacter blocking**: Reject |, ;, &, $, `, >, <, ||, &&
+3. **Timeout enforcement**: Kill after 5 seconds
+4. **Output limiting**: Truncate at 10KB
+5. **Working directory restriction**: Configurable working directory
+
+**Renderer Integration:**
+```go
+type PreprocessRenderer struct {
+    parser     *PreprocessParser
+    sandbox    *CommandSandbox
+    baseRenderer *SkillRenderer
+}
+
+func (r *PreprocessRenderer) Render(
+    ctx context.Context,
+    skill *domain.Skill,
+    args []string,
+) (*domain.RenderedSkill, error)
+```
+
+**Two-phase rendering:**
+1. Execute preprocessing commands, collect outputs
+2. Apply argument substitution with command results
+
+#### 6. Plugin Discovery & Management (`internal/infrastructure/plugin/` & `internal/usecase/plugin/`)
+
+**Responsibilities:**
+- Scan filesystem for plugin manifests
+- Parse plugin.yaml files
+- Validate plugin security constraints
+- Manage plugin lifecycle
+
+**Discovery Architecture:**
+```go
+type PluginDiscovery struct {
+    baseDir string  // e.g., data/plugins/
+}
+
+func (d *PluginDiscovery) Scan(
+    ctx context.Context,
+    pluginDir string,
+) ([]*domain.Plugin, error)
+```
+
+**Scanning Process:**
+1. Walk directory tree looking for plugin.yaml files
+2. Parse YAML manifest for each plugin
+3. Validate namespace format (org/skill-name)
+4. Detect namespace collisions
+5. Return slice of Plugin entities
+
+**Security Validation:**
+```go
+func ValidatePluginSecurity(manifest *domain.PluginManifest) error
+```
+
+- Reserved word check (nuimanbot, system, admin, internal)
+- Namespace format validation (must contain /)
+- Dependency limit (max 10 dependencies)
+- Circular dependency detection
+
+**Plugin Manager:**
+```go
+type PluginManager struct {
+    discovery *PluginDiscovery
+    registry  domain.PluginRegistry
+}
+
+func (m *PluginManager) Install(pluginPath string) error
+func (m *PluginManager) Uninstall(namespace string) error
+func (m *PluginManager) Enable(namespace string) error
+func (m *PluginManager) Disable(namespace string) error
+```
+
+#### 7. Version Resolution (`internal/infrastructure/skill/version.go` & `internal/usecase/skill/version_manager.go`)
+
+**Responsibilities:**
+- Parse semantic versions (x.y.z format)
+- Compare versions for ordering
+- Resolve version constraints (^, ~, =)
+
+**Version Architecture:**
+```go
+type SkillVersion struct {
+    Major int
+    Minor int
+    Patch int
+    Pre   string   // Optional pre-release (e.g., -alpha.1)
+    Build string   // Optional build metadata (e.g., +20130313144700)
+}
+
+func ParseVersion(v string) (*SkillVersion, error)
+func (v *SkillVersion) Compare(other *SkillVersion) int  // -1, 0, 1
+```
+
+**Version Constraints:**
+```go
+type VersionConstraint struct {
+    Operator string       // ^, ~, =, >=, <=, <, >
+    Version  *SkillVersion
+}
+
+func (c *VersionConstraint) Satisfies(v *SkillVersion) bool
+```
+
+**Constraint Semantics:**
+- Caret (^1.2.3): >=1.2.3 <2.0.0 (compatible with 1.x.x)
+- Tilde (~1.2.3): >=1.2.3 <1.3.0 (compatible with 1.2.x)
+- Exact (1.2.3): ==1.2.3 (exact match only)
+
+#### 8. Memory Storage (`internal/infrastructure/memory/storage.go` & `internal/usecase/skill/memory_api.go`)
+
+**Responsibilities:**
+- Persist skill memory in SQLite database
+- Support multiple scopes (skill, user, global, session)
+- Automatic expiration and cleanup
+
+**Storage Architecture:**
+```go
+type SQLiteMemoryStorage struct {
+    db *sql.DB
+}
+
+func (s *SQLiteMemoryStorage) Set(memory *domain.SkillMemory) error
+func (s *SQLiteMemoryStorage) Get(skillName, key string, scope domain.MemoryScope) (*domain.SkillMemory, error)
+func (s *SQLiteMemoryStorage) Delete(skillName, key string, scope domain.MemoryScope) error
+func (s *SQLiteMemoryStorage) List(skillName string, scope domain.MemoryScope) ([]*domain.SkillMemory, error)
+func (s *SQLiteMemoryStorage) Cleanup() error  // Remove expired entries
+```
+
+**Database Schema:**
+```sql
+CREATE TABLE skill_memory (
+    skill_name TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,  -- JSON serialized
+    created_at TIMESTAMP NOT NULL,
+    expires_at TIMESTAMP,
+    PRIMARY KEY (skill_name, scope, key)
+);
+
+CREATE INDEX idx_expires_at ON skill_memory(expires_at);
+```
+
+**Memory API:**
+```go
+type MemoryAPI struct {
+    storage domain.MemoryQuery
+}
+
+func (api *MemoryAPI) Remember(skillName, key string, value interface{}, scope domain.MemoryScope) error
+func (api *MemoryAPI) Recall(skillName, key string, scope domain.MemoryScope, dest interface{}) error
+func (api *MemoryAPI) Forget(skillName, key string, scope domain.MemoryScope) error
+```
+
+**JSON Serialization:**
+- Values serialized with `json.Marshal(value)`
+- Values deserialized with `json.Unmarshal([]byte(memory.Value), dest)`
+- Supports any JSON-serializable type
+
+**Memory Scopes:**
+- `MemoryScopeSkill`: Isolated per skill
+- `MemoryScopeUser`: Isolated per user (future)
+- `MemoryScopeGlobal`: Shared across all invocations
+- `MemoryScopeSession`: Temporary, session-specific
+
 ---
 
 ## Observability & Monitoring
@@ -529,6 +801,20 @@ CREATE TABLE notes (
     updated_at TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
+
+-- Skill Memory (Phase 3E)
+CREATE TABLE skill_memory (
+    skill_name TEXT NOT NULL,
+    scope TEXT NOT NULL,      -- skill, user, global, session
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,      -- JSON serialized
+    created_at TIMESTAMP NOT NULL,
+    expires_at TIMESTAMP,     -- NULL = no expiration
+    PRIMARY KEY (skill_name, scope, key)
+);
+
+CREATE INDEX idx_skill_memory_expires ON skill_memory(expires_at);
+CREATE INDEX idx_skill_memory_scope ON skill_memory(scope);
 ```
 
 **Migrations:** Automatically applied on startup via `schema.sql`
@@ -583,19 +869,23 @@ type Tool interface {
 
 **Built-in Tools:**
 
-**Core Tools:**
+**Core Tools (Infrastructure Layer):**
 1. **Calculator**: `add`, `subtract`, `multiply`, `divide`
 2. **DateTime**: `now`, `format`, `unix`
 3. **Weather**: `current`, `forecast`
 4. **WebSearch**: `search`
 5. **Notes**: `create`, `read`, `update`, `delete`, `list`
 
-**Developer Productivity Tools:**
+**Developer Productivity Tools (Use Case Layer):**
 6. **GitHub**: GitHub operations via `gh` CLI (`issue_create`, `issue_list`, `pr_create`, `pr_list`, `pr_review`, `pr_merge`, `repo_view`, `release_create`, `gist_create`, `workflow_run`, `workflow_list`, `repo_clone`)
 7. **RepoSearch**: Fast codebase search using `ripgrep` with regex support, context lines, and file filtering
 8. **DocSummarize**: LLM-powered document summarization with configurable detail levels
 9. **Summarize**: Web page and YouTube video summarization with transcript extraction via `yt-dlp`
 10. **CodingAgent**: Orchestrates external coding CLI tools (Codex, Claude Code, OpenCode, Gemini, Copilot) in PTY mode with workspace validation
+11. **Executor**: Tool execution engine with RBAC, rate limiting, and orchestration
+12. **Common**: Shared utilities for rate limiting, input sanitization, and validation
+
+**Total: 12 Tools** (5 infrastructure + 7 use case)
 
 ---
 
@@ -959,7 +1249,18 @@ readinessProbe:
 
 ### File Structure
 
-Total: **10,605 lines** of Go code across **80 files**
+**Main Codebase:** ~10,605 lines of Go code across 80 files
+
+**Phase 3 Additions:** +40 files (7,772 lines added)
+- Domain layer: 6 entities + 6 test files
+- Use case layer: 6 implementations + 3 test files
+- Infrastructure: 7 implementations + 6 test files
+- Adapter: 2 CLI handlers + 2 test files
+- E2E tests: 3 test suites + 1 benchmark suite
+- Documentation: 5 user guides
+- Examples: 3 example skills/plugins
+
+**Total:** ~120 files, ~18,377 lines
 
 ### Version History
 
@@ -969,6 +1270,7 @@ Total: **10,605 lines** of Go code across **80 files**
 | 0.2.0 | 2026-02-06 | Production readiness (Phases 3-4) |
 | 0.3.0 | 2026-02-06 | Advanced features (Phases 5-6) |
 | 1.0.0 | 2026-02-07 | **Production Release** - CI/CD complete (Phase 7.1) |
+| 1.1.0 | 2026-02-07 | **Agent Skills Phase 3** - Subagents, Preprocessing, Plugins, Versioning, Memory (25 tasks, 40 files, 91 tests) |
 
 ---
 
