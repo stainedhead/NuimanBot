@@ -82,6 +82,9 @@ type SkillFrontmatter struct {
 	// AllowedTools restricts which tools the skill can use (empty = all allowed)
 	AllowedTools []string `yaml:"allowed-tools,omitempty"`
 
+	// Context specifies execution context: "inline" (default) or "fork" (subagent)
+	Context string `yaml:"context,omitempty"`
+
 	// License specifies the skill's license (optional)
 	License string `yaml:"license,omitempty"`
 
@@ -146,6 +149,12 @@ type SkillRoot struct {
 // Defaults to true if not explicitly set to false.
 func (s *Skill) CanBeInvokedByUser() bool {
 	return s.Frontmatter.IsUserInvocable()
+}
+
+// ShouldFork returns true if the skill should execute in a forked subagent context.
+// Returns true if context is set to "fork" in the frontmatter.
+func (s *Skill) ShouldFork() bool {
+	return s.Frontmatter.Context == "fork"
 }
 
 // CanBeSelectedByModel returns true if the model can automatically select this skill.
