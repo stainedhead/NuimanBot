@@ -3,9 +3,10 @@ package openai
 import (
 	"testing"
 
-	openai "github.com/sashabaranov/go-openai"
 	"nuimanbot/internal/config"
 	"nuimanbot/internal/domain"
+
+	openai "github.com/sashabaranov/go-openai"
 )
 
 func TestConvertRequest(t *testing.T) {

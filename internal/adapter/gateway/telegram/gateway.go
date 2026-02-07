@@ -7,10 +7,11 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/go-telegram/bot"
-	"github.com/go-telegram/bot/models"
 	"nuimanbot/internal/config"
 	"nuimanbot/internal/domain"
+
+	"github.com/go-telegram/bot"
+	"github.com/go-telegram/bot/models"
 )
 
 // Gateway implements domain.Gateway for Telegram.

@@ -7,11 +7,12 @@ import (
 	"strconv"
 	"time"
 
+	"nuimanbot/internal/config"
+	"nuimanbot/internal/domain"
+
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/socketmode"
-	"nuimanbot/internal/config"
-	"nuimanbot/internal/domain"
 )
 
 // Gateway implements domain.Gateway for Slack using Socket Mode.

@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	"nuimanbot/internal/domain"
+
+	"github.com/google/uuid"
 )
 
 // ExtendedUserRepository adds methods needed for user management

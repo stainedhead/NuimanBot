@@ -7,9 +7,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	anthropicsdk "github.com/anthropics/anthropic-sdk-go"
 	"nuimanbot/internal/config"
 	"nuimanbot/internal/domain"
+
+	anthropicsdk "github.com/anthropics/anthropic-sdk-go"
 )
 
 // TestComplete_Success tests successful completion without tools

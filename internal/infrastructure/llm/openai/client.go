@@ -7,9 +7,10 @@ import (
 	"fmt"
 	"io"
 
-	openai "github.com/sashabaranov/go-openai"
 	"nuimanbot/internal/config"
 	"nuimanbot/internal/domain"
+
+	openai "github.com/sashabaranov/go-openai"
 )
 
 // Client wraps the OpenAI SDK client and implements the LLM provider interface.
