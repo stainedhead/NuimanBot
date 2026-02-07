@@ -78,11 +78,11 @@ func (c *Client) Complete(ctx context.Context, provider domain.LLMProvider, req 
 	if err != nil {
 		return nil, fmt.Errorf("Ollama API error: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Check status code
 	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
+		bodyBytes, _ := io.ReadAll(resp.Body) //nolint:errcheck // Best effort read for error message
 		return nil, fmt.Errorf("Ollama API returned status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
@@ -187,7 +187,7 @@ func (c *Client) Stream(ctx context.Context, provider domain.LLMProvider, req *d
 
 	// Check status code
 	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
+		bodyBytes, _ := io.ReadAll(resp.Body) //nolint:errcheck // Best effort read for error message
 		resp.Body.Close()
 		return nil, fmt.Errorf("Ollama API returned status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
@@ -198,7 +198,7 @@ func (c *Client) Stream(ctx context.Context, provider domain.LLMProvider, req *d
 	// Process stream in goroutine
 	go func() {
 		defer close(outChan)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		decoder := json.NewDecoder(resp.Body)
 		for {
@@ -236,7 +236,7 @@ func (c *Client) ListModels(ctx context.Context, provider domain.LLMProvider) ([
 
 	// List models from Ollama API
 	url := fmt.Sprintf("%s/api/tags", c.config.BaseURL)
-	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", url, http.NoBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -245,10 +245,10 @@ func (c *Client) ListModels(ctx context.Context, provider domain.LLMProvider) ([
 	if err != nil {
 		return nil, fmt.Errorf("failed to list Ollama models: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
+		bodyBytes, _ := io.ReadAll(resp.Body) //nolint:errcheck // Best effort read for error message
 		return nil, fmt.Errorf("Ollama API returned status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 

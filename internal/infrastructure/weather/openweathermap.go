@@ -95,12 +95,12 @@ func (c *Client) makeRequest(ctx context.Context, endpoint, location, units stri
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Check status code
 	if resp.StatusCode != http.StatusOK {
 		var errorResp map[string]interface{}
-		json.NewDecoder(resp.Body).Decode(&errorResp)
+		_ = json.NewDecoder(resp.Body).Decode(&errorResp)
 		return nil, fmt.Errorf("API error (status %d): %v", resp.StatusCode, errorResp["message"])
 	}
 
