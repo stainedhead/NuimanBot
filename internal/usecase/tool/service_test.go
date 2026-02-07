@@ -28,7 +28,7 @@ func (m *MockTool) Execute(ctx context.Context, params map[string]any) (*domain.
 	return m.ExecuteFunc(ctx, params)
 }
 func (m *MockTool) RequiredPermissions() []domain.Permission { return m.RequiredPermissionsFunc() }
-func (m *MockTool) Config() domain.ToolConfig               { return m.ConfigFunc() }
+func (m *MockTool) Config() domain.ToolConfig                { return m.ConfigFunc() }
 
 // MockToolRegistry implements the SkillRegistry interface.
 type MockToolRegistry struct {
@@ -115,8 +115,10 @@ func TestExecute_SkillNotFound(t *testing.T) {
 func TestExecute_SkillExecutionFailure(t *testing.T) {
 	mockError := errors.New("skill failed")
 	mockTool := &MockTool{
-		NameFunc:    func() string { return "testskill" },
-		ExecuteFunc: func(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) { return nil, mockError },
+		NameFunc: func() string { return "testskill" },
+		ExecuteFunc: func(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) {
+			return nil, mockError
+		},
 	}
 	auditEvents := make(chan domain.AuditEvent, 2)
 	mockRegistry := &MockToolRegistry{
@@ -163,8 +165,10 @@ func TestExecute_SkillExecutionFailure(t *testing.T) {
 func TestExecute_SkillExecutionSuccess(t *testing.T) {
 	mockResult := &domain.ExecutionResult{Output: "skill output"}
 	mockTool := &MockTool{
-		NameFunc:    func() string { return "testskill" },
-		ExecuteFunc: func(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) { return mockResult, nil },
+		NameFunc: func() string { return "testskill" },
+		ExecuteFunc: func(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) {
+			return mockResult, nil
+		},
 	}
 	auditEvents := make(chan domain.AuditEvent, 2)
 	mockRegistry := &MockToolRegistry{
@@ -442,8 +446,8 @@ func TestExecuteWithUser_AllowedSkillsWhitelist(t *testing.T) {
 
 	// User with AllowedTools whitelist - only calculator and datetime allowed
 	restrictedUser := &domain.User{
-		ID:            "user1",
-		Role:          domain.RoleUser,
+		ID:           "user1",
+		Role:         domain.RoleUser,
 		AllowedTools: []string{"calculator", "datetime"},
 	}
 
@@ -473,8 +477,8 @@ func TestExecuteWithUser_AllowedSkillsBlocksNonWhitelisted(t *testing.T) {
 
 	// User with AllowedTools whitelist - only calculator and datetime allowed
 	restrictedUser := &domain.User{
-		ID:            "user1",
-		Role:          domain.RoleUser,
+		ID:           "user1",
+		Role:         domain.RoleUser,
 		AllowedTools: []string{"calculator", "datetime"},
 	}
 
@@ -504,8 +508,8 @@ func TestExecuteWithUser_EmptyAllowedSkillsAllowsAllForRole(t *testing.T) {
 
 	// User with empty AllowedTools - should allow all skills for their role
 	unrestrictedUser := &domain.User{
-		ID:            "user1",
-		Role:          domain.RoleUser,
+		ID:           "user1",
+		Role:         domain.RoleUser,
 		AllowedTools: []string{}, // Empty = all allowed
 	}
 

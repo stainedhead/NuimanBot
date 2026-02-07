@@ -87,9 +87,9 @@ func TestLoadConfig_FromEnv(t *testing.T) {
 		"NUIMANBOT_LLM_DEFAULTMODEL_PRIMARY",
 		"NUIMANBOT_GATEWAYS_CLI_DEBUGMODE",
 		"NUIMANBOT_ENCRYPTION_KEY",
-		"NUIMANBOT_LLM_PROVIDERS_0_APIKEY",           // For array testing
-		"NUIMANBOT_LLM_PROVIDERS_1_APIKEY",           // For array testing
-		"NUIMANBOT_SKILLS_ENTRIES_CALCULATOR_APIKEY", // For map testing
+		"NUIMANBOT_LLM_PROVIDERS_0_APIKEY",          // For array testing
+		"NUIMANBOT_LLM_PROVIDERS_1_APIKEY",          // For array testing
+		"NUIMANBOT_TOOLS_ENTRIES_CALCULATOR_APIKEY", // For map testing
 	}
 	for _, ev := range envVars {
 		if err := os.Unsetenv(ev); err != nil {
@@ -131,7 +131,7 @@ func TestLoadConfig_FromEnv(t *testing.T) {
 	if err := os.Setenv("NUIMANBOT_LLM_PROVIDERS_0_APIKEY", "sk-env-anthropic-key"); err != nil {
 		t.Fatalf("Failed to set env var: %v", err)
 	}
-	if err := os.Setenv("NUIMANBOT_SKILLS_ENTRIES_CALCULATOR_APIKEY", "skill-calc-key"); err != nil {
+	if err := os.Setenv("NUIMANBOT_TOOLS_ENTRIES_CALCULATOR_APIKEY", "tool-calc-key"); err != nil {
 		t.Fatalf("Failed to set env var: %v", err)
 	}
 
@@ -167,12 +167,12 @@ func TestLoadConfig_FromEnv(t *testing.T) {
 		t.Errorf("LLM Provider from env not loaded correctly or APIKey not set")
 	}
 
-	if val, ok := cfg.Skills.Entries["calculator"]; ok {
-		if val.APIKey.Value() != "skill-calc-key" {
-			t.Errorf("Expected skill API key 'skill-calc-key', got '%s'", val.APIKey.Value())
+	if val, ok := cfg.Tools.Entries["calculator"]; ok {
+		if val.APIKey.Value() != "tool-calc-key" {
+			t.Errorf("Expected skill API key 'tool-calc-key', got '%s'", val.APIKey.Value())
 		}
 	} else {
-		t.Errorf("Calculator skill config not loaded from env")
+		t.Errorf("Calculator tool config not loaded from env")
 	}
 }
 

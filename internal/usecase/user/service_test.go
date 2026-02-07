@@ -264,11 +264,11 @@ func TestUpdateAllowedSkills(t *testing.T) {
 
 	// Verify update
 	updated, _ := svc.GetUser(ctx, user.ID)
-	if len(updated.AllowedSkills) != 2 {
-		t.Errorf("Expected 2 skills, got %d", len(updated.AllowedSkills))
+	if len(updated.AllowedTools) != 2 {
+		t.Errorf("Expected 2 skills, got %d", len(updated.AllowedTools))
 	}
-	if updated.AllowedSkills[0] != "calculator" {
-		t.Errorf("Expected 'calculator', got '%s'", updated.AllowedSkills[0])
+	if updated.AllowedTools[0] != "calculator" {
+		t.Errorf("Expected 'calculator', got '%s'", updated.AllowedTools[0])
 	}
 }
 

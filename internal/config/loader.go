@@ -306,16 +306,16 @@ func migrateSkillsToTools(cfg *NuimanBotConfig, v *viper.Viper) error {
 	if v.IsSet("skills") && !v.IsSet("tools") {
 		fmt.Println("⚠️  DEPRECATION WARNING: Config key 'skills' is deprecated. Please update your config.yaml to use 'tools' instead.")
 		fmt.Println("    Support for 'skills' will be removed in a future version.")
-		
+
 		// If skills is set but tools is not, copy skills to tools
 		// The structure is already identical (SkillsSystemConfig was renamed to ToolsSystemConfig)
 		// Viper will have loaded it into cfg.Tools because the struct field is now Tools
 		// So we don't need to do anything - the YAML tag handles it automatically
 	}
-	
+
 	if v.IsSet("skills") && v.IsSet("tools") {
 		fmt.Println("⚠️  WARNING: Both 'skills' and 'tools' config keys present. Using 'tools' and ignoring 'skills'.")
 	}
-	
+
 	return nil
 }

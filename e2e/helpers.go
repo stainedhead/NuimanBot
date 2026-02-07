@@ -19,37 +19,37 @@ import (
 	"nuimanbot/internal/config"
 	"nuimanbot/internal/domain"
 	"nuimanbot/internal/infrastructure/crypto"
-	"nuimanbot/internal/skills/calculator"
-	"nuimanbot/internal/skills/datetime"
-	"nuimanbot/internal/skills/notes"
-	"nuimanbot/internal/skills/weather"
-	"nuimanbot/internal/skills/websearch"
+	"nuimanbot/internal/tools/calculator"
+	"nuimanbot/internal/tools/datetime"
+	"nuimanbot/internal/tools/notes"
+	"nuimanbot/internal/tools/weather"
+	"nuimanbot/internal/tools/websearch"
 	"nuimanbot/internal/usecase/chat"
 	"nuimanbot/internal/usecase/memory"
 	"nuimanbot/internal/usecase/security"
-	"nuimanbot/internal/usecase/skill"
-	"nuimanbot/internal/usecase/skill/coding_agent"
-	"nuimanbot/internal/usecase/skill/common"
-	"nuimanbot/internal/usecase/skill/doc_summarize"
-	"nuimanbot/internal/usecase/skill/executor"
-	"nuimanbot/internal/usecase/skill/github"
-	"nuimanbot/internal/usecase/skill/repo_search"
-	"nuimanbot/internal/usecase/skill/summarize"
+	"nuimanbot/internal/usecase/tool"
+	"nuimanbot/internal/usecase/tool/coding_agent"
+	"nuimanbot/internal/usecase/tool/common"
+	"nuimanbot/internal/usecase/tool/doc_summarize"
+	"nuimanbot/internal/usecase/tool/executor"
+	"nuimanbot/internal/usecase/tool/github"
+	"nuimanbot/internal/usecase/tool/repo_search"
+	"nuimanbot/internal/usecase/tool/summarize"
 )
 
 // testApplication represents a fully-initialized NuimanBot application for testing.
 type testApplication struct {
-	Config                *config.NuimanBotConfig
-	ChatService           *chat.Service
-	LLMService            domain.LLMService
-	Memory                memory.MemoryRepository
-	SecurityService       *security.Service
-	SkillRegistry         skill.SkillRegistry
-	Vault                 domain.CredentialVault
-	SkillExecutionService *skill.Service
-	DB                    *sql.DB
-	CLIGateway            *cli.Gateway
-	TempDir               string
+	Config               *config.NuimanBotConfig
+	ChatService          *chat.Service
+	LLMService           domain.LLMService
+	Memory               memory.MemoryRepository
+	SecurityService      *security.Service
+	ToolRegistry         tool.ToolRegistry
+	Vault                domain.CredentialVault
+	ToolExecutionService *tool.Service
+	DB                   *sql.DB
+	CLIGateway           *cli.Gateway
+	TempDir              string
 }
 
 // mockLLMService implements domain.LLMService for testing without real API calls.
@@ -183,38 +183,38 @@ func setupTestApp(t *testing.T) (*testApplication, func()) {
 	// Initialize mock LLM service
 	llmService := newMockLLMService()
 
-	// Initialize skill system
-	skillRegistry := skill.NewInMemoryRegistry()
+	// Initialize tool system
+	toolRegistry := tool.NewInMemoryRegistry()
 
-	// Register built-in skills
+	// Register built-in tools
 	calc := calculator.NewCalculator()
-	if err := skillRegistry.Register(calc); err != nil {
-		t.Fatalf("Failed to register calculator skill: %v", err)
+	if err := toolRegistry.Register(calc); err != nil {
+		t.Fatalf("Failed to register calculator tool: %v", err)
 	}
 
 	dt := datetime.NewDateTime()
-	if err := skillRegistry.Register(dt); err != nil {
-		t.Fatalf("Failed to register datetime skill: %v", err)
+	if err := toolRegistry.Register(dt); err != nil {
+		t.Fatalf("Failed to register datetime tool: %v", err)
 	}
 
-	// Register core skills (weather, websearch, notes)
+	// Register core tools (weather, websearch, notes)
 	weatherSkill := weather.NewWeather("test-api-key", 30)
-	if err := skillRegistry.Register(weatherSkill); err != nil {
-		t.Fatalf("Failed to register weather skill: %v", err)
+	if err := toolRegistry.Register(weatherSkill); err != nil {
+		t.Fatalf("Failed to register weather tool: %v", err)
 	}
 
 	webSearchSkill := websearch.NewWebSearch(30)
-	if err := skillRegistry.Register(webSearchSkill); err != nil {
-		t.Fatalf("Failed to register websearch skill: %v", err)
+	if err := toolRegistry.Register(webSearchSkill); err != nil {
+		t.Fatalf("Failed to register websearch tool: %v", err)
 	}
 
 	notesRepo := sqlite.NewNotesRepository(db)
 	notesSkill := notes.NewNotes(notesRepo)
-	if err := skillRegistry.Register(notesSkill); err != nil {
-		t.Fatalf("Failed to register notes skill: %v", err)
+	if err := toolRegistry.Register(notesSkill); err != nil {
+		t.Fatalf("Failed to register notes tool: %v", err)
 	}
 
-	// Register developer productivity skills
+	// Register developer productivity tools
 	// Create shared dependencies
 	executorSvc := executor.NewExecutorService()
 	rateLimiter := common.NewRateLimiter()
@@ -224,80 +224,80 @@ func setupTestApp(t *testing.T) (*testApplication, func()) {
 	workspacePaths := []string{tempDir}
 	pathValidator := common.NewPathValidator(workspacePaths)
 
-	// GitHub skill
+	// GitHub tool
 	githubSkill := github.NewGitHubSkill(
-		domain.SkillConfig{Enabled: true},
+		domain.ToolConfig{Enabled: true},
 		executorSvc,
 		rateLimiter,
 		sanitizer,
 	)
-	if err := skillRegistry.Register(githubSkill); err != nil {
-		t.Fatalf("Failed to register github skill: %v", err)
+	if err := toolRegistry.Register(githubSkill); err != nil {
+		t.Fatalf("Failed to register github tool: %v", err)
 	}
 
-	// RepoSearch skill
+	// RepoSearch tool
 	repoSearchSkill := repo_search.NewRepoSearchSkill(
-		domain.SkillConfig{Enabled: true},
+		domain.ToolConfig{Enabled: true},
 		executorSvc,
 		pathValidator,
 		sanitizer,
 	)
-	if err := skillRegistry.Register(repoSearchSkill); err != nil {
-		t.Fatalf("Failed to register repo_search skill: %v", err)
+	if err := toolRegistry.Register(repoSearchSkill); err != nil {
+		t.Fatalf("Failed to register repo_search tool: %v", err)
 	}
 
-	// DocSummarize skill
+	// DocSummarize tool
 	docSummarizeSkill := doc_summarize.NewDocSummarizeSkill(
-		domain.SkillConfig{Enabled: true},
+		domain.ToolConfig{Enabled: true},
 		llmService,
 		httpClient,
 	)
-	if err := skillRegistry.Register(docSummarizeSkill); err != nil {
-		t.Fatalf("Failed to register doc_summarize skill: %v", err)
+	if err := toolRegistry.Register(docSummarizeSkill); err != nil {
+		t.Fatalf("Failed to register doc_summarize tool: %v", err)
 	}
 
-	// Summarize skill
+	// Summarize tool
 	summarizeSkill := summarize.NewSummarizeSkill(
-		domain.SkillConfig{Enabled: true},
+		domain.ToolConfig{Enabled: true},
 		llmService,
 		executorSvc,
 		httpClient,
 	)
-	if err := skillRegistry.Register(summarizeSkill); err != nil {
-		t.Fatalf("Failed to register summarize skill: %v", err)
+	if err := toolRegistry.Register(summarizeSkill); err != nil {
+		t.Fatalf("Failed to register summarize tool: %v", err)
 	}
 
-	// CodingAgent skill
+	// CodingAgent tool
 	codingAgentSkill := coding_agent.NewCodingAgentSkill(
-		domain.SkillConfig{Enabled: true},
+		domain.ToolConfig{Enabled: true},
 		executorSvc,
 		pathValidator,
 	)
-	if err := skillRegistry.Register(codingAgentSkill); err != nil {
-		t.Fatalf("Failed to register coding_agent skill: %v", err)
+	if err := toolRegistry.Register(codingAgentSkill); err != nil {
+		t.Fatalf("Failed to register coding_agent tool: %v", err)
 	}
 
-	skillExecutionService := skill.NewService(&cfg.Skills, skillRegistry, securityService)
+	toolExecutionService := tool.NewService(&cfg.Tools, toolRegistry, securityService)
 
 	// Initialize chat service
-	chatService := chat.NewService(llmService, memoryRepo, skillExecutionService, securityService)
+	chatService := chat.NewService(llmService, memoryRepo, toolExecutionService, securityService)
 
 	// Initialize CLI gateway
 	cliGateway := cli.NewGateway(&cfg.Gateways.CLI)
 
 	// Create test application
 	app := &testApplication{
-		Config:                cfg,
-		Vault:                 vault,
-		SecurityService:       securityService,
-		Memory:                memoryRepo,
-		LLMService:            llmService,
-		SkillRegistry:         skillRegistry,
-		ChatService:           chatService,
-		SkillExecutionService: skillExecutionService,
-		DB:                    db,
-		CLIGateway:            cliGateway,
-		TempDir:               tempDir,
+		Config:               cfg,
+		Vault:                vault,
+		SecurityService:      securityService,
+		Memory:               memoryRepo,
+		LLMService:           llmService,
+		ToolRegistry:         toolRegistry,
+		ChatService:          chatService,
+		ToolExecutionService: toolExecutionService,
+		DB:                   db,
+		CLIGateway:           cliGateway,
+		TempDir:              tempDir,
 	}
 
 	// Cleanup function
@@ -376,11 +376,11 @@ func createTestMessage(content string) domain.IncomingMessage {
 	}
 }
 
-// getSkillNames extracts skill names from a skill list.
-func getSkillNames(skills []domain.Skill) []string {
-	names := make([]string, len(skills))
-	for i, skill := range skills {
-		names[i] = skill.Name()
+// getToolNames extracts tool names from a tool list.
+func getToolNames(tools []domain.Tool) []string {
+	names := make([]string, len(tools))
+	for i, tool := range tools {
+		names[i] = tool.Name()
 	}
 	return names
 }
