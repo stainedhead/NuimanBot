@@ -13,11 +13,19 @@ import (
 	"nuimanbot/internal/domain"
 )
 
+// SkillCommandHandler defines the interface for handling skill commands.
+type SkillCommandHandler interface {
+	Execute(ctx context.Context, skillName string, args []string) error
+	List(ctx context.Context) error
+	Describe(ctx context.Context, skillName string) error
+}
+
 // Gateway implements domain.Gateway for the command-line interface.
 type Gateway struct {
 	Cfg            *config.CLIConfig
 	messageHandler domain.MessageHandler
 	adminHandler   *AdminCommandHandler
+	skillHandler   SkillCommandHandler
 	currentUser    *domain.User // Current CLI user for admin commands
 	// stdin/stdout for testing purposes
 	Reader io.Reader
@@ -121,6 +129,38 @@ func (g *Gateway) Start(ctx context.Context) error {
 				continue
 			}
 
+			// Check if this is a skill command (/skill-name or /help)
+			isCommand, commandName, commandArgs := parseCommand(input)
+			if isCommand {
+				if g.skillHandler == nil {
+					// No skill handler, treat as regular message
+					// Fall through to message handler
+				} else {
+					// Handle built-in commands
+					var err error
+					switch commandName {
+					case "help":
+						err = g.skillHandler.List(ctx)
+					case "describe":
+						if len(commandArgs) == 0 {
+							err = fmt.Errorf("usage: /describe <skill-name>")
+						} else {
+							err = g.skillHandler.Describe(ctx, commandArgs[0])
+						}
+					default:
+						// Try to execute as skill
+						err = g.skillHandler.Execute(ctx, commandName, commandArgs)
+					}
+
+					if err != nil {
+						if _, writeErr := fmt.Fprintf(g.Writer, "Error: %v\n", err); writeErr != nil {
+							fmt.Fprintf(os.Stderr, "Error writing to CLI output: %v\n", writeErr)
+						}
+					}
+					continue
+				}
+			}
+
 			if g.messageHandler == nil {
 				if _, err := fmt.Fprintln(g.Writer, "Error: Message handler not set. Cannot process input."); err != nil {
 					fmt.Fprintf(os.Stderr, "Error writing to CLI output: %v\n", err)
@@ -181,4 +221,28 @@ func (g *Gateway) SetAdminHandler(handler *AdminCommandHandler) {
 // SetCurrentUser sets the current user for admin command authorization.
 func (g *Gateway) SetCurrentUser(user *domain.User) {
 	g.currentUser = user
+}
+
+// SetSkillHandler sets the skill command handler for the gateway.
+func (g *Gateway) SetSkillHandler(handler SkillCommandHandler) {
+	g.skillHandler = handler
+}
+
+// parseCommand checks if input is a command and parses it.
+// Returns: isCommand, commandName, commandArgs
+func parseCommand(input string) (bool, string, []string) {
+	input = strings.TrimSpace(input)
+	if !strings.HasPrefix(input, "/") {
+		return false, "", nil
+	}
+
+	parts := strings.Fields(input)
+	if len(parts) == 0 {
+		return false, "", nil
+	}
+
+	commandName := strings.TrimPrefix(parts[0], "/")
+	commandArgs := parts[1:]
+
+	return true, commandName, commandArgs
 }

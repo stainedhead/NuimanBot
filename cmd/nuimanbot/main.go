@@ -14,6 +14,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3" // SQLite driver
 
+	cliadapter "nuimanbot/internal/adapter/cli"
 	"nuimanbot/internal/adapter/gateway/cli"
 	"nuimanbot/internal/adapter/gateway/slack"
 	"nuimanbot/internal/adapter/gateway/telegram"
@@ -28,6 +29,7 @@ import (
 	ollama "nuimanbot/internal/infrastructure/llm/ollama"
 	openai "nuimanbot/internal/infrastructure/llm/openai"
 	"nuimanbot/internal/infrastructure/logger"
+	skillinfra "nuimanbot/internal/infrastructure/skill"
 	"nuimanbot/internal/tools/calculator"
 	"nuimanbot/internal/tools/datetime"
 	"nuimanbot/internal/tools/notes"
@@ -36,6 +38,7 @@ import (
 	"nuimanbot/internal/usecase/chat"
 	"nuimanbot/internal/usecase/memory"
 	"nuimanbot/internal/usecase/security"
+	skillusecase "nuimanbot/internal/usecase/skill"
 	"nuimanbot/internal/usecase/tool"
 	"nuimanbot/internal/usecase/tool/coding_agent"
 	"nuimanbot/internal/usecase/tool/common"
@@ -580,8 +583,36 @@ func (app *application) Run(ctx context.Context) error {
 	// Track active gateways for proper shutdown
 	var gateways []domain.Gateway
 
+	// Initialize Agent Skills System (Phase 5)
+	skillRepo := skillinfra.NewFilesystemSkillRepository()
+	skillRegistry := skillusecase.NewInMemorySkillRegistry(skillRepo)
+	skillRenderer := skillusecase.NewDefaultSkillRenderer()
+
+	// Initialize skill registry with skill roots
+	skillRoots := []domain.SkillRoot{
+		{Path: ".claude/skills", Scope: domain.ScopeProject},
+		// User skills can be added when config system is ready (Phase 6)
+		// {Path: "~/.claude/skills", Scope: domain.ScopeUser},
+	}
+	if err := skillRegistry.Initialize(ctx, skillRoots); err != nil {
+		slog.Warn("Failed to initialize Agent Skills system",
+			"error", err,
+			"note", "Continuing without skills (non-fatal)",
+		)
+		// Continue without skills (non-fatal)
+	} else {
+		slog.Info("Agent Skills system initialized",
+			"skills_loaded", len(skillRegistry.List()),
+		)
+	}
+
+	// Create skill CLI command handler
+	skillCmd := cliadapter.NewSkillCommand(skillRegistry, skillRenderer, os.Stdout)
+	skillHandler := cli.NewSkillHandler(skillCmd, os.Stdout)
+
 	// Initialize CLI gateway
 	cliGateway := cli.NewGateway(&app.Config.Gateways.CLI)
+	cliGateway.SetSkillHandler(skillHandler) // Enable /skill-name command support
 	app.connectGateway(cliGateway)
 	gateways = append(gateways, cliGateway) //nolint:staticcheck // Reserved for future shutdown handling
 	_ = gateways                            // Prevent unused variable warning
