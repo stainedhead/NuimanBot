@@ -59,7 +59,20 @@ All gateways support concurrent operation with unified conversation history.
 - **Multi-provider fallback**: Automatic failover for high availability
 - **Streaming support**: Real-time token-by-token responses
 
-### 4. Production-Grade Features
+### 4. Agent Skills System
+
+**Reusable prompt templates** following [Anthropic Agent Skills](https://github.com/anthropics/anthropic-skills) open standard:
+
+- ✅ **YAML frontmatter parsing**: name, description, allowed-tools, invocability
+- ✅ **Argument substitution**: `$ARGUMENTS`, `$0`, `$1`, ... placeholders
+- ✅ **Priority resolution**: Enterprise > User > Project > Plugin
+- ✅ **Multi-user storage**: Shared and per-user skill directories
+- ✅ **CLI integration**: `/help`, `/describe`, `/skill-name` commands
+- ✅ **5 production-ready skills**: code-review, debugging, api-docs, refactoring, testing
+
+**See**: [Agent Skills User Guide](../support_docs/skills-guide.md)
+
+### 5. Production-Grade Features
 
 **Performance Optimizations:**
 - Database connection pooling (25 max open, 5 idle)
@@ -247,6 +260,15 @@ Infrastructure → Adapter → Use Case → Domain
 - ✅ **Phase 4**: Performance Optimization (connection pooling, caching, batching)
 - ✅ **Phase 5**: Feature Completion (streaming, fallback, preferences, export, summarization)
 - ✅ **Phase 6**: Observability (metrics, tracing, error tracking, alerting, analytics)
+- ✅ **Phase 7.1**: CI/CD Pipeline (automated quality gates, security scanning)
+- ✅ **Agent Skills**: Complete implementation (Phases 0-8)
+  - Domain layer, infrastructure (parser, repository)
+  - Use case layer (registry with priority resolution, renderer with argument substitution)
+  - Adapter layer (CLI command handler, gateway integration)
+  - Configuration system with multi-user storage
+  - E2E integration with chat orchestrator
+  - 5 production-ready example skills
+  - 90%+ test coverage across all layers
 
 ### Current Phase (25% - Remaining on Hold)
 
@@ -283,6 +305,7 @@ The project is **production-ready** with 95.6% completion. Key achievements:
 | `documentation/product-summary.md` | This document - executive overview |
 | `documentation/product-details.md` | Detailed requirements, workflows, constraints |
 | `documentation/technical-details.md` | Architecture, system design, API documentation |
+| `support_docs/skills-guide.md` | **Agent Skills user guide** - creating and using skills |
 | `AGENTS.md` | Development guidelines for AI agents |
 | `POST_REVIEW_IMPROVEMENT_PLAN.md` | Implementation progress tracking |
 

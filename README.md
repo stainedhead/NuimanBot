@@ -14,6 +14,7 @@ An AI agent framework built with Clean Architecture principles, featuring LLM in
 - **Multi-Provider Fallback**: Automatic failover across LLM providers for high availability
 - **Streaming Responses**: Real-time token-by-token LLM responses with graceful degradation
 - **Rich Tool Library**: 10 built-in tools (calculator, datetime, weather, web search, notes, github, repo_search, doc_summarize, summarize, coding_agent)
+- **Agent Skills**: Reusable prompt templates following Anthropic Agent Skills standard with 5 production-ready skills
 - **Multiple Gateways**: CLI, Telegram, and Slack interfaces with concurrent operation
 
 ### Security & Access Control
@@ -359,6 +360,90 @@ Orchestrate external coding CLI tools (admin-only):
 - **Usage**: "Use claude_code to add error handling to utils.go", "Run codex to refactor this function"
 
 **Note**: All developer productivity tools follow RBAC, include audit logging, and have comprehensive test coverage (85%+).
+
+## Agent Skills
+
+NuimanBot supports **Agent Skills** - reusable prompt templates that follow the [Anthropic Agent Skills](https://github.com/anthropics/anthropic-skills) open standard.
+
+### Using Skills
+
+List available skills:
+```
+> /help
+Available skills:
+  /code-review - Comprehensive code review with quality analysis
+  /debugging - Systematic debugging assistance
+  /api-docs - Generate API documentation
+  /refactoring - Code refactoring with patterns
+  /testing - Help write comprehensive tests
+```
+
+Describe a skill:
+```
+> /describe code-review
+Skill: code-review
+Description: Perform comprehensive code review with quality analysis
+...
+```
+
+Invoke a skill:
+```
+> /code-review src/auth/login.go
+[Skill activated: code-review]
+Bot: # Code Review Summary
+...
+```
+
+### Production-Ready Skills
+
+NuimanBot includes 5 comprehensive example skills:
+
+| Skill | Description | Features |
+|-------|-------------|----------|
+| **code-review** | Comprehensive code review | Quality analysis, security checks, SOLID principles |
+| **debugging** | Systematic debugging | 5-phase approach, hypothesis formation, root cause analysis |
+| **api-docs** | API documentation | Multi-language examples (cURL, JS, Python, Go) |
+| **refactoring** | Code refactoring | Pattern-based improvements, code smell detection |
+| **testing** | Test writing | AAA pattern, table-driven tests, edge case coverage |
+
+### Creating Custom Skills
+
+Create a `SKILL.md` file in `data/skills/users/cli_user/my-skill/`:
+
+```markdown
+---
+name: my-skill
+description: Brief description of what this skill does
+user-invocable: true
+allowed-tools:
+  - repo_search
+  - github
+---
+
+# My Skill
+
+You are an expert in [domain].
+
+## Task
+
+[Instruction]: $ARGUMENTS
+
+## Guidelines
+
+- Guideline 1
+- Guideline 2
+```
+
+**For detailed guide**, see [Agent Skills User Guide](support_docs/skills-guide.md).
+
+### Skill Features
+
+- **YAML Frontmatter**: Metadata parsing with name, description, allowed-tools
+- **Argument Substitution**: `$ARGUMENTS`, `$0`, `$1`, ... placeholders
+- **Priority Resolution**: Enterprise > User > Project > Plugin scopes
+- **Multi-User Storage**: Shared (`data/skills/shared/`) and per-user directories
+- **Tool Restrictions**: Limit LLM access to specific tools per skill
+- **E2E Integration**: Skills process through full chat orchestrator pipeline
 
 ## Development
 
@@ -706,10 +791,19 @@ The project is **production-ready** with 95.6% completion. The remaining tasks (
 
 For detailed progress tracking and implementation plans, see `POST_REVIEW_IMPROVEMENT_PLAN.md`.
 
+## Documentation
+
+- **[Agent Skills User Guide](support_docs/skills-guide.md)** - Creating and using skills
+- **[Onboarding Guide](support_docs/ONBOARDING.md)** - Detailed installation and setup
+- **[Product Summary](documentation/product-summary.md)** - Executive overview
+- **[Product Details](documentation/product-details.md)** - Requirements and workflows
+- **[Technical Details](documentation/technical-details.md)** - Architecture and API docs
+- **[Development Guidelines](AGENTS.md)** - AI agent development rules
+
 ## Support
 
 - **Issues**: https://github.com/stainedhead/NuimanBot/issues
-- **Documentation**: See `AGENTS.md`, `CLAUDE.md`, `PRODUCT_REQUIREMENT_DOC.md`
+- **Documentation**: See links above for comprehensive guides
 
 ---
 

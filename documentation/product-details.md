@@ -137,6 +137,23 @@
   - Codecov integration for coverage tracking
   - All pipelines passing
 
+#### FR-011: Agent Skills System
+- **Priority:** P1 (High)
+- **Status:** ✅ Complete (Phases 0-8)
+- **Description:** Reusable prompt templates following Anthropic Agent Skills standard
+- **Acceptance Criteria:**
+  - ✅ YAML frontmatter parsing (name, description, allowed-tools, invocability)
+  - ✅ Argument substitution ($ARGUMENTS, $0, $1, ... placeholders)
+  - ✅ User-invocable skills via `/skill-name` command
+  - ✅ Model-invocable skills (LLM can invoke autonomously)
+  - ✅ Priority-based skill resolution (Enterprise > User > Project > Plugin)
+  - ✅ Multi-user skill storage (shared + per-user directories)
+  - ✅ Tool restrictions per skill (allowed-tools list)
+  - ✅ Five production-ready example skills (code-review, debugging, api-docs, refactoring, testing)
+  - ✅ CLI integration: /help (list), /describe (details), /skill-name (invoke)
+  - ✅ E2E integration with chat orchestrator
+  - ✅ 90%+ test coverage across all layers
+
 ### Non-Functional Requirements
 
 #### NFR-001: Performance
@@ -318,6 +335,87 @@
 - Prompt injection attempt is blocked
 - Security event is logged and alerted
 - Admin can take appropriate action
+
+### Workflow 7: Agent Skills Usage
+
+**Actors:** User
+
+**Preconditions:**
+- NuimanBot has Agent Skills system enabled
+- Example skills are loaded from `data/skills/shared/`
+
+**Steps:**
+1. User sends `/help` to list available skills
+2. NuimanBot responds with skill catalog:
+   ```
+   Available skills:
+     /code-review - Comprehensive code review with quality analysis
+     /debugging - Systematic debugging assistance
+     /testing - Help write comprehensive tests
+     ... (all user-invocable skills)
+   ```
+3. User sends `/describe code-review` to learn about the skill
+4. NuimanBot responds with full skill details (description, allowed tools, prompt template)
+5. User invokes skill: `/code-review src/auth/login.go`
+6. NuimanBot renders skill prompt with argument substitution:
+   - `$ARGUMENTS` → `src/auth/login.go`
+   - Full prompt includes expert role, guidelines, output format
+7. NuimanBot processes rendered prompt through chat service
+8. LLM receives skill prompt with allowed-tools restrictions
+9. LLM performs code review using repo_search and github tools only
+10. NuimanBot sends comprehensive code review response to user
+11. User receives structured output (Summary, Strengths, Issues, Recommendations)
+
+**Postconditions:**
+- Skill executed successfully with tool restrictions enforced
+- User receives specialized LLM response tailored to skill domain
+- Skill invocation logged in audit logs
+
+### Workflow 8: Custom Skill Creation
+
+**Actors:** User, System Admin
+
+**Preconditions:**
+- User wants to create a personal skill for Go code generation
+
+**Steps:**
+1. Admin creates user-specific skill directory: `mkdir -p data/skills/users/cli_user/go-codegen/`
+2. Admin creates SKILL.md file:
+   ```markdown
+   ---
+   name: go-codegen
+   description: Generate idiomatic Go code with error handling
+   user-invocable: true
+   allowed-tools:
+     - repo_search
+   ---
+
+   # Go Code Generator
+
+   You are an expert Go developer specializing in idiomatic code.
+
+   ## Task
+   Generate Go code for: $ARGUMENTS
+
+   ## Guidelines
+   - Follow Go idioms and conventions
+   - Include comprehensive error handling
+   - Add doc comments for exported symbols
+   - Use descriptive variable names
+   ```
+3. Admin restarts NuimanBot to load new skill
+4. User sends `/help` and sees new `/go-codegen` skill listed
+5. User invokes: `/go-codegen HTTP handler for user login`
+6. NuimanBot renders skill with substituted arguments
+7. LLM generates idiomatic Go code with error handling
+8. User receives well-structured Go code output
+9. User refines by invoking: `/go-codegen add tests for the login handler`
+10. LLM generates corresponding test code
+
+**Postconditions:**
+- User has personal skill available for repeated use
+- Skill persists across NuimanBot restarts
+- Higher priority than shared skills (user scope > project scope)
 
 ---
 
@@ -596,6 +694,118 @@ jobs:
 - Integration tests run in CI against SQLite backend
 - E2E tests (manual verification) for deployment workflow
 
+### Feature 6: Agent Skills System
+
+**Description:** Reusable prompt templates following Anthropic Agent Skills open standard
+
+**Functional Specification:**
+- **Skill Format:** YAML frontmatter + Markdown body in `SKILL.md` files
+- **Frontmatter Fields:**
+  - `name`: Skill identifier (kebab-case)
+  - `description`: Brief description shown in skill list
+  - `user-invocable`: Allow users to invoke (default: true)
+  - `model-invocable`: Allow LLM autonomous invocation (default: true)
+  - `allowed-tools`: Tool allowlist (empty = all tools allowed)
+- **Argument Substitution:**
+  - `$ARGUMENTS`: All arguments joined with spaces
+  - `$0`, `$1`, `$2`, ...: Individual arguments by index
+- **Priority Resolution:** Enterprise (300) > User (200) > Project (100) > Plugin (50)
+- **Storage Structure:**
+  - Shared skills: `data/skills/shared/` (all users, all platforms)
+  - User skills: `data/skills/users/{platform}_{uid}/` (per-user isolation)
+- **CLI Commands:**
+  - `/help`: List all user-invocable skills
+  - `/describe <skill-name>`: Show full skill details
+  - `/skill-name [args...]`: Invoke skill with optional arguments
+- **Chat Integration:**
+  - Rendered skills processed through chat service
+  - LLM receives skill prompt with metadata
+  - Tool restrictions enforced during execution
+  - Skill invocations logged in audit log
+
+**Configuration Example:**
+```yaml
+skills:
+  enabled: true
+  roots:
+    # Shared skills (available to all users)
+    - path: "./data/skills/shared"
+      scope: 2  # ScopeProject (priority: 100)
+
+    # User-specific skills (per-user isolation)
+    - path: "./data/skills/users/cli_user"
+      scope: 1  # ScopeUser (priority: 200)
+
+    # Enterprise skills (optional, highest priority)
+    # - path: "./data/skills/enterprise"
+    #   scope: 0  # ScopeEnterprise (priority: 300)
+```
+
+**Example Skill:**
+```markdown
+---
+name: code-review
+description: Perform comprehensive code review with quality analysis
+user-invocable: true
+model-invocable: true
+allowed-tools:
+  - repo_search
+  - github
+---
+
+# Code Review Skill
+
+You are an expert code reviewer with deep knowledge of software engineering best practices.
+
+## Task
+
+Perform a comprehensive code review of the following: $ARGUMENTS
+
+## Review Guidelines
+
+### Code Quality Analysis
+- Readability, maintainability, complexity
+- DRY principle adherence
+...
+
+### Output Format
+**Summary:** Brief overview (2-3 sentences)
+**Strengths:** What the code does well
+**Issues:** Detailed findings with severity
+**Recommendations:** Actionable improvements
+```
+
+**Architecture:**
+- **Domain Layer:** `internal/domain/skill.go` - Skill, SkillScope, RenderedSkill entities
+- **Use Case Layer:** `internal/usecase/skill/` - SkillRegistry (priority resolution), SkillRenderer (argument substitution)
+- **Infrastructure Layer:** `internal/infrastructure/skill/` - Parser (YAML frontmatter), Repository (filesystem scanner)
+- **Adapter Layer:** `internal/adapter/cli/skill.go` - SkillCommand (Execute, List, Describe methods)
+- **Gateway Layer:** `internal/adapter/gateway/cli/skill_handler.go` - Command routing and chat integration
+
+**Error Handling:**
+- Invalid YAML frontmatter: Skill skipped, parsing error logged
+- Missing required fields: Skill validation fails, not registered
+- Skill not found: Return clear error message to user
+- Tool restriction violation: Block tool execution, log security event
+
+**Performance:**
+- Skill loading at startup: O(n) filesystem scan, cached in registry
+- Skill invocation: O(1) registry lookup, O(1) argument substitution
+- Priority resolution: O(1) map lookup with highest priority pre-computed
+
+**Testing:**
+- Unit tests: Domain entities, priority resolution, argument substitution
+- Integration tests: Parser with real SKILL.md files, registry with multiple scopes
+- E2E tests: CLI invocation, chat integration, tool restriction enforcement
+- Coverage: 90%+ across all layers
+
+**Production-Ready Example Skills:**
+1. **code-review**: Comprehensive review with SOLID principles, security checks
+2. **debugging**: 5-phase systematic debugging (understand → hypothesize → investigate → fix)
+3. **api-docs**: API documentation with multi-language examples (cURL, JS, Python, Go)
+4. **refactoring**: Pattern-based refactoring with code smell detection
+5. **testing**: Test writing with AAA pattern, table-driven tests, edge case coverage
+
 ---
 
 ## Security Requirements
@@ -838,6 +1048,11 @@ MCP_SERVER_ENABLED=true
 MCP_SERVER_PORT=8080
 ```
 
+**Tools (optional):**
+```bash
+OPENWEATHERMAP_API_KEY=<api-key>    # For weather tool
+```
+
 ### Configuration File (config.yaml)
 
 **Minimal Example:**
@@ -867,6 +1082,14 @@ gateways:
 storage:
   type: sqlite
   path: data/nuimanbot.db
+
+skills:
+  enabled: true
+  roots:
+    - path: "./data/skills/shared"
+      scope: 2  # ScopeProject
+    - path: "./data/skills/users/cli_user"
+      scope: 1  # ScopeUser
 ```
 
 **Complete Example:** See `PRODUCT_REQUIREMENT_DOC.md` Section 12 (Appendix: Configuration Reference) for full YAML example with all options.
