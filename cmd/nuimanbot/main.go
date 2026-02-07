@@ -49,16 +49,16 @@ import (
 // application represents the core NuimanBot application.
 // It holds all the dependencies that different parts of the application need.
 type application struct {
-	Config                *config.NuimanBotConfig
-	ChatService           *chat.Service
-	LLMService            domain.LLMService
-	Memory                memory.MemoryRepository
-	SecurityService       *security.Service
-	ToolRegistry tool.ToolRegistry
-	Vault                 domain.CredentialVault
+	Config               *config.NuimanBotConfig
+	ChatService          *chat.Service
+	LLMService           domain.LLMService
+	Memory               memory.MemoryRepository
+	SecurityService      *security.Service
+	ToolRegistry         tool.ToolRegistry
+	Vault                domain.CredentialVault
 	ToolExecutionService *tool.Service
-	HealthServer          *health.Server
-	DB                    *sql.DB
+	HealthServer         *health.Server
+	DB                   *sql.DB
 }
 
 func main() {
@@ -190,16 +190,16 @@ func main() {
 
 	// 11. Create Application
 	app := &application{
-		Config:                cfg,
-		Vault:                 vault,
-		SecurityService:       securityService,
-		Memory:                memoryRepo,
-		LLMService:            llmService,
+		Config:               cfg,
+		Vault:                vault,
+		SecurityService:      securityService,
+		Memory:               memoryRepo,
+		LLMService:           llmService,
 		ToolRegistry:         toolRegistry,
-		ChatService:           chatService,
+		ChatService:          chatService,
 		ToolExecutionService: toolExecutionService,
-		HealthServer:          healthServer,
-		DB:                    db,
+		HealthServer:         healthServer,
+		DB:                   db,
 	}
 
 	// 12. Run application in goroutine

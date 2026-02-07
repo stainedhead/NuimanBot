@@ -51,11 +51,11 @@ type LLMCache interface {
 
 // Service implements the ChatService use case.
 type Service struct {
-	llmService       LLMService
-	memoryRepo       MemoryRepository
+	llmService      LLMService
+	memoryRepo      MemoryRepository
 	toolExecService ToolExecutionService // Currently PENDING (will be mocked or basic for now)
-	securityService  SecurityService
-	cache            LLMCache // Optional cache for LLM responses
+	securityService SecurityService
+	cache           LLMCache // Optional cache for LLM responses
 	// config            *config.ChatConfig // If ChatService needs its own config
 }
 
@@ -67,10 +67,10 @@ func NewService(
 	securityService SecurityService,
 ) *Service {
 	return &Service{
-		llmService:       llmService,
-		memoryRepo:       memoryRepo,
+		llmService:      llmService,
+		memoryRepo:      memoryRepo,
 		toolExecService: toolExecService,
-		securityService:  securityService,
+		securityService: securityService,
 	}
 }
 

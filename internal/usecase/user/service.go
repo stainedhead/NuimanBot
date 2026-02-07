@@ -53,8 +53,8 @@ func (s *Service) CreateUser(ctx context.Context, platform domain.Platform, plat
 			platform: platformUID,
 		},
 		AllowedTools: []string{}, // Empty = all skills for role
-		CreatedAt:     time.Now(),
-		UpdatedAt:     time.Now(),
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
 	}
 
 	// Save user

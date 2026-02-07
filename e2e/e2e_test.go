@@ -33,14 +33,14 @@ func TestFullApplicationLifecycle(t *testing.T) {
 	if app.SecurityService == nil {
 		t.Fatal("SecurityService not initialized")
 	}
-	if app.SkillRegistry == nil {
-		t.Fatal("SkillRegistry not initialized")
+	if app.ToolRegistry == nil {
+		t.Fatal("ToolRegistry not initialized")
 	}
 	if app.Vault == nil {
 		t.Fatal("Vault not initialized")
 	}
-	if app.SkillExecutionService == nil {
-		t.Fatal("SkillExecutionService not initialized")
+	if app.ToolExecutionService == nil {
+		t.Fatal("ToolExecutionService not initialized")
 	}
 	if app.DB == nil {
 		t.Fatal("DB not initialized")
@@ -51,12 +51,12 @@ func TestFullApplicationLifecycle(t *testing.T) {
 		t.Fatalf("Database ping failed: %v", err)
 	}
 
-	// Verify skills are registered (5 core + 5 developer productivity = 10 total)
-	skills := app.SkillRegistry.List()
-	expectedSkillCount := 10
-	if len(skills) < expectedSkillCount {
-		t.Errorf("Expected at least %d skills registered, got %d", expectedSkillCount, len(skills))
-		t.Logf("Registered skills: %v", getSkillNames(skills))
+	// Verify tools are registered (5 core + 5 developer productivity = 10 total)
+	tools := app.ToolRegistry.List()
+	expectedToolCount := 10
+	if len(tools) < expectedToolCount {
+		t.Errorf("Expected at least %d tools registered, got %d", expectedToolCount, len(tools))
+		t.Logf("Registered skills: %v", getToolNames(tools))
 	}
 
 	// Test graceful shutdown with context cancellation
@@ -77,8 +77,8 @@ func TestFullApplicationLifecycle(t *testing.T) {
 	}
 }
 
-// TestCLIToSkillFlow tests message flow from CLI gateway through to skill execution.
-func TestCLIToSkillFlow(t *testing.T) {
+// TestCLIToToolFlow tests message flow from CLI gateway through to tool execution.
+func TestCLIToToolFlow(t *testing.T) {
 	app, cleanup := setupTestApp(t)
 	defer cleanup()
 
@@ -87,11 +87,11 @@ func TestCLIToSkillFlow(t *testing.T) {
 	// Create test message for calculator
 	msg := createTestMessage("What is 5 + 3?")
 
-	// Configure mock LLM to trigger calculator skill
+	// Configure mock LLM to trigger calculator tool
 	mockLLM := app.LLMService.(*mockLLMService)
 	mockLLM.SetResponse("What is 5 + 3?", `I'll calculate that for you.
 
-<skill name="calculator" operation="add" a="5" b="3"/>
+<tool name="calculator" operation="add" a="5" b="3"/>
 
 The answer is 8.`)
 
@@ -106,7 +106,7 @@ The answer is 8.`)
 		t.Error("Response content is empty")
 	}
 
-	// Verify calculator skill was invoked (response should contain "8")
+	// Verify calculator tool was invoked (response should contain "8")
 	if !strings.Contains(response.Content, "8") && !strings.Contains(response.Content, "calculate") {
 		t.Errorf("Response does not mention calculation result: %s", response.Content)
 	}
@@ -134,8 +134,8 @@ The answer is 8.`)
 	}
 }
 
-// TestDateTimeSkillFlow tests datetime skill execution.
-func TestDateTimeSkillFlow(t *testing.T) {
+// TestDateTimeToolFlow tests datetime tool execution.
+func TestDateTimeToolFlow(t *testing.T) {
 	app, cleanup := setupTestApp(t)
 	defer cleanup()
 
@@ -144,11 +144,11 @@ func TestDateTimeSkillFlow(t *testing.T) {
 	// Create test message for datetime
 	msg := createTestMessage("What time is it?")
 
-	// Configure mock LLM to trigger datetime skill
+	// Configure mock LLM to trigger datetime tool
 	mockLLM := app.LLMService.(*mockLLMService)
 	mockLLM.SetResponse("What time is it?", `I'll check the current time for you.
 
-<skill name="datetime" operation="now"/>
+<tool name="datetime" operation="now"/>
 
 The current time is shown above.`)
 
@@ -163,7 +163,7 @@ The current time is shown above.`)
 		t.Error("Response content is empty")
 	}
 
-	// Datetime skill should return RFC3339 formatted timestamp
+	// Datetime tool should return RFC3339 formatted timestamp
 	// Check if response mentions time or datetime
 	lowerContent := strings.ToLower(response.Content)
 	if !strings.Contains(lowerContent, "time") && !strings.Contains(lowerContent, "now") && !strings.Contains(lowerContent, "datetime") {
@@ -181,7 +181,7 @@ func TestConversationPersistence(t *testing.T) {
 	// Configure mock LLM
 	mockLLM := app.LLMService.(*mockLLMService)
 	mockLLM.SetResponse("Hello", "Hi there! How can I help you?")
-	mockLLM.SetResponse("Calculate 2 + 2", `<skill name="calculator" operation="add" a="2" b="2"/>
+	mockLLM.SetResponse("Calculate 2 + 2", `<tool name="calculator" operation="add" a="2" b="2"/>
 
 The answer is 4.`)
 
@@ -452,37 +452,37 @@ func TestSignalHandling(t *testing.T) {
 	signal.Stop(sigChan)
 }
 
-// TestDeveloperProductivitySkillsRegistered verifies all 10 skills are registered.
-func TestDeveloperProductivitySkillsRegistered(t *testing.T) {
+// TestDeveloperProductivityToolsRegistered verifies all 10 tools are registered.
+func TestDeveloperProductivityToolsRegistered(t *testing.T) {
 	app, cleanup := setupTestApp(t)
 	defer cleanup()
 
-	skills := app.SkillRegistry.List()
+	tools := app.ToolRegistry.List()
 
-	// Expected skills: calculator, datetime, weather, websearch, notes, github, repo_search, doc_summarize, summarize, coding_agent
-	expectedSkills := []string{
+	// Expected tools: calculator, datetime, weather, websearch, notes, github, repo_search, doc_summarize, summarize, coding_agent
+	expectedTools := []string{
 		"calculator", "datetime", "weather", "websearch", "notes",
 		"github", "repo_search", "doc_summarize", "summarize", "coding_agent",
 	}
 
-	skillMap := make(map[string]bool)
-	for _, skill := range skills {
-		skillMap[skill.Name()] = true
+	toolMap := make(map[string]bool)
+	for _, tool := range tools {
+		toolMap[tool.Name()] = true
 	}
 
-	for _, expectedName := range expectedSkills {
-		if !skillMap[expectedName] {
-			t.Errorf("Expected skill '%s' not registered", expectedName)
+	for _, expectedName := range expectedTools {
+		if !toolMap[expectedName] {
+			t.Errorf("Expected tool '%s' not registered", expectedName)
 		}
 	}
 
-	t.Logf("All %d skills registered: %v", len(skills), getSkillNames(skills))
+	t.Logf("All %d tools registered: %v", len(tools), getToolNames(tools))
 }
 
-// TestGitHubSkillE2E tests GitHub skill end-to-end (conditional on gh CLI availability).
-func TestGitHubSkillE2E(t *testing.T) {
+// TestGitHubToolE2E tests GitHub tool end-to-end (conditional on gh CLI availability).
+func TestGitHubToolE2E(t *testing.T) {
 	if !isToolAvailable("gh") {
-		t.Skip("gh CLI not available - skipping GitHub skill e2e test")
+		t.Skip("gh CLI not available - skipping GitHub tool e2e test")
 	}
 
 	app, cleanup := setupTestApp(t)
@@ -493,18 +493,18 @@ func TestGitHubSkillE2E(t *testing.T) {
 	// Test message requesting GitHub issue list
 	msg := createTestMessage("List issues from NuimanBot repository")
 
-	// Configure mock LLM to invoke GitHub skill
+	// Configure mock LLM to invoke GitHub tool
 	mockLLM := app.LLMService.(*mockLLMService)
 	mockLLM.SetResponse("List issues from NuimanBot repository", `I'll check the issues for you.
 
-<skill name="github" action="issue_list" repo="owner/NuimanBot"/>
+<tool name="github" action="issue_list" repo="owner/NuimanBot"/>
 
 Here are the issues.`)
 
 	// Process message
 	response, err := app.ChatService.ProcessMessage(ctx, &msg)
 	if err != nil {
-		t.Logf("GitHub skill execution returned error (expected if repo/auth not configured): %v", err)
+		t.Logf("GitHub tool execution returned error (expected if repo/auth not configured): %v", err)
 		// Not a test failure - tool may not be authenticated
 		return
 	}
@@ -514,11 +514,11 @@ Here are the issues.`)
 		t.Error("Response content is empty")
 	}
 
-	t.Logf("GitHub skill response: %s", response.Content)
+	t.Logf("GitHub tool response: %s", response.Content)
 }
 
-// TestRepoSearchSkillE2E tests repo search skill end-to-end (conditional on ripgrep availability).
-func TestRepoSearchSkillE2E(t *testing.T) {
+// TestRepoSearchToolE2E tests repo search tool end-to-end (conditional on ripgrep availability).
+func TestRepoSearchToolE2E(t *testing.T) {
 	if !isToolAvailable("rg") {
 		t.Skip("ripgrep not available - skipping repo search e2e test")
 	}
@@ -535,7 +535,7 @@ func TestRepoSearchSkillE2E(t *testing.T) {
 	mockLLM := app.LLMService.(*mockLLMService)
 	mockLLM.SetResponse("Find all TODO comments in the project", `I'll search the codebase for you.
 
-<skill name="repo_search" query="TODO" path="."/>
+<tool name="repo_search" query="TODO" path="."/>
 
 Here are the search results.`)
 
@@ -553,8 +553,8 @@ Here are the search results.`)
 	t.Logf("Repo search response: %s", response.Content)
 }
 
-// TestSummarizeSkillE2E tests web summarization skill end-to-end.
-func TestSummarizeSkillE2E(t *testing.T) {
+// TestSummarizeToolE2E tests web summarization tool end-to-end.
+func TestSummarizeToolE2E(t *testing.T) {
 	app, cleanup := setupTestApp(t)
 	defer cleanup()
 
@@ -567,14 +567,14 @@ func TestSummarizeSkillE2E(t *testing.T) {
 	mockLLM := app.LLMService.(*mockLLMService)
 	mockLLM.SetResponse("Summarize https://example.com", `I'll summarize that URL for you.
 
-<skill name="summarize" url="https://example.com" length="brief"/>
+<tool name="summarize" url="https://example.com" length="brief"/>
 
 Here's the summary.`)
 
 	// Process message
 	response, err := app.ChatService.ProcessMessage(ctx, &msg)
 	if err != nil {
-		t.Logf("Summarize skill execution returned error (may need network/LLM): %v", err)
+		t.Logf("Summarize tool execution returned error (may need network/LLM): %v", err)
 		// Not a test failure - may need external resources
 		return
 	}
@@ -584,11 +584,11 @@ Here's the summary.`)
 		t.Error("Response content is empty")
 	}
 
-	t.Logf("Summarize skill response: %s", response.Content)
+	t.Logf("Summarize tool response: %s", response.Content)
 }
 
-// TestDocSummarizeSkillE2E tests document summarization skill end-to-end.
-func TestDocSummarizeSkillE2E(t *testing.T) {
+// TestDocSummarizeToolE2E tests document summarization tool end-to-end.
+func TestDocSummarizeToolE2E(t *testing.T) {
 	app, cleanup := setupTestApp(t)
 	defer cleanup()
 
@@ -603,14 +603,14 @@ func TestDocSummarizeSkillE2E(t *testing.T) {
 	mockLLM := app.LLMService.(*mockLLMService)
 	mockLLM.SetResponse("Summarize this document: "+testDoc, `I'll summarize the document for you.
 
-<skill name="doc_summarize" text="`+testDoc+`" length="brief"/>
+<tool name="doc_summarize" text="`+testDoc+`" length="brief"/>
 
 Here's the summary.`)
 
 	// Process message
 	response, err := app.ChatService.ProcessMessage(ctx, &msg)
 	if err != nil {
-		t.Logf("Doc summarize skill execution returned error (may need LLM): %v", err)
+		t.Logf("Doc summarize tool execution returned error (may need LLM): %v", err)
 		// Not a test failure - needs LLM service
 		return
 	}
@@ -620,35 +620,35 @@ Here's the summary.`)
 		t.Error("Response content is empty")
 	}
 
-	t.Logf("Doc summarize skill response: %s", response.Content)
+	t.Logf("Doc summarize tool response: %s", response.Content)
 }
 
-// TestCodingAgentSkillRegistration tests that coding agent skill is registered (manual execution only).
-func TestCodingAgentSkillRegistration(t *testing.T) {
+// TestCodingAgentToolRegistration tests that coding agent tool is registered (manual execution only).
+func TestCodingAgentToolRegistration(t *testing.T) {
 	app, cleanup := setupTestApp(t)
 	defer cleanup()
 
-	// Verify coding_agent skill is registered
-	skill, err := app.SkillRegistry.Get("coding_agent")
+	// Verify coding_agent tool is registered
+	tool, err := app.ToolRegistry.Get("coding_agent")
 	if err != nil {
-		t.Fatalf("coding_agent skill not registered: %v", err)
+		t.Fatalf("coding_agent tool not registered: %v", err)
 	}
 
-	// Verify skill metadata
-	if skill.Name() != "coding_agent" {
-		t.Errorf("Expected skill name 'coding_agent', got '%s'", skill.Name())
+	// Verify tool metadata
+	if tool.Name() != "coding_agent" {
+		t.Errorf("Expected tool name 'coding_agent', got '%s'", tool.Name())
 	}
 
-	desc := skill.Description()
+	desc := tool.Description()
 	if !strings.Contains(strings.ToLower(desc), "coding") {
 		t.Errorf("Expected description to mention 'coding', got: %s", desc)
 	}
 
 	// Verify InputSchema
-	schema := skill.InputSchema()
+	schema := tool.InputSchema()
 	if schema == nil {
 		t.Error("InputSchema is nil")
 	}
 
-	t.Logf("coding_agent skill registered successfully: %s", desc)
+	t.Logf("coding_agent tool registered successfully: %s", desc)
 }
