@@ -39,7 +39,7 @@ func TestGetCurrentWeather_WithMockServer(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Create weather skill with mock server
+	// Create weather tool with mock server
 	client := weatherClient.NewClientWithBaseURL("test-key", 10, server.URL)
 	w := &Weather{
 		client: client,

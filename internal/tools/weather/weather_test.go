@@ -5,21 +5,21 @@ import (
 	"testing"
 
 	"nuimanbot/internal/domain"
-	"nuimanbot/internal/skills/weather"
+	"nuimanbot/internal/tools/weather"
 )
 
 func TestWeatherSkill_Metadata(t *testing.T) {
-	skill := weather.NewWeather("test-api-key", 10)
+	tool := weather.NewWeather("test-api-key", 10)
 
-	if skill.Name() != "weather" {
-		t.Errorf("Expected name 'weather', got '%s'", skill.Name())
+	if tool.Name() != "weather" {
+		t.Errorf("Expected name 'weather', got '%s'", tool.Name())
 	}
 
-	if skill.Description() == "" {
+	if tool.Description() == "" {
 		t.Error("Description should not be empty")
 	}
 
-	schema := skill.InputSchema()
+	schema := tool.InputSchema()
 	if schema == nil {
 		t.Error("InputSchema should not be nil")
 	}
@@ -40,9 +40,9 @@ func TestWeatherSkill_Metadata(t *testing.T) {
 }
 
 func TestWeatherSkill_Execute_MissingOperation(t *testing.T) {
-	skill := weather.NewWeather("test-api-key", 10)
+	tool := weather.NewWeather("test-api-key", 10)
 
-	result, err := skill.Execute(context.Background(), map[string]any{
+	result, err := tool.Execute(context.Background(), map[string]any{
 		"location": "London",
 	})
 	if err != nil {
@@ -54,9 +54,9 @@ func TestWeatherSkill_Execute_MissingOperation(t *testing.T) {
 }
 
 func TestWeatherSkill_Execute_MissingLocation(t *testing.T) {
-	skill := weather.NewWeather("test-api-key", 10)
+	tool := weather.NewWeather("test-api-key", 10)
 
-	result, err := skill.Execute(context.Background(), map[string]any{
+	result, err := tool.Execute(context.Background(), map[string]any{
 		"operation": "current",
 	})
 	if err != nil {
@@ -68,9 +68,9 @@ func TestWeatherSkill_Execute_MissingLocation(t *testing.T) {
 }
 
 func TestWeatherSkill_Execute_InvalidOperation(t *testing.T) {
-	skill := weather.NewWeather("test-api-key", 10)
+	tool := weather.NewWeather("test-api-key", 10)
 
-	result, err := skill.Execute(context.Background(), map[string]any{
+	result, err := tool.Execute(context.Background(), map[string]any{
 		"operation": "invalid_operation",
 		"location":  "London",
 	})
@@ -83,9 +83,9 @@ func TestWeatherSkill_Execute_InvalidOperation(t *testing.T) {
 }
 
 func TestWeatherSkill_Execute_InvalidUnits(t *testing.T) {
-	skill := weather.NewWeather("test-api-key", 10)
+	tool := weather.NewWeather("test-api-key", 10)
 
-	result, err := skill.Execute(context.Background(), map[string]any{
+	result, err := tool.Execute(context.Background(), map[string]any{
 		"operation": "current",
 		"location":  "London",
 		"units":     "invalid_units",
@@ -99,11 +99,11 @@ func TestWeatherSkill_Execute_InvalidUnits(t *testing.T) {
 }
 
 func TestWeatherSkill_Execute_DefaultUnits(t *testing.T) {
-	skill := weather.NewWeather("test-api-key", 10)
+	tool := weather.NewWeather("test-api-key", 10)
 
 	// This will fail with API error because we don't have a valid API key,
 	// but it tests that default units are handled (no validation error)
-	result, err := skill.Execute(context.Background(), map[string]any{
+	result, err := tool.Execute(context.Background(), map[string]any{
 		"operation": "current",
 		"location":  "London",
 	})
@@ -117,9 +117,9 @@ func TestWeatherSkill_Execute_DefaultUnits(t *testing.T) {
 }
 
 func TestWeatherSkill_RequiredPermissions(t *testing.T) {
-	skill := weather.NewWeather("test-api-key", 10)
+	tool := weather.NewWeather("test-api-key", 10)
 
-	perms := skill.RequiredPermissions()
+	perms := tool.RequiredPermissions()
 	if len(perms) != 1 {
 		t.Errorf("Expected 1 permission, got %d", len(perms))
 	}
@@ -129,18 +129,18 @@ func TestWeatherSkill_RequiredPermissions(t *testing.T) {
 }
 
 func TestWeatherSkill_Config(t *testing.T) {
-	skill := weather.NewWeather("test-api-key", 10)
+	tool := weather.NewWeather("test-api-key", 10)
 
-	config := skill.Config()
+	config := tool.Config()
 	if !config.Enabled {
-		t.Error("Expected skill to be enabled by default")
+		t.Error("Expected tool to be enabled by default")
 	}
 }
 
 func TestWeatherSkill_Execute_EmptyLocation(t *testing.T) {
-	skill := weather.NewWeather("test-api-key", 10)
+	tool := weather.NewWeather("test-api-key", 10)
 
-	result, err := skill.Execute(context.Background(), map[string]any{
+	result, err := tool.Execute(context.Background(), map[string]any{
 		"operation": "current",
 		"location":  "",
 	})
@@ -153,9 +153,9 @@ func TestWeatherSkill_Execute_EmptyLocation(t *testing.T) {
 }
 
 func TestWeatherSkill_Execute_Forecast_MissingLocation(t *testing.T) {
-	skill := weather.NewWeather("test-api-key", 10)
+	tool := weather.NewWeather("test-api-key", 10)
 
-	result, err := skill.Execute(context.Background(), map[string]any{
+	result, err := tool.Execute(context.Background(), map[string]any{
 		"operation": "forecast",
 	})
 	if err != nil {
@@ -167,9 +167,9 @@ func TestWeatherSkill_Execute_Forecast_MissingLocation(t *testing.T) {
 }
 
 func TestWeatherSkill_Execute_Current_MetricUnits(t *testing.T) {
-	skill := weather.NewWeather("test-api-key", 10)
+	tool := weather.NewWeather("test-api-key", 10)
 
-	result, err := skill.Execute(context.Background(), map[string]any{
+	result, err := tool.Execute(context.Background(), map[string]any{
 		"operation": "current",
 		"location":  "London",
 		"units":     "metric",
@@ -185,9 +185,9 @@ func TestWeatherSkill_Execute_Current_MetricUnits(t *testing.T) {
 }
 
 func TestWeatherSkill_Execute_Current_ImperialUnits(t *testing.T) {
-	skill := weather.NewWeather("test-api-key", 10)
+	tool := weather.NewWeather("test-api-key", 10)
 
-	result, err := skill.Execute(context.Background(), map[string]any{
+	result, err := tool.Execute(context.Background(), map[string]any{
 		"operation": "current",
 		"location":  "New York",
 		"units":     "imperial",
@@ -202,9 +202,9 @@ func TestWeatherSkill_Execute_Current_ImperialUnits(t *testing.T) {
 }
 
 func TestWeatherSkill_Execute_Current_StandardUnits(t *testing.T) {
-	skill := weather.NewWeather("test-api-key", 10)
+	tool := weather.NewWeather("test-api-key", 10)
 
-	result, err := skill.Execute(context.Background(), map[string]any{
+	result, err := tool.Execute(context.Background(), map[string]any{
 		"operation": "current",
 		"location":  "Tokyo",
 		"units":     "standard",
@@ -219,9 +219,9 @@ func TestWeatherSkill_Execute_Current_StandardUnits(t *testing.T) {
 }
 
 func TestWeatherSkill_Execute_Forecast_WithUnits(t *testing.T) {
-	skill := weather.NewWeather("test-api-key", 10)
+	tool := weather.NewWeather("test-api-key", 10)
 
-	result, err := skill.Execute(context.Background(), map[string]any{
+	result, err := tool.Execute(context.Background(), map[string]any{
 		"operation": "forecast",
 		"location":  "Paris",
 		"units":     "metric",
@@ -236,9 +236,9 @@ func TestWeatherSkill_Execute_Forecast_WithUnits(t *testing.T) {
 }
 
 func TestWeatherSkill_Execute_Forecast_InvalidUnits(t *testing.T) {
-	skill := weather.NewWeather("test-api-key", 10)
+	tool := weather.NewWeather("test-api-key", 10)
 
-	result, err := skill.Execute(context.Background(), map[string]any{
+	result, err := tool.Execute(context.Background(), map[string]any{
 		"operation": "forecast",
 		"location":  "Berlin",
 		"units":     "celsius",
@@ -252,9 +252,9 @@ func TestWeatherSkill_Execute_Forecast_InvalidUnits(t *testing.T) {
 }
 
 func TestWeatherSkill_Execute_Forecast_EmptyLocation(t *testing.T) {
-	skill := weather.NewWeather("test-api-key", 10)
+	tool := weather.NewWeather("test-api-key", 10)
 
-	result, err := skill.Execute(context.Background(), map[string]any{
+	result, err := tool.Execute(context.Background(), map[string]any{
 		"operation": "forecast",
 		"location":  "",
 	})

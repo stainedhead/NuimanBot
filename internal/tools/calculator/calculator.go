@@ -8,26 +8,26 @@ import (
 	"nuimanbot/internal/domain"
 )
 
-// Calculator implements the domain.Skill interface for basic arithmetic operations.
+// Calculator implements the domain.Tool interface for basic arithmetic operations.
 type Calculator struct {
-	config domain.SkillConfig
+	config domain.ToolConfig
 }
 
-// NewCalculator creates a new Calculator skill instance.
+// NewCalculator creates a new Calculator tool instance.
 func NewCalculator() *Calculator {
 	return &Calculator{
-		config: domain.SkillConfig{
+		config: domain.ToolConfig{
 			Enabled: true,
 		},
 	}
 }
 
-// Name returns the skill name.
+// Name returns the tool name.
 func (c *Calculator) Name() string {
 	return "calculator"
 }
 
-// Description returns a description of the calculator skill.
+// Description returns a description of the calculator tool.
 func (c *Calculator) Description() string {
 	return "Performs basic arithmetic operations: add, subtract, multiply, divide"
 }
@@ -56,25 +56,25 @@ func (c *Calculator) InputSchema() map[string]any {
 }
 
 // Execute performs the calculator operation.
-func (c *Calculator) Execute(ctx context.Context, params map[string]any) (*domain.SkillResult, error) {
+func (c *Calculator) Execute(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) {
 	// Extract parameters
 	operation, ok := params["operation"].(string)
 	if !ok {
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Error: "missing or invalid 'operation' parameter",
 		}, nil
 	}
 
 	a, ok := params["a"].(float64)
 	if !ok {
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Error: "missing or invalid 'a' parameter",
 		}, nil
 	}
 
 	b, ok := params["b"].(float64)
 	if !ok {
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Error: "missing or invalid 'b' parameter",
 		}, nil
 	}
@@ -91,32 +91,32 @@ func (c *Calculator) Execute(ctx context.Context, params map[string]any) (*domai
 		result = a * b
 	case "divide":
 		if b == 0 {
-			return &domain.SkillResult{
+			return &domain.ExecutionResult{
 				Error: "division by zero",
 			}, nil
 		}
 		result = a / b
 	default:
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Error: fmt.Sprintf("unsupported operation: %s", operation),
 		}, nil
 	}
 
-	return &domain.SkillResult{
+	return &domain.ExecutionResult{
 		Output:   formatResult(result),
 		Metadata: map[string]any{"operation": operation, "a": a, "b": b},
 		Error:    "",
 	}, nil
 }
 
-// RequiredPermissions returns the permissions required to execute this skill.
+// RequiredPermissions returns the permissions required to execute this tool.
 func (c *Calculator) RequiredPermissions() []domain.Permission {
 	// Calculator doesn't require any special permissions
 	return []domain.Permission{}
 }
 
-// Config returns the skill's configuration.
-func (c *Calculator) Config() domain.SkillConfig {
+// Config returns the tool's configuration.
+func (c *Calculator) Config() domain.ToolConfig {
 	return c.config
 }
 

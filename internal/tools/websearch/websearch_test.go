@@ -5,30 +5,30 @@ import (
 	"testing"
 
 	"nuimanbot/internal/domain"
-	"nuimanbot/internal/skills/websearch"
+	"nuimanbot/internal/tools/websearch"
 )
 
 func TestWebSearchSkill_Metadata(t *testing.T) {
-	skill := websearch.NewWebSearch(10)
+	tool := websearch.NewWebSearch(10)
 
-	if skill.Name() != "websearch" {
-		t.Errorf("Expected name 'websearch', got '%s'", skill.Name())
+	if tool.Name() != "websearch" {
+		t.Errorf("Expected name 'websearch', got '%s'", tool.Name())
 	}
 
-	if skill.Description() == "" {
+	if tool.Description() == "" {
 		t.Error("Description should not be empty")
 	}
 
-	schema := skill.InputSchema()
+	schema := tool.InputSchema()
 	if schema == nil {
 		t.Error("InputSchema should not be nil")
 	}
 }
 
 func TestWebSearchSkill_Execute_MissingQuery(t *testing.T) {
-	skill := websearch.NewWebSearch(10)
+	tool := websearch.NewWebSearch(10)
 
-	result, err := skill.Execute(context.Background(), map[string]any{})
+	result, err := tool.Execute(context.Background(), map[string]any{})
 	if err != nil {
 		t.Fatalf("Execute() unexpected error: %v", err)
 	}
@@ -38,9 +38,9 @@ func TestWebSearchSkill_Execute_MissingQuery(t *testing.T) {
 }
 
 func TestWebSearchSkill_Execute_EmptyQuery(t *testing.T) {
-	skill := websearch.NewWebSearch(10)
+	tool := websearch.NewWebSearch(10)
 
-	result, err := skill.Execute(context.Background(), map[string]any{
+	result, err := tool.Execute(context.Background(), map[string]any{
 		"query": "",
 	})
 	if err != nil {
@@ -52,9 +52,9 @@ func TestWebSearchSkill_Execute_EmptyQuery(t *testing.T) {
 }
 
 func TestWebSearchSkill_Execute_InvalidLimit(t *testing.T) {
-	skill := websearch.NewWebSearch(10)
+	tool := websearch.NewWebSearch(10)
 
-	result, err := skill.Execute(context.Background(), map[string]any{
+	result, err := tool.Execute(context.Background(), map[string]any{
 		"query": "test",
 		"limit": 100,
 	})
@@ -67,10 +67,10 @@ func TestWebSearchSkill_Execute_InvalidLimit(t *testing.T) {
 }
 
 func TestWebSearchSkill_Execute_DefaultLimit(t *testing.T) {
-	skill := websearch.NewWebSearch(10)
+	tool := websearch.NewWebSearch(10)
 
 	// This will likely fail with search error, but tests that default limit works
-	result, err := skill.Execute(context.Background(), map[string]any{
+	result, err := tool.Execute(context.Background(), map[string]any{
 		"query": "test",
 	})
 	if err != nil {
@@ -83,9 +83,9 @@ func TestWebSearchSkill_Execute_DefaultLimit(t *testing.T) {
 }
 
 func TestWebSearchSkill_RequiredPermissions(t *testing.T) {
-	skill := websearch.NewWebSearch(10)
+	tool := websearch.NewWebSearch(10)
 
-	perms := skill.RequiredPermissions()
+	perms := tool.RequiredPermissions()
 	if len(perms) != 1 {
 		t.Errorf("Expected 1 permission, got %d", len(perms))
 	}
@@ -95,10 +95,10 @@ func TestWebSearchSkill_RequiredPermissions(t *testing.T) {
 }
 
 func TestWebSearchSkill_Config(t *testing.T) {
-	skill := websearch.NewWebSearch(10)
+	tool := websearch.NewWebSearch(10)
 
-	config := skill.Config()
+	config := tool.Config()
 	if !config.Enabled {
-		t.Error("Expected skill to be enabled by default")
+		t.Error("Expected tool to be enabled by default")
 	}
 }

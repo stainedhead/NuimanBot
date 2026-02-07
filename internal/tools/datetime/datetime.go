@@ -9,26 +9,26 @@ import (
 	"nuimanbot/internal/domain"
 )
 
-// DateTime implements the domain.Skill interface for date and time operations.
+// DateTime implements the domain.Tool interface for date and time operations.
 type DateTime struct {
-	config domain.SkillConfig
+	config domain.ToolConfig
 }
 
-// NewDateTime creates a new DateTime skill instance.
+// NewDateTime creates a new DateTime tool instance.
 func NewDateTime() *DateTime {
 	return &DateTime{
-		config: domain.SkillConfig{
+		config: domain.ToolConfig{
 			Enabled: true,
 		},
 	}
 }
 
-// Name returns the skill name.
+// Name returns the tool name.
 func (d *DateTime) Name() string {
 	return "datetime"
 }
 
-// Description returns a description of the datetime skill.
+// Description returns a description of the datetime tool.
 func (d *DateTime) Description() string {
 	return "Provides current date and time information with various formatting options"
 }
@@ -53,11 +53,11 @@ func (d *DateTime) InputSchema() map[string]any {
 }
 
 // Execute performs the datetime operation.
-func (d *DateTime) Execute(ctx context.Context, params map[string]any) (*domain.SkillResult, error) {
+func (d *DateTime) Execute(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) {
 	// Extract operation parameter
 	operation, ok := params["operation"].(string)
 	if !ok {
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Error: "missing or invalid 'operation' parameter",
 		}, nil
 	}
@@ -67,7 +67,7 @@ func (d *DateTime) Execute(ctx context.Context, params map[string]any) (*domain.
 	switch operation {
 	case "now":
 		// Return current time in RFC3339 format
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Output:   now.Format(time.RFC3339),
 			Metadata: map[string]any{"operation": "now", "format": "RFC3339"},
 			Error:    "",
@@ -77,11 +77,11 @@ func (d *DateTime) Execute(ctx context.Context, params map[string]any) (*domain.
 		// Return formatted time using provided format string
 		format, ok := params["format"].(string)
 		if !ok || format == "" {
-			return &domain.SkillResult{
+			return &domain.ExecutionResult{
 				Error: "missing or invalid 'format' parameter for 'format' operation",
 			}, nil
 		}
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Output:   now.Format(format),
 			Metadata: map[string]any{"operation": "format", "format": format},
 			Error:    "",
@@ -90,26 +90,26 @@ func (d *DateTime) Execute(ctx context.Context, params map[string]any) (*domain.
 	case "unix":
 		// Return Unix timestamp
 		timestamp := now.Unix()
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Output:   strconv.FormatInt(timestamp, 10),
 			Metadata: map[string]any{"operation": "unix", "timestamp": timestamp},
 			Error:    "",
 		}, nil
 
 	default:
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Error: fmt.Sprintf("unsupported operation: %s", operation),
 		}, nil
 	}
 }
 
-// RequiredPermissions returns the permissions required to execute this skill.
+// RequiredPermissions returns the permissions required to execute this tool.
 func (d *DateTime) RequiredPermissions() []domain.Permission {
 	// DateTime doesn't require any special permissions
 	return []domain.Permission{}
 }
 
-// Config returns the skill's configuration.
-func (d *DateTime) Config() domain.SkillConfig {
+// Config returns the tool's configuration.
+func (d *DateTime) Config() domain.ToolConfig {
 	return d.config
 }
