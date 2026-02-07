@@ -1,0 +1,8 @@
+namespace: example/demo-plugin
+version: 1.0.0
+description: A demonstration plugin for testing
+author: NuimanBot Team
+license: MIT
+skills:
+  - demo-skill
+dependencies: {}

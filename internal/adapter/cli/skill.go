@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"nuimanbot/internal/domain"
 )
@@ -22,12 +23,21 @@ type SkillRenderer interface {
 	Render(skill *domain.Skill, args []string) (*domain.RenderedSkill, error)
 }
 
+// LifecycleManager defines the interface for subagent lifecycle management.
+type LifecycleManager interface {
+	Start(ctx context.Context, subagentCtx domain.SubagentContext) error
+	Cancel(ctx context.Context, subagentID string) error
+	GetStatus(ctx context.Context, subagentID string) (*domain.SubagentResult, error)
+	ListRunning(ctx context.Context) []string
+}
+
 // SkillCommand handles skill-related CLI commands.
 // It provides operations to execute, list, and describe skills.
 type SkillCommand struct {
-	registry SkillRegistry
-	renderer SkillRenderer
-	output   io.Writer
+	registry  SkillRegistry
+	renderer  SkillRenderer
+	output    io.Writer
+	lifecycle LifecycleManager
 }
 
 // NewSkillCommand creates a new skill command handler.
@@ -43,8 +53,14 @@ func NewSkillCommand(
 	}
 }
 
+// SetLifecycleManager sets the lifecycle manager for subagent execution.
+func (c *SkillCommand) SetLifecycleManager(lifecycle LifecycleManager) {
+	c.lifecycle = lifecycle
+}
+
 // Execute executes a skill by name with arguments.
 // Returns rendered prompt and allowed tools.
+// For skills with context: fork, starts a subagent and returns immediately.
 //
 // Errors:
 //   - ErrSkillNotFound if skill does not exist
@@ -68,7 +84,75 @@ func (c *SkillCommand) Execute(ctx context.Context, skillName string, args []str
 		return nil, fmt.Errorf("failed to render skill: %w", err)
 	}
 
+	// Check if skill should fork
+	if skill.ShouldFork() && c.lifecycle != nil {
+		return c.executeAsSubagent(ctx, skill, rendered)
+	}
+
 	return rendered, nil
+}
+
+// executeAsSubagent starts a skill as a forked subagent
+func (c *SkillCommand) executeAsSubagent(ctx context.Context, skill *domain.Skill, rendered *domain.RenderedSkill) (*domain.RenderedSkill, error) {
+	// Create subagent context
+	subagentCtx := domain.SubagentContext{
+		ID:              fmt.Sprintf("subagent-%s-%d", skill.Name, time.Now().UnixNano()),
+		ParentContextID: "cli-parent",
+		SkillName:       skill.Name,
+		AllowedTools:    rendered.AllowedTools,
+		ResourceLimits:  domain.DefaultResourceLimits(),
+		ConversationHistory: []domain.Message{
+			{Role: "user", Content: rendered.Prompt},
+		},
+		CreatedAt: time.Now(),
+		Metadata:  make(map[string]interface{}),
+	}
+
+	// Start subagent
+	if err := c.lifecycle.Start(ctx, subagentCtx); err != nil {
+		return nil, fmt.Errorf("failed to start subagent: %w", err)
+	}
+
+	// Display notification
+	fmt.Fprintf(c.output, "Started subagent: %s (ID: %s)\n", skill.Name, subagentCtx.ID)
+	fmt.Fprintf(c.output, "Use /subagent-status %s to check progress\n", subagentCtx.ID)
+
+	return rendered, nil
+}
+
+// GetSubagentStatus retrieves the status of a running subagent
+func (c *SkillCommand) GetSubagentStatus(ctx context.Context, subagentID string) (*domain.SubagentResult, error) {
+	if c.lifecycle == nil {
+		return nil, fmt.Errorf("lifecycle manager not configured")
+	}
+
+	return c.lifecycle.GetStatus(ctx, subagentID)
+}
+
+// ListRunningSubagents lists all currently running subagents
+func (c *SkillCommand) ListRunningSubagents(ctx context.Context) error {
+	if c.lifecycle == nil {
+		return fmt.Errorf("lifecycle manager not configured")
+	}
+
+	running := c.lifecycle.ListRunning(ctx)
+
+	if len(running) == 0 {
+		fmt.Fprintln(c.output, "No running subagents.")
+		return nil
+	}
+
+	fmt.Fprintf(c.output, "Running subagents (%d):\n", len(running))
+	for _, id := range running {
+		status, err := c.lifecycle.GetStatus(ctx, id)
+		if err != nil {
+			fmt.Fprintf(c.output, "  %s (error getting status)\n", id)
+			continue
+		}
+		fmt.Fprintf(c.output, "  %s - %s\n", id, status.Status)
+	}
+
+	return nil
 }
 
 // List lists all available user-invocable skills.
