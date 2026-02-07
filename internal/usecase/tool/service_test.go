@@ -1,4 +1,4 @@
-package skill_test
+package tool_test
 
 import (
 	"context"
@@ -8,40 +8,40 @@ import (
 
 	"nuimanbot/internal/config"
 	"nuimanbot/internal/domain"
-	. "nuimanbot/internal/usecase/skill" // Import skill package
+	. "nuimanbot/internal/usecase/tool" // Import skill package
 )
 
-// MockSkill implements domain.Skill for testing purposes.
-type MockSkill struct {
+// MockTool implements domain.Tool for testing purposes.
+type MockTool struct {
 	NameFunc                func() string
 	DescriptionFunc         func() string
 	InputSchemaFunc         func() map[string]any
-	ExecuteFunc             func(ctx context.Context, params map[string]any) (*domain.SkillResult, error)
+	ExecuteFunc             func(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error)
 	RequiredPermissionsFunc func() []domain.Permission
-	ConfigFunc              func() domain.SkillConfig
+	ConfigFunc              func() domain.ToolConfig
 }
 
-func (m *MockSkill) Name() string                { return m.NameFunc() }
-func (m *MockSkill) Description() string         { return m.DescriptionFunc() }
-func (m *MockSkill) InputSchema() map[string]any { return m.InputSchemaFunc() }
-func (m *MockSkill) Execute(ctx context.Context, params map[string]any) (*domain.SkillResult, error) {
+func (m *MockTool) Name() string                { return m.NameFunc() }
+func (m *MockTool) Description() string         { return m.DescriptionFunc() }
+func (m *MockTool) InputSchema() map[string]any { return m.InputSchemaFunc() }
+func (m *MockTool) Execute(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) {
 	return m.ExecuteFunc(ctx, params)
 }
-func (m *MockSkill) RequiredPermissions() []domain.Permission { return m.RequiredPermissionsFunc() }
-func (m *MockSkill) Config() domain.SkillConfig               { return m.ConfigFunc() }
+func (m *MockTool) RequiredPermissions() []domain.Permission { return m.RequiredPermissionsFunc() }
+func (m *MockTool) Config() domain.ToolConfig               { return m.ConfigFunc() }
 
-// MockSkillRegistry implements the SkillRegistry interface.
-type MockSkillRegistry struct {
-	GetFunc  func(name string) (domain.Skill, error)
-	ListFunc func() []domain.Skill
+// MockToolRegistry implements the SkillRegistry interface.
+type MockToolRegistry struct {
+	GetFunc  func(name string) (domain.Tool, error)
+	ListFunc func() []domain.Tool
 }
 
-func (m *MockSkillRegistry) Register(skill domain.Skill) error { return nil } // Not used in these tests
-func (m *MockSkillRegistry) Get(name string) (domain.Skill, error) {
+func (m *MockToolRegistry) Register(tool domain.Tool) error { return nil } // Not used in these tests
+func (m *MockToolRegistry) Get(name string) (domain.Tool, error) {
 	return m.GetFunc(name)
 }
-func (m *MockSkillRegistry) List() []domain.Skill { return m.ListFunc() }
-func (m *MockSkillRegistry) ListForUser(ctx context.Context, userID string) ([]domain.Skill, error) {
+func (m *MockToolRegistry) List() []domain.Tool { return m.ListFunc() }
+func (m *MockToolRegistry) ListForUser(ctx context.Context, userID string) ([]domain.Tool, error) {
 	return m.ListFunc(), nil
 }
 
@@ -82,8 +82,8 @@ func (m *MockSecurityService) Audit(ctx context.Context, event *domain.AuditEven
 }
 
 func TestNewService(t *testing.T) {
-	mockCfg := &config.SkillsSystemConfig{}
-	mockRegistry := &MockSkillRegistry{}
+	mockCfg := &config.ToolsSystemConfig{}
+	mockRegistry := &MockToolRegistry{}
 	mockSecurity := &MockSecurityService{}
 
 	svc := NewService(mockCfg, mockRegistry, mockSecurity)
@@ -94,15 +94,15 @@ func TestNewService(t *testing.T) {
 }
 
 func TestExecute_SkillNotFound(t *testing.T) {
-	mockRegistry := &MockSkillRegistry{
-		GetFunc: func(name string) (domain.Skill, error) {
+	mockRegistry := &MockToolRegistry{
+		GetFunc: func(name string) (domain.Tool, error) {
 			return nil, domain.ErrNotFound // Simulate skill not found
 		},
 	}
 	mockSecurity := &MockSecurityService{
 		AuditFunc: func(ctx context.Context, event *domain.AuditEvent) error { return nil },
 	}
-	svc := NewService(&config.SkillsSystemConfig{}, mockRegistry, mockSecurity)
+	svc := NewService(&config.ToolsSystemConfig{}, mockRegistry, mockSecurity)
 
 	ctx := context.Background()
 	_, err := svc.Execute(ctx, "nonexistent", nil)
@@ -114,13 +114,13 @@ func TestExecute_SkillNotFound(t *testing.T) {
 
 func TestExecute_SkillExecutionFailure(t *testing.T) {
 	mockError := errors.New("skill failed")
-	mockSkill := &MockSkill{
+	mockTool := &MockTool{
 		NameFunc:    func() string { return "testskill" },
-		ExecuteFunc: func(ctx context.Context, params map[string]any) (*domain.SkillResult, error) { return nil, mockError },
+		ExecuteFunc: func(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) { return nil, mockError },
 	}
 	auditEvents := make(chan domain.AuditEvent, 2)
-	mockRegistry := &MockSkillRegistry{
-		GetFunc: func(name string) (domain.Skill, error) { return mockSkill, nil },
+	mockRegistry := &MockToolRegistry{
+		GetFunc: func(name string) (domain.Tool, error) { return mockTool, nil },
 	}
 	mockSecurity := &MockSecurityService{
 		AuditFunc: func(ctx context.Context, event *domain.AuditEvent) error {
@@ -128,7 +128,7 @@ func TestExecute_SkillExecutionFailure(t *testing.T) {
 			return nil
 		},
 	}
-	svc := NewService(&config.SkillsSystemConfig{}, mockRegistry, mockSecurity)
+	svc := NewService(&config.ToolsSystemConfig{}, mockRegistry, mockSecurity)
 
 	ctx := context.Background()
 	_, err := svc.Execute(ctx, "testskill", map[string]any{"param": "value"})
@@ -161,14 +161,14 @@ func TestExecute_SkillExecutionFailure(t *testing.T) {
 }
 
 func TestExecute_SkillExecutionSuccess(t *testing.T) {
-	mockResult := &domain.SkillResult{Output: "skill output"}
-	mockSkill := &MockSkill{
+	mockResult := &domain.ExecutionResult{Output: "skill output"}
+	mockTool := &MockTool{
 		NameFunc:    func() string { return "testskill" },
-		ExecuteFunc: func(ctx context.Context, params map[string]any) (*domain.SkillResult, error) { return mockResult, nil },
+		ExecuteFunc: func(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) { return mockResult, nil },
 	}
 	auditEvents := make(chan domain.AuditEvent, 2)
-	mockRegistry := &MockSkillRegistry{
-		GetFunc: func(name string) (domain.Skill, error) { return mockSkill, nil },
+	mockRegistry := &MockToolRegistry{
+		GetFunc: func(name string) (domain.Tool, error) { return mockTool, nil },
 	}
 	mockSecurity := &MockSecurityService{
 		AuditFunc: func(ctx context.Context, event *domain.AuditEvent) error {
@@ -176,7 +176,7 @@ func TestExecute_SkillExecutionSuccess(t *testing.T) {
 			return nil
 		},
 	}
-	svc := NewService(&config.SkillsSystemConfig{}, mockRegistry, mockSecurity)
+	svc := NewService(&config.ToolsSystemConfig{}, mockRegistry, mockSecurity)
 
 	ctx := context.Background()
 	result, err := svc.Execute(ctx, "testskill", map[string]any{"param": "value"})
@@ -212,25 +212,25 @@ func TestExecute_SkillExecutionSuccess(t *testing.T) {
 }
 
 func TestListSkills(t *testing.T) {
-	mockSkills := []domain.Skill{
-		&MockSkill{NameFunc: func() string { return "skill1" }},
-		&MockSkill{NameFunc: func() string { return "skill2" }},
+	mockTools := []domain.Tool{
+		&MockTool{NameFunc: func() string { return "skill1" }},
+		&MockTool{NameFunc: func() string { return "skill2" }},
 	}
-	mockRegistry := &MockSkillRegistry{
-		ListFunc: func() []domain.Skill { return mockSkills },
+	mockRegistry := &MockToolRegistry{
+		ListFunc: func() []domain.Tool { return mockTools },
 	}
 	mockSecurity := &MockSecurityService{
 		AuditFunc: func(ctx context.Context, event *domain.AuditEvent) error { return nil },
 	}
-	svc := NewService(&config.SkillsSystemConfig{}, mockRegistry, mockSecurity)
+	svc := NewService(&config.ToolsSystemConfig{}, mockRegistry, mockSecurity)
 
 	ctx := context.Background()
-	listedSkills, err := svc.ListSkills(ctx, "user1") // userID is ignored in mock for now
+	listedSkills, err := svc.ListTools(ctx, "user1") // userID is ignored in mock for now
 	if err != nil {
 		t.Errorf("ListSkills returned an unexpected error: %v", err)
 	}
-	if len(listedSkills) != len(mockSkills) {
-		t.Errorf("Expected %d skills, got %d", len(mockSkills), len(listedSkills))
+	if len(listedSkills) != len(mockTools) {
+		t.Errorf("Expected %d skills, got %d", len(mockTools), len(listedSkills))
 	}
 	if listedSkills[0].Name() != "skill1" || listedSkills[1].Name() != "skill2" {
 		t.Errorf("Listed skills mismatch: got %+v", listedSkills)
@@ -238,28 +238,28 @@ func TestListSkills(t *testing.T) {
 }
 
 func TestListSkillsForUser(t *testing.T) {
-	// For now, MockSkillRegistry.ListForUser simply calls List().
+	// For now, MockToolRegistry.ListForUser simply calls List().
 	// This test just ensures the method is callable and returns expected results from List().
-	mockSkills := []domain.Skill{
-		&MockSkill{NameFunc: func() string { return "skill1" }},
-		&MockSkill{NameFunc: func() string { return "skill2" }},
+	mockTools := []domain.Tool{
+		&MockTool{NameFunc: func() string { return "skill1" }},
+		&MockTool{NameFunc: func() string { return "skill2" }},
 	}
-	mockRegistry := &MockSkillRegistry{
-		ListFunc: func() []domain.Skill { return mockSkills },
+	mockRegistry := &MockToolRegistry{
+		ListFunc: func() []domain.Tool { return mockTools },
 	}
 	mockSecurity := &MockSecurityService{
 		AuditFunc: func(ctx context.Context, event *domain.AuditEvent) error { return nil },
 	}
-	svc := NewService(&config.SkillsSystemConfig{}, mockRegistry, mockSecurity)
+	svc := NewService(&config.ToolsSystemConfig{}, mockRegistry, mockSecurity)
 
 	ctx := context.Background()
-	listedSkills, err := svc.ListSkills(ctx, "user1")
+	listedSkills, err := svc.ListTools(ctx, "user1")
 
 	if err != nil {
 		t.Errorf("Expected no error, got %v", err)
 	}
-	if len(listedSkills) != len(mockSkills) {
-		t.Errorf("Expected %d skills, got %d", len(mockSkills), len(listedSkills))
+	if len(listedSkills) != len(mockTools) {
+		t.Errorf("Expected %d skills, got %d", len(mockTools), len(listedSkills))
 	}
 	if listedSkills[0].Name() != "skill1" || listedSkills[1].Name() != "skill2" {
 		t.Errorf("Listed skills mismatch: got %+v", listedSkills)
@@ -269,19 +269,19 @@ func TestListSkillsForUser(t *testing.T) {
 // RBAC Permission Tests
 
 func TestExecuteWithUser_AdminCanExecuteAllSkills(t *testing.T) {
-	mockSkill := &MockSkill{
+	mockTool := &MockTool{
 		NameFunc: func() string { return "admin.user" },
-		ExecuteFunc: func(ctx context.Context, params map[string]any) (*domain.SkillResult, error) {
-			return &domain.SkillResult{Output: "admin command executed"}, nil
+		ExecuteFunc: func(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) {
+			return &domain.ExecutionResult{Output: "admin command executed"}, nil
 		},
 	}
-	mockRegistry := &MockSkillRegistry{
-		GetFunc: func(name string) (domain.Skill, error) { return mockSkill, nil },
+	mockRegistry := &MockToolRegistry{
+		GetFunc: func(name string) (domain.Tool, error) { return mockTool, nil },
 	}
 	mockSecurity := &MockSecurityService{
 		AuditFunc: func(ctx context.Context, event *domain.AuditEvent) error { return nil },
 	}
-	svc := NewService(&config.SkillsSystemConfig{}, mockRegistry, mockSecurity)
+	svc := NewService(&config.ToolsSystemConfig{}, mockRegistry, mockSecurity)
 
 	adminUser := &domain.User{
 		ID:   "admin1",
@@ -300,11 +300,11 @@ func TestExecuteWithUser_AdminCanExecuteAllSkills(t *testing.T) {
 }
 
 func TestExecuteWithUser_UserCannotExecuteAdminSkills(t *testing.T) {
-	mockSkill := &MockSkill{
+	mockTool := &MockTool{
 		NameFunc: func() string { return "admin.user" },
 	}
-	mockRegistry := &MockSkillRegistry{
-		GetFunc: func(name string) (domain.Skill, error) { return mockSkill, nil },
+	mockRegistry := &MockToolRegistry{
+		GetFunc: func(name string) (domain.Tool, error) { return mockTool, nil },
 	}
 	auditEvents := make(chan domain.AuditEvent, 1)
 	mockSecurity := &MockSecurityService{
@@ -313,7 +313,7 @@ func TestExecuteWithUser_UserCannotExecuteAdminSkills(t *testing.T) {
 			return nil
 		},
 	}
-	svc := NewService(&config.SkillsSystemConfig{}, mockRegistry, mockSecurity)
+	svc := NewService(&config.ToolsSystemConfig{}, mockRegistry, mockSecurity)
 
 	regularUser := &domain.User{
 		ID:   "user1",
@@ -330,8 +330,8 @@ func TestExecuteWithUser_UserCannotExecuteAdminSkills(t *testing.T) {
 	// Verify audit event for permission denial
 	select {
 	case event := <-auditEvents:
-		if event.Action != "skill_execution_denied" {
-			t.Errorf("Expected 'skill_execution_denied' action, got %s", event.Action)
+		if event.Action != "tool_execution_denied" {
+			t.Errorf("Expected 'tool_execution_denied' action, got %s", event.Action)
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("Timeout waiting for audit event")
@@ -339,19 +339,19 @@ func TestExecuteWithUser_UserCannotExecuteAdminSkills(t *testing.T) {
 }
 
 func TestExecuteWithUser_UserCanExecuteUserSkills(t *testing.T) {
-	mockSkill := &MockSkill{
+	mockTool := &MockTool{
 		NameFunc: func() string { return "weather" },
-		ExecuteFunc: func(ctx context.Context, params map[string]any) (*domain.SkillResult, error) {
-			return &domain.SkillResult{Output: "sunny"}, nil
+		ExecuteFunc: func(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) {
+			return &domain.ExecutionResult{Output: "sunny"}, nil
 		},
 	}
-	mockRegistry := &MockSkillRegistry{
-		GetFunc: func(name string) (domain.Skill, error) { return mockSkill, nil },
+	mockRegistry := &MockToolRegistry{
+		GetFunc: func(name string) (domain.Tool, error) { return mockTool, nil },
 	}
 	mockSecurity := &MockSecurityService{
 		AuditFunc: func(ctx context.Context, event *domain.AuditEvent) error { return nil },
 	}
-	svc := NewService(&config.SkillsSystemConfig{}, mockRegistry, mockSecurity)
+	svc := NewService(&config.ToolsSystemConfig{}, mockRegistry, mockSecurity)
 
 	regularUser := &domain.User{
 		ID:   "user1",
@@ -370,19 +370,19 @@ func TestExecuteWithUser_UserCanExecuteUserSkills(t *testing.T) {
 }
 
 func TestExecuteWithUser_GuestCanOnlyExecuteGuestSkills(t *testing.T) {
-	mockSkill := &MockSkill{
+	mockTool := &MockTool{
 		NameFunc: func() string { return "calculator" },
-		ExecuteFunc: func(ctx context.Context, params map[string]any) (*domain.SkillResult, error) {
-			return &domain.SkillResult{Output: "5"}, nil
+		ExecuteFunc: func(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) {
+			return &domain.ExecutionResult{Output: "5"}, nil
 		},
 	}
-	mockRegistry := &MockSkillRegistry{
-		GetFunc: func(name string) (domain.Skill, error) { return mockSkill, nil },
+	mockRegistry := &MockToolRegistry{
+		GetFunc: func(name string) (domain.Tool, error) { return mockTool, nil },
 	}
 	mockSecurity := &MockSecurityService{
 		AuditFunc: func(ctx context.Context, event *domain.AuditEvent) error { return nil },
 	}
-	svc := NewService(&config.SkillsSystemConfig{}, mockRegistry, mockSecurity)
+	svc := NewService(&config.ToolsSystemConfig{}, mockRegistry, mockSecurity)
 
 	guestUser := &domain.User{
 		ID:   "guest1",
@@ -401,16 +401,16 @@ func TestExecuteWithUser_GuestCanOnlyExecuteGuestSkills(t *testing.T) {
 }
 
 func TestExecuteWithUser_GuestCannotExecuteUserSkills(t *testing.T) {
-	mockSkill := &MockSkill{
+	mockTool := &MockTool{
 		NameFunc: func() string { return "weather" },
 	}
-	mockRegistry := &MockSkillRegistry{
-		GetFunc: func(name string) (domain.Skill, error) { return mockSkill, nil },
+	mockRegistry := &MockToolRegistry{
+		GetFunc: func(name string) (domain.Tool, error) { return mockTool, nil },
 	}
 	mockSecurity := &MockSecurityService{
 		AuditFunc: func(ctx context.Context, event *domain.AuditEvent) error { return nil },
 	}
-	svc := NewService(&config.SkillsSystemConfig{}, mockRegistry, mockSecurity)
+	svc := NewService(&config.ToolsSystemConfig{}, mockRegistry, mockSecurity)
 
 	guestUser := &domain.User{
 		ID:   "guest1",
@@ -426,25 +426,25 @@ func TestExecuteWithUser_GuestCannotExecuteUserSkills(t *testing.T) {
 }
 
 func TestExecuteWithUser_AllowedSkillsWhitelist(t *testing.T) {
-	mockSkill := &MockSkill{
+	mockTool := &MockTool{
 		NameFunc: func() string { return "calculator" },
-		ExecuteFunc: func(ctx context.Context, params map[string]any) (*domain.SkillResult, error) {
-			return &domain.SkillResult{Output: "5"}, nil
+		ExecuteFunc: func(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) {
+			return &domain.ExecutionResult{Output: "5"}, nil
 		},
 	}
-	mockRegistry := &MockSkillRegistry{
-		GetFunc: func(name string) (domain.Skill, error) { return mockSkill, nil },
+	mockRegistry := &MockToolRegistry{
+		GetFunc: func(name string) (domain.Tool, error) { return mockTool, nil },
 	}
 	mockSecurity := &MockSecurityService{
 		AuditFunc: func(ctx context.Context, event *domain.AuditEvent) error { return nil },
 	}
-	svc := NewService(&config.SkillsSystemConfig{}, mockRegistry, mockSecurity)
+	svc := NewService(&config.ToolsSystemConfig{}, mockRegistry, mockSecurity)
 
-	// User with AllowedSkills whitelist - only calculator and datetime allowed
+	// User with AllowedTools whitelist - only calculator and datetime allowed
 	restrictedUser := &domain.User{
 		ID:            "user1",
 		Role:          domain.RoleUser,
-		AllowedSkills: []string{"calculator", "datetime"},
+		AllowedTools: []string{"calculator", "datetime"},
 	}
 
 	ctx := context.Background()
@@ -460,22 +460,22 @@ func TestExecuteWithUser_AllowedSkillsWhitelist(t *testing.T) {
 }
 
 func TestExecuteWithUser_AllowedSkillsBlocksNonWhitelisted(t *testing.T) {
-	mockSkill := &MockSkill{
+	mockTool := &MockTool{
 		NameFunc: func() string { return "weather" },
 	}
-	mockRegistry := &MockSkillRegistry{
-		GetFunc: func(name string) (domain.Skill, error) { return mockSkill, nil },
+	mockRegistry := &MockToolRegistry{
+		GetFunc: func(name string) (domain.Tool, error) { return mockTool, nil },
 	}
 	mockSecurity := &MockSecurityService{
 		AuditFunc: func(ctx context.Context, event *domain.AuditEvent) error { return nil },
 	}
-	svc := NewService(&config.SkillsSystemConfig{}, mockRegistry, mockSecurity)
+	svc := NewService(&config.ToolsSystemConfig{}, mockRegistry, mockSecurity)
 
-	// User with AllowedSkills whitelist - only calculator and datetime allowed
+	// User with AllowedTools whitelist - only calculator and datetime allowed
 	restrictedUser := &domain.User{
 		ID:            "user1",
 		Role:          domain.RoleUser,
-		AllowedSkills: []string{"calculator", "datetime"},
+		AllowedTools: []string{"calculator", "datetime"},
 	}
 
 	ctx := context.Background()
@@ -488,32 +488,32 @@ func TestExecuteWithUser_AllowedSkillsBlocksNonWhitelisted(t *testing.T) {
 }
 
 func TestExecuteWithUser_EmptyAllowedSkillsAllowsAllForRole(t *testing.T) {
-	mockSkill := &MockSkill{
+	mockTool := &MockTool{
 		NameFunc: func() string { return "weather" },
-		ExecuteFunc: func(ctx context.Context, params map[string]any) (*domain.SkillResult, error) {
-			return &domain.SkillResult{Output: "sunny"}, nil
+		ExecuteFunc: func(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) {
+			return &domain.ExecutionResult{Output: "sunny"}, nil
 		},
 	}
-	mockRegistry := &MockSkillRegistry{
-		GetFunc: func(name string) (domain.Skill, error) { return mockSkill, nil },
+	mockRegistry := &MockToolRegistry{
+		GetFunc: func(name string) (domain.Tool, error) { return mockTool, nil },
 	}
 	mockSecurity := &MockSecurityService{
 		AuditFunc: func(ctx context.Context, event *domain.AuditEvent) error { return nil },
 	}
-	svc := NewService(&config.SkillsSystemConfig{}, mockRegistry, mockSecurity)
+	svc := NewService(&config.ToolsSystemConfig{}, mockRegistry, mockSecurity)
 
-	// User with empty AllowedSkills - should allow all skills for their role
+	// User with empty AllowedTools - should allow all skills for their role
 	unrestrictedUser := &domain.User{
 		ID:            "user1",
 		Role:          domain.RoleUser,
-		AllowedSkills: []string{}, // Empty = all allowed
+		AllowedTools: []string{}, // Empty = all allowed
 	}
 
 	ctx := context.Background()
 	result, err := svc.ExecuteWithUser(ctx, unrestrictedUser, "weather", nil)
 
 	if err != nil {
-		t.Errorf("Empty AllowedSkills should allow all role skills, got error: %v", err)
+		t.Errorf("Empty AllowedTools should allow all role skills, got error: %v", err)
 	}
 	if result == nil || result.Output != "sunny" {
 		t.Errorf("Expected weather result, got: %v", result)

@@ -100,17 +100,17 @@ type MCPConfig struct {
 	Client MCPClientConfig `yaml:"client"`
 }
 
-// SkillConfig configures an individual skill.
-type SkillConfig struct {
+// ToolConfig configures an individual tool.
+type ToolConfig struct {
 	Enabled bool                   `yaml:"enabled"`
 	APIKey  domain.SecureString    `yaml:"api_key"`
 	Env     map[string]string      `yaml:"env"`
 	Params  map[string]interface{} `yaml:"params"`
 }
 
-// SkillsSystemConfig defines global settings for the skill system.
-type SkillsSystemConfig struct {
-	Entries map[string]SkillConfig `yaml:"entries"`
+// ToolsSystemConfig defines global settings for the tool system.
+type ToolsSystemConfig struct {
+	Entries map[string]ToolConfig `yaml:"entries"`
 	Load    struct {
 		ExtraDirs []string `yaml:"extra_dirs"`
 		Watch     bool     `yaml:"watch"`
@@ -220,8 +220,8 @@ type ToolsExecConfig struct {
 	RestrictToWorkspace bool `yaml:"restrict_to_workspace"`
 }
 
-// ToolsConfig holds all tool-related configurations.
-type ToolsConfig struct {
+// ToolSettings holds all tool-specific configurations (API keys, limits, etc).
+type ToolSettings struct {
 	WebSearch ToolsWebSearchConfig `yaml:"web_search"`
 	Exec      ToolsExecConfig      `yaml:"exec"`
 }

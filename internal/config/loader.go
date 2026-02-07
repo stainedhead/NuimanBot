@@ -161,8 +161,8 @@ func LoadConfig(configPaths ...string) (*NuimanBotConfig, error) {
 		cfg.ExternalAPI.REST.APIKey = domain.NewSecureStringFromString(v.GetString("external_api.rest.api_key"))
 	}
 
-	// Load skills from environment variables
-	loadSkillsFromEnv(&cfg)
+	// Load tools from environment variables
+	loadToolsFromEnv(&cfg)
 
 	// Set environment from env var if not set in config
 	if cfg.Server.Environment == "" {
@@ -278,19 +278,19 @@ func loadProvidersFromEnv(cfg *NuimanBotConfig) {
 	}
 }
 
-// loadSkillsFromEnv loads skill configurations from environment variables.
-func loadSkillsFromEnv(cfg *NuimanBotConfig) {
+// loadToolsFromEnv loads tool configurations from environment variables.
+func loadToolsFromEnv(cfg *NuimanBotConfig) {
 	// Initialize map if not exists
-	if cfg.Skills.Entries == nil {
-		cfg.Skills.Entries = make(map[string]SkillConfig)
+	if cfg.Tools.Entries == nil {
+		cfg.Tools.Entries = make(map[string]ToolConfig)
 	}
 
-	// Check for calculator skill API key
-	if apiKey := os.Getenv("NUIMANBOT_SKILLS_ENTRIES_CALCULATOR_APIKEY"); apiKey != "" {
-		skillCfg := cfg.Skills.Entries["calculator"]
-		skillCfg.APIKey = domain.NewSecureStringFromString(apiKey)
-		cfg.Skills.Entries["calculator"] = skillCfg
+	// Check for calculator tool API key
+	if apiKey := os.Getenv("NUIMANBOT_TOOLS_ENTRIES_CALCULATOR_APIKEY"); apiKey != "" {
+		toolCfg := cfg.Tools.Entries["calculator"]
+		toolCfg.APIKey = domain.NewSecureStringFromString(apiKey)
+		cfg.Tools.Entries["calculator"] = toolCfg
 	}
 
-	// Add more skills as needed
+	// Add more tools as needed
 }
