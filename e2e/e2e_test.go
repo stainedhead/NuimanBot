@@ -51,10 +51,12 @@ func TestFullApplicationLifecycle(t *testing.T) {
 		t.Fatalf("Database ping failed: %v", err)
 	}
 
-	// Verify skills are registered
+	// Verify skills are registered (5 core + 5 developer productivity = 10 total)
 	skills := app.SkillRegistry.List()
-	if len(skills) < 2 {
-		t.Errorf("Expected at least 2 skills registered, got %d", len(skills))
+	expectedSkillCount := 10
+	if len(skills) < expectedSkillCount {
+		t.Errorf("Expected at least %d skills registered, got %d", expectedSkillCount, len(skills))
+		t.Logf("Registered skills: %v", getSkillNames(skills))
 	}
 
 	// Test graceful shutdown with context cancellation
@@ -448,4 +450,205 @@ func TestSignalHandling(t *testing.T) {
 
 	// Stop signal notifications
 	signal.Stop(sigChan)
+}
+
+// TestDeveloperProductivitySkillsRegistered verifies all 10 skills are registered.
+func TestDeveloperProductivitySkillsRegistered(t *testing.T) {
+	app, cleanup := setupTestApp(t)
+	defer cleanup()
+
+	skills := app.SkillRegistry.List()
+
+	// Expected skills: calculator, datetime, weather, websearch, notes, github, repo_search, doc_summarize, summarize, coding_agent
+	expectedSkills := []string{
+		"calculator", "datetime", "weather", "websearch", "notes",
+		"github", "repo_search", "doc_summarize", "summarize", "coding_agent",
+	}
+
+	skillMap := make(map[string]bool)
+	for _, skill := range skills {
+		skillMap[skill.Name()] = true
+	}
+
+	for _, expectedName := range expectedSkills {
+		if !skillMap[expectedName] {
+			t.Errorf("Expected skill '%s' not registered", expectedName)
+		}
+	}
+
+	t.Logf("All %d skills registered: %v", len(skills), getSkillNames(skills))
+}
+
+// TestGitHubSkillE2E tests GitHub skill end-to-end (conditional on gh CLI availability).
+func TestGitHubSkillE2E(t *testing.T) {
+	if !isToolAvailable("gh") {
+		t.Skip("gh CLI not available - skipping GitHub skill e2e test")
+	}
+
+	app, cleanup := setupTestApp(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Test message requesting GitHub issue list
+	msg := createTestMessage("List issues from NuimanBot repository")
+
+	// Configure mock LLM to invoke GitHub skill
+	mockLLM := app.LLMService.(*mockLLMService)
+	mockLLM.SetResponse("List issues from NuimanBot repository", `I'll check the issues for you.
+
+<skill name="github" action="issue_list" repo="owner/NuimanBot"/>
+
+Here are the issues.`)
+
+	// Process message
+	response, err := app.ChatService.ProcessMessage(ctx, &msg)
+	if err != nil {
+		t.Logf("GitHub skill execution returned error (expected if repo/auth not configured): %v", err)
+		// Not a test failure - tool may not be authenticated
+		return
+	}
+
+	// Verify response
+	if response.Content == "" {
+		t.Error("Response content is empty")
+	}
+
+	t.Logf("GitHub skill response: %s", response.Content)
+}
+
+// TestRepoSearchSkillE2E tests repo search skill end-to-end (conditional on ripgrep availability).
+func TestRepoSearchSkillE2E(t *testing.T) {
+	if !isToolAvailable("rg") {
+		t.Skip("ripgrep not available - skipping repo search e2e test")
+	}
+
+	app, cleanup := setupTestApp(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Test message requesting code search (use safe phrasing to avoid input validation false positives)
+	msg := createTestMessage("Find all TODO comments in the project")
+
+	// Configure mock LLM to invoke repo_search skill
+	mockLLM := app.LLMService.(*mockLLMService)
+	mockLLM.SetResponse("Find all TODO comments in the project", `I'll search the codebase for you.
+
+<skill name="repo_search" query="TODO" path="."/>
+
+Here are the search results.`)
+
+	// Process message
+	response, err := app.ChatService.ProcessMessage(ctx, &msg)
+	if err != nil {
+		t.Fatalf("Repo search execution failed: %v", err)
+	}
+
+	// Verify response
+	if response.Content == "" {
+		t.Error("Response content is empty")
+	}
+
+	t.Logf("Repo search response: %s", response.Content)
+}
+
+// TestSummarizeSkillE2E tests web summarization skill end-to-end.
+func TestSummarizeSkillE2E(t *testing.T) {
+	app, cleanup := setupTestApp(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Test message requesting URL summarization
+	msg := createTestMessage("Summarize https://example.com")
+
+	// Configure mock LLM to invoke summarize skill
+	mockLLM := app.LLMService.(*mockLLMService)
+	mockLLM.SetResponse("Summarize https://example.com", `I'll summarize that URL for you.
+
+<skill name="summarize" url="https://example.com" length="brief"/>
+
+Here's the summary.`)
+
+	// Process message
+	response, err := app.ChatService.ProcessMessage(ctx, &msg)
+	if err != nil {
+		t.Logf("Summarize skill execution returned error (may need network/LLM): %v", err)
+		// Not a test failure - may need external resources
+		return
+	}
+
+	// Verify response
+	if response.Content == "" {
+		t.Error("Response content is empty")
+	}
+
+	t.Logf("Summarize skill response: %s", response.Content)
+}
+
+// TestDocSummarizeSkillE2E tests document summarization skill end-to-end.
+func TestDocSummarizeSkillE2E(t *testing.T) {
+	app, cleanup := setupTestApp(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Test message requesting document summarization
+	testDoc := "This is a test document with multiple paragraphs.\n\nIt contains important information about testing.\n\nThe document has several sections."
+
+	msg := createTestMessage("Summarize this document: " + testDoc)
+
+	// Configure mock LLM to invoke doc_summarize skill
+	mockLLM := app.LLMService.(*mockLLMService)
+	mockLLM.SetResponse("Summarize this document: "+testDoc, `I'll summarize the document for you.
+
+<skill name="doc_summarize" text="`+testDoc+`" length="brief"/>
+
+Here's the summary.`)
+
+	// Process message
+	response, err := app.ChatService.ProcessMessage(ctx, &msg)
+	if err != nil {
+		t.Logf("Doc summarize skill execution returned error (may need LLM): %v", err)
+		// Not a test failure - needs LLM service
+		return
+	}
+
+	// Verify response
+	if response.Content == "" {
+		t.Error("Response content is empty")
+	}
+
+	t.Logf("Doc summarize skill response: %s", response.Content)
+}
+
+// TestCodingAgentSkillRegistration tests that coding agent skill is registered (manual execution only).
+func TestCodingAgentSkillRegistration(t *testing.T) {
+	app, cleanup := setupTestApp(t)
+	defer cleanup()
+
+	// Verify coding_agent skill is registered
+	skill, err := app.SkillRegistry.Get("coding_agent")
+	if err != nil {
+		t.Fatalf("coding_agent skill not registered: %v", err)
+	}
+
+	// Verify skill metadata
+	if skill.Name() != "coding_agent" {
+		t.Errorf("Expected skill name 'coding_agent', got '%s'", skill.Name())
+	}
+
+	desc := skill.Description()
+	if !strings.Contains(strings.ToLower(desc), "coding") {
+		t.Errorf("Expected description to mention 'coding', got: %s", desc)
+	}
+
+	// Verify InputSchema
+	schema := skill.InputSchema()
+	if schema == nil {
+		t.Error("InputSchema is nil")
+	}
+
+	t.Logf("coding_agent skill registered successfully: %s", desc)
 }

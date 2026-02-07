@@ -9,7 +9,7 @@ An AI agent framework built with Clean Architecture principles, featuring LLM in
 - **Multi-LLM Support**: Anthropic Claude, OpenAI GPT, and Ollama (local models)
 - **Multi-Provider Fallback**: Automatic failover across LLM providers for high availability
 - **Streaming Responses**: Real-time token-by-token LLM responses with graceful degradation
-- **Rich Skill Library**: 5 built-in skills (calculator, datetime, weather, web search, notes)
+- **Rich Skill Library**: 10 built-in skills (calculator, datetime, weather, web search, notes, github, repo_search, doc_summarize, summarize, coding_agent)
 - **Multiple Gateways**: CLI, Telegram, and Slack interfaces with concurrent operation
 
 ### Security & Access Control
@@ -300,6 +300,61 @@ Create, read, update, and delete personal notes:
 - **Permissions**: Write
 - **Storage**: SQLite with user isolation
 - **Usage**: "Create a note titled 'Meeting' with content 'Q1 planning session'", "List my notes"
+
+## Developer Productivity Skills
+
+### GitHub
+GitHub operations via `gh` CLI integration:
+- **Operations**: Issue management (create, list, view, comment, close), PR operations (create, list, view, review, merge), repository operations (view), workflow triggers
+- **Supported Actions**: 12 GitHub actions (issue_create, issue_list, pr_create, pr_list, pr_review, pr_merge, repo_view, workflow_run, etc.)
+- **Permissions**: Network, Shell
+- **Requirements**: GitHub CLI (`gh`) installed and authenticated
+- **Rate Limiting**: 30 operations/minute (aligned with GitHub API limits)
+- **Security**: Command allowlist (only `gh` command allowed), output sanitization
+- **Usage**: "List issues in user/repo", "Create a PR", "Review PR #123"
+
+### RepoSearch
+Fast codebase search using ripgrep (`rg`):
+- **Operations**: Content search, filename search, regex pattern matching
+- **Features**: File type filtering, directory scope, context lines, max results limiting
+- **Permissions**: Read
+- **Requirements**: ripgrep (`rg`) installed
+- **Performance**: <2s for typical repos (<100k LOC)
+- **Security**: Workspace restriction, path traversal prevention, output sanitization
+- **Usage**: "Search for 'User struct' in the codebase", "Find all TODO comments"
+
+### DocSummarize
+Summarize documentation files and links using LLM:
+- **Input Types**: Local files, HTTP/HTTPS URLs, Git URLs
+- **Supported Formats**: Markdown, plain text, HTML
+- **Features**: Configurable summary length (max_words), optional focus area, metadata extraction
+- **Permissions**: Read, Network
+- **Security**: Domain allowlist, file size limits (5MB), content sanitization
+- **LLM Integration**: Uses configured LLM provider for summarization
+- **Usage**: "Summarize https://github.com/user/repo/README.md", "Summarize doc.md focusing on API changes"
+
+### Summarize
+Summarize external URLs and YouTube videos:
+- **Input Types**: Web pages (HTTP/HTTPS), YouTube videos
+- **Output Formats**: Brief, detailed, bullet points
+- **Features**: YouTube transcript extraction (via yt-dlp), smart content extraction, optional key quotes
+- **Permissions**: Network
+- **Requirements**: `yt-dlp` for YouTube support (optional)
+- **Security**: URL validation (no localhost/private IPs), content-type validation, size limits (10MB pages)
+- **LLM Integration**: Uses configured LLM provider
+- **Usage**: "Summarize https://example.com/article", "Summarize this YouTube video: https://youtube.com/watch?v=..."
+
+### CodingAgent
+Orchestrate external coding CLI tools (admin-only):
+- **Supported Tools**: Codex, Claude Code, OpenCode, Gemini CLI, GitHub Copilot CLI
+- **Execution Modes**: Interactive (with approval prompts), Auto (workspace-only auto-approve), YOLO (no approvals)
+- **Features**: PTY mode for interactive CLIs, background session support, workspace restriction
+- **Permissions**: Shell (admin-only by default)
+- **Security**: Workspace restriction, path traversal prevention, admin permission required, disabled by default
+- **Requirements**: Respective CLI tool installed (e.g., `claude-code`, `codex`)
+- **Usage**: "Use claude_code to add error handling to utils.go", "Run codex to refactor this function"
+
+**Note**: All developer productivity skills follow RBAC, include audit logging, and have comprehensive test coverage (85%+).
 
 ## Development
 

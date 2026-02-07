@@ -5,10 +5,14 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
+
+	"net/http"
+	"time"
 
 	"nuimanbot/internal/adapter/gateway/cli"
 	"nuimanbot/internal/adapter/repository/sqlite"
@@ -17,10 +21,20 @@ import (
 	"nuimanbot/internal/infrastructure/crypto"
 	"nuimanbot/internal/skills/calculator"
 	"nuimanbot/internal/skills/datetime"
+	"nuimanbot/internal/skills/notes"
+	"nuimanbot/internal/skills/weather"
+	"nuimanbot/internal/skills/websearch"
 	"nuimanbot/internal/usecase/chat"
 	"nuimanbot/internal/usecase/memory"
 	"nuimanbot/internal/usecase/security"
 	"nuimanbot/internal/usecase/skill"
+	"nuimanbot/internal/usecase/skill/coding_agent"
+	"nuimanbot/internal/usecase/skill/common"
+	"nuimanbot/internal/usecase/skill/doc_summarize"
+	"nuimanbot/internal/usecase/skill/executor"
+	"nuimanbot/internal/usecase/skill/github"
+	"nuimanbot/internal/usecase/skill/repo_search"
+	"nuimanbot/internal/usecase/skill/summarize"
 )
 
 // testApplication represents a fully-initialized NuimanBot application for testing.
@@ -183,6 +197,86 @@ func setupTestApp(t *testing.T) (*testApplication, func()) {
 		t.Fatalf("Failed to register datetime skill: %v", err)
 	}
 
+	// Register core skills (weather, websearch, notes)
+	weatherSkill := weather.NewWeather("test-api-key", 30)
+	if err := skillRegistry.Register(weatherSkill); err != nil {
+		t.Fatalf("Failed to register weather skill: %v", err)
+	}
+
+	webSearchSkill := websearch.NewWebSearch(30)
+	if err := skillRegistry.Register(webSearchSkill); err != nil {
+		t.Fatalf("Failed to register websearch skill: %v", err)
+	}
+
+	notesRepo := sqlite.NewNotesRepository(db)
+	notesSkill := notes.NewNotes(notesRepo)
+	if err := skillRegistry.Register(notesSkill); err != nil {
+		t.Fatalf("Failed to register notes skill: %v", err)
+	}
+
+	// Register developer productivity skills
+	// Create shared dependencies
+	executorSvc := executor.NewExecutorService()
+	rateLimiter := common.NewRateLimiter()
+	sanitizer := common.NewOutputSanitizer()
+	httpClient := &http.Client{Timeout: 60 * time.Second}
+
+	workspacePaths := []string{tempDir}
+	pathValidator := common.NewPathValidator(workspacePaths)
+
+	// GitHub skill
+	githubSkill := github.NewGitHubSkill(
+		domain.SkillConfig{Enabled: true},
+		executorSvc,
+		rateLimiter,
+		sanitizer,
+	)
+	if err := skillRegistry.Register(githubSkill); err != nil {
+		t.Fatalf("Failed to register github skill: %v", err)
+	}
+
+	// RepoSearch skill
+	repoSearchSkill := repo_search.NewRepoSearchSkill(
+		domain.SkillConfig{Enabled: true},
+		executorSvc,
+		pathValidator,
+		sanitizer,
+	)
+	if err := skillRegistry.Register(repoSearchSkill); err != nil {
+		t.Fatalf("Failed to register repo_search skill: %v", err)
+	}
+
+	// DocSummarize skill
+	docSummarizeSkill := doc_summarize.NewDocSummarizeSkill(
+		domain.SkillConfig{Enabled: true},
+		llmService,
+		httpClient,
+	)
+	if err := skillRegistry.Register(docSummarizeSkill); err != nil {
+		t.Fatalf("Failed to register doc_summarize skill: %v", err)
+	}
+
+	// Summarize skill
+	summarizeSkill := summarize.NewSummarizeSkill(
+		domain.SkillConfig{Enabled: true},
+		llmService,
+		executorSvc,
+		httpClient,
+	)
+	if err := skillRegistry.Register(summarizeSkill); err != nil {
+		t.Fatalf("Failed to register summarize skill: %v", err)
+	}
+
+	// CodingAgent skill
+	codingAgentSkill := coding_agent.NewCodingAgentSkill(
+		domain.SkillConfig{Enabled: true},
+		executorSvc,
+		pathValidator,
+	)
+	if err := skillRegistry.Register(codingAgentSkill); err != nil {
+		t.Fatalf("Failed to register coding_agent skill: %v", err)
+	}
+
 	skillExecutionService := skill.NewService(&cfg.Skills, skillRegistry, securityService)
 
 	// Initialize chat service
@@ -280,4 +374,19 @@ func createTestMessage(content string) domain.IncomingMessage {
 		PlatformUID: "test-user-123",
 		Text:        content,
 	}
+}
+
+// getSkillNames extracts skill names from a skill list.
+func getSkillNames(skills []domain.Skill) []string {
+	names := make([]string, len(skills))
+	for i, skill := range skills {
+		names[i] = skill.Name()
+	}
+	return names
+}
+
+// isToolAvailable checks if an external CLI tool is available in PATH.
+func isToolAvailable(toolName string) bool {
+	_, err := exec.LookPath(toolName)
+	return err == nil
 }
