@@ -68,11 +68,11 @@
 
 #### FR-005: Custom Tools System
 - **Priority:** P0 (Critical)
-- **Status:** ✅ Complete (10/10 tools - 5 core + 5 developer productivity)
+- **Status:** ✅ Complete (12/12 tools - 5 core + 7 developer productivity)
 - **Description:** Built-in tools only, no external tool imports
 - **Acceptance Criteria:**
-  - ✅ Five core tools: calculator, datetime, weather, websearch, notes
-  - ✅ Five developer productivity tools: github, repo_search, doc_summarize, summarize, coding_agent
+  - ✅ Five core tools (infrastructure layer): calculator, datetime, weather, websearch, notes
+  - ✅ Seven developer productivity tools (use case layer): github, repo_search, doc_summarize, summarize, coding_agent, executor, common
   - ✅ Permission-gated execution (RBAC enforcement)
   - ✅ Rate limiting per user and per tool (token bucket algorithm)
   - ✅ Timeout enforcement (configurable, 30s default)
@@ -137,9 +137,9 @@
   - Codecov integration for coverage tracking
   - All pipelines passing
 
-#### FR-011: Agent Skills System
+#### FR-011: Agent Skills System (Basic)
 - **Priority:** P1 (High)
-- **Status:** ✅ Complete (Phases 0-8)
+- **Status:** ✅ Complete (Phases 0-2)
 - **Description:** Reusable prompt templates following Anthropic Agent Skills standard
 - **Acceptance Criteria:**
   - ✅ YAML frontmatter parsing (name, description, allowed-tools, invocability)
@@ -153,6 +153,76 @@
   - ✅ CLI integration: /help (list), /describe (details), /skill-name (invoke)
   - ✅ E2E integration with chat orchestrator
   - ✅ 90%+ test coverage across all layers
+
+#### FR-012: Subagent Execution (Phase 3A)
+- **Priority:** P1 (High)
+- **Status:** ✅ Complete (6/6 tasks, 34h)
+- **Description:** Autonomous multi-step workflows with resource limits
+- **Acceptance Criteria:**
+  - ✅ Context forking with deep copy isolation (conversation history, allowed tools)
+  - ✅ Autonomous execution loop with LLM orchestration
+  - ✅ Resource limit enforcement (tokens, tool calls, timeout)
+  - ✅ Thread-safe lifecycle management (Start, Cancel, GetStatus, ListRunning)
+  - ✅ Background execution with status monitoring
+  - ✅ Security constraints and tool restrictions
+  - ✅ CLI integration with fork detection
+  - ✅ E2E testing suite with benchmarks
+  - ✅ Example skill demonstrating autonomous debugging
+
+#### FR-013: Preprocessing System (Phase 3B)
+- **Priority:** P1 (High)
+- **Status:** ✅ Complete (5/5 tasks, 18h)
+- **Description:** Dynamic content with sandboxed shell command execution
+- **Acceptance Criteria:**
+  - ✅ Command parser for !command blocks in SKILL.md files
+  - ✅ Sandboxed command execution (5s timeout, 10KB output limit)
+  - ✅ Whitelist-only commands (git, gh, ls, cat, grep)
+  - ✅ Shell metacharacter blocking (|, ;, &, $, `, >, <, ||, &&)
+  - ✅ Command substitution in skill renderer
+  - ✅ Graceful error handling and output truncation
+  - ✅ E2E testing and documentation
+  - ✅ Example skill with real-time git data
+
+#### FR-014: Plugin System (Phase 3C)
+- **Priority:** P1 (High)
+- **Status:** ✅ Complete (6/6 tasks, 10h)
+- **Description:** Third-party skill packaging and distribution
+- **Acceptance Criteria:**
+  - ✅ Plugin namespace format (org/skill-name)
+  - ✅ Plugin manifest parsing (plugin.yaml)
+  - ✅ Plugin discovery infrastructure (filesystem scanning)
+  - ✅ Dependency management with version constraints
+  - ✅ Security validation (namespace collision detection, reserved words)
+  - ✅ Lifecycle management (install, uninstall, enable, disable)
+  - ✅ CLI commands for plugin operations
+  - ✅ Example plugin and documentation
+
+#### FR-015: Skill Versioning (Phase 3D)
+- **Priority:** P2 (Medium)
+- **Status:** ✅ Complete (4/4 tasks, 4h)
+- **Description:** Semantic versioning with constraint resolution
+- **Acceptance Criteria:**
+  - ✅ Semantic version parsing (major.minor.patch)
+  - ✅ Version comparison and ordering
+  - ✅ Version constraint support (^, ~, =)
+  - ✅ Constraint satisfaction validation
+  - ✅ Latest version resolution
+  - ✅ Compatibility checking
+  - ✅ Documentation and user guide
+
+#### FR-016: Persistent Memory (Phase 3E)
+- **Priority:** P2 (Medium)
+- **Status:** ✅ Complete (4/4 tasks, 4h)
+- **Description:** Stateful skills with SQLite storage
+- **Acceptance Criteria:**
+  - ✅ Memory domain entities (SkillMemory, MemoryScope)
+  - ✅ SQLite storage implementation with schema management
+  - ✅ Multiple scopes (skill, user, global, session)
+  - ✅ JSON value serialization
+  - ✅ Memory API (Remember, Recall, Forget)
+  - ✅ TTL and expiration support
+  - ✅ Automatic cleanup of expired memory
+  - ✅ Documentation and usage guide
 
 ### Non-Functional Requirements
 
@@ -416,6 +486,126 @@
 - User has personal skill available for repeated use
 - Skill persists across NuimanBot restarts
 - Higher priority than shared skills (user scope > project scope)
+
+### Workflow 9: Subagent Execution (Phase 3A)
+
+**Actors:** User
+
+**Preconditions:**
+- NuimanBot has Agent Skills with Phase 3A (Subagent Execution) enabled
+- User has a skill with `context: fork` directive
+
+**Steps:**
+1. User invokes skill: `/debug-issue The login button doesn't work`
+2. NuimanBot detects `context: fork` in skill frontmatter
+3. NuimanBot creates SubagentContext:
+   - Deep copies conversation history for isolation
+   - Deep copies allowed tools
+   - Sets resource limits (max tokens: 50000, max tool calls: 20, timeout: 300s)
+4. NuimanBot starts subagent in background via LifecycleManager
+5. NuimanBot responds immediately: "Subagent started: debug-issue-abc123"
+6. **Autonomous Execution Loop** (runs in background):
+   - Subagent receives skill prompt with issue description
+   - LLM analyzes issue and decides to use repo_search tool
+   - Subagent executes repo_search for "login button"
+   - LLM reviews search results and decides to check git history
+   - Subagent executes git commands via preprocessing
+   - LLM formulates hypothesis and verifies with additional searches
+   - After 5 iterations, LLM provides final diagnosis
+7. User checks status: `/subagent-status debug-issue-abc123`
+8. NuimanBot responds with progress: "Running... 3/20 tool calls used, 15234/50000 tokens"
+9. Subagent completes and returns comprehensive investigation report
+10. NuimanBot stores result and notifies user
+
+**Postconditions:**
+- Investigation completed autonomously without user intervention
+- All intermediate steps logged and auditable
+- Resource limits enforced (timeout prevented runaway execution)
+- User receives detailed multi-step analysis
+
+### Workflow 10: Preprocessing with Real-time Data (Phase 3B)
+
+**Actors:** User
+
+**Preconditions:**
+- User is working in a Git repository
+- Skill with preprocessing commands exists
+
+**Steps:**
+1. User invokes skill: `/project-status`
+2. NuimanBot loads SKILL.md file with preprocessing blocks:
+   ```markdown
+   ## Git Status
+   !command
+   git status --short
+   !end
+
+   ## Recent Commits
+   !command
+   git log --oneline -5
+   !end
+   ```
+3. NuimanBot parses !command blocks and extracts commands
+4. NuimanBot validates commands against whitelist:
+   - `git status --short` ✅ (git allowed)
+   - `git log --oneline -5` ✅ (git allowed)
+5. **Sandboxed Execution**:
+   - Execute `git status --short` with 5s timeout
+   - Capture output (max 10KB): "M README.md\nM internal/domain/skill.go"
+   - Execute `git log --oneline -5`
+   - Capture output: "abc123 feat: add preprocessing\n..."
+6. NuimanBot substitutes command outputs into skill template
+7. NuimanBot renders final skill prompt with real-time data
+8. LLM receives skill prompt with actual git status and commit history
+9. LLM generates project status report based on current state
+10. User receives response with up-to-date information
+
+**Postconditions:**
+- Skill executed with real-time repository data
+- Commands sandboxed (no shell metacharacters executed)
+- Timeout enforced (prevented hanging on slow commands)
+- Output truncated to safe limits
+
+### Workflow 11: Plugin Installation (Phase 3C)
+
+**Actors:** System Admin
+
+**Preconditions:**
+- Admin has plugin package in local directory
+- Plugin manifest (plugin.yaml) is valid
+
+**Steps:**
+1. Admin downloads plugin: `git clone https://github.com/myorg/awesome-skill plugins/myorg-awesome-skill`
+2. Admin verifies plugin manifest:
+   ```yaml
+   namespace: myorg/awesome-skill
+   version: 1.2.0
+   description: An awesome skill
+   skills:
+     - awesome-skill
+   dependencies:
+     helper-org/helper-skill: ^1.0.0
+   ```
+3. Admin installs plugin: `nuimanbot plugin install plugins/myorg-awesome-skill`
+4. NuimanBot performs security validation:
+   - Namespace format check: `myorg/awesome-skill` ✅
+   - Reserved word check: "myorg" not in reserved list ✅
+   - Collision detection: No existing plugin with same namespace ✅
+   - Dependency limit: 1 dependency < 10 max ✅
+5. NuimanBot resolves dependencies:
+   - Finds `helper-org/helper-skill` version 1.3.0
+   - Checks constraint `^1.0.0` satisfies 1.3.0 ✅
+6. NuimanBot copies plugin to: `data/plugins/myorg/awesome-skill/`
+7. NuimanBot registers plugin in registry with PluginState: Installed
+8. Admin enables plugin: `nuimanbot plugin enable myorg/awesome-skill`
+9. NuimanBot updates PluginState to Enabled
+10. Plugin skills become available to users
+
+**Postconditions:**
+- Plugin installed and enabled
+- Dependencies resolved and available
+- Security validations passed
+- Skills from plugin available in skill catalog
 
 ---
 
@@ -1096,5 +1286,25 @@ skills:
 
 ---
 
+## Documentation Reference
+
+### User Documentation
+
+- **[User Onboarding Guide](../support_docs/user-onboarding.md)** - How to use NuimanBot and customize your experience
+- **[Installation & Setup Guide](../support_docs/install-and-setup.md)** - System installation and configuration
+- **[CLI Administration Guide](../support_docs/cli-admin-guide.md)** - Managing users, roles, and permissions
+- **[Agent Skills User Guide](../support_docs/skills-guide.md)** - Creating and using skills
+
+### Advanced Features
+
+- **[Subagents Guide](../support_docs/subagents-guide.md)** - Autonomous multi-step workflows
+- **[Preprocessing Guide](../support_docs/preprocessing-guide.md)** - Dynamic content with shell commands
+- **[Plugins Guide](../support_docs/plugins-guide.md)** - Third-party skill packages
+- **[Versioning Guide](../support_docs/versioning-guide.md)** - Skill version management
+- **[Memory Guide](../support_docs/memory-guide.md)** - Persistent skill state
+
+---
+
 **Document History:**
 - **v1.0 (2026-02-07):** Initial creation from MVP PRD and Post-MVP roadmap
+- **v1.1 (2026-02-07):** Added Phase 3 features and documentation reference
