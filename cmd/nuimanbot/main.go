@@ -377,8 +377,8 @@ func registerDeveloperProductivitySkills(registry skill.SkillRegistry, llmServic
 	githubConfig := domain.SkillConfig{
 		Enabled: true,
 		Params: map[string]interface{}{
-			"timeout":     30,
-			"rate_limit":  "30/minute",
+			"timeout":    30,
+			"rate_limit": "30/minute",
 		},
 	}
 	githubSkill := github.NewGitHubSkill(githubConfig, executorSvc, rateLimiter, sanitizer)
@@ -432,9 +432,9 @@ func registerDeveloperProductivitySkills(registry skill.SkillRegistry, llmServic
 	codingAgentConfig := domain.SkillConfig{
 		Enabled: false, // Admin must explicitly enable
 		Params: map[string]interface{}{
-			"allowed_tools":  []interface{}{"codex", "claude_code"},
-			"default_mode":   "interactive",
-			"pty_mode":       true,
+			"allowed_tools": []interface{}{"codex", "claude_code"},
+			"default_mode":  "interactive",
+			"pty_mode":      true,
 		},
 	}
 	codingAgentSkill := coding_agent.NewCodingAgentSkill(codingAgentConfig, executorSvc, pathValidator)

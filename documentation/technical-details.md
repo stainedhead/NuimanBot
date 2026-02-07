@@ -582,11 +582,20 @@ type Skill interface {
 ```
 
 **Built-in Skills:**
+
+**Core Skills:**
 1. **Calculator**: `add`, `subtract`, `multiply`, `divide`
 2. **DateTime**: `now`, `format`, `unix`
 3. **Weather**: `current`, `forecast`
 4. **WebSearch**: `search`
 5. **Notes**: `create`, `read`, `update`, `delete`, `list`
+
+**Developer Productivity Skills:**
+6. **GitHub**: GitHub operations via `gh` CLI (`issue_create`, `issue_list`, `pr_create`, `pr_list`, `pr_review`, `pr_merge`, `repo_view`, `release_create`, `gist_create`, `workflow_run`, `workflow_list`, `repo_clone`)
+7. **RepoSearch**: Fast codebase search using `ripgrep` with regex support, context lines, and file filtering
+8. **DocSummarize**: LLM-powered document summarization with configurable detail levels
+9. **Summarize**: Web page and YouTube video summarization with transcript extraction via `yt-dlp`
+10. **CodingAgent**: Orchestrates external coding CLI tools (Codex, Claude Code, OpenCode, Gemini, Copilot) in PTY mode with workspace validation
 
 ---
 
