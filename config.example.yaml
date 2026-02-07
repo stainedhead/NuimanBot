@@ -68,38 +68,53 @@ tools:
 
 # Agent Skills System (Anthropic-style file-based skills)
 # Skills are reusable prompt templates that can be invoked via /skill-name
+#
+# NuimanBot stores skills in its data directory for multi-user support
 skills:
   enabled: true
   roots:
-    # User-level skills (stored in home directory)
-    # Priority: Medium (200)
-    - path: "~/.claude/skills"
-      scope: user
-
-    # Project-level skills (stored in project directory)
+    # Shared skills (available to all users)
     # Priority: Low (100)
-    - path: "./.claude/skills"
-      scope: project
+    - path: "./data/skills/shared"
+      scope: 2  # ScopeProject
+
+    # User-specific skills (per-user directories)
+    # Priority: Medium (200)
+    # Format: ./data/skills/users/{platform}_{uid}/
+    # Examples:
+    #   - ./data/skills/users/cli_user/
+    #   - ./data/skills/users/telegram_123456/
+    #   - ./data/skills/users/slack_U01ABC123/
+    - path: "./data/skills/users/cli_user"
+      scope: 1  # ScopeUser
 
     # Enterprise skills (organization-wide, optional)
     # Priority: Highest (300)
-    # - path: "/etc/nuimanbot/skills"
-    #   scope: enterprise
+    # - path: "./data/skills/enterprise"
+    #   scope: 0  # ScopeEnterprise
 
     # Plugin skills (third-party, optional)
     # Priority: Lowest (50)
-    # - path: "./plugins/skills"
-    #   scope: plugin
+    # - path: "./data/skills/plugins"
+    #   scope: 3  # ScopePlugin
 
 # Skill Directory Structure:
 # Each skill lives in its own directory with a SKILL.md file:
-#   .claude/skills/
-#   ├── code-review/
-#   │   └── SKILL.md
-#   ├── debugging/
-#   │   └── SKILL.md
-#   └── testing/
-#       └── SKILL.md
+#   data/skills/
+#   ├── shared/           # Bot-wide example skills (all users)
+#   │   ├── code-review/
+#   │   │   └── SKILL.md
+#   │   ├── debugging/
+#   │   │   └── SKILL.md
+#   │   └── testing/
+#   │       └── SKILL.md
+#   └── users/            # User-specific skills
+#       ├── cli_user/
+#       │   └── my-skill/
+#       │       └── SKILL.md
+#       └── telegram_123456/
+#           └── custom-skill/
+#               └── SKILL.md
 #
 # Invoke skills with: /skill-name [arguments]
 # List skills with: /help

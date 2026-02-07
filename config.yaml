@@ -31,18 +31,20 @@ tools:
       enabled: true
 
 # Agent Skills System (Anthropic-style file-based skills)
+# Skills are stored in the NuimanBot data directory
 skills:
   enabled: true
   roots:
-    # User-level skills (higher priority than project)
-    - path: "~/.claude/skills"
-      scope: user
-    # Project-level skills
-    - path: "./.claude/skills"
-      scope: project
+    # Shared skills (available to all users)
+    - path: "./data/skills/shared"
+      scope: 2  # ScopeProject
+    # User-specific skills (per-user skill directories)
+    # Format: ./data/skills/users/{platform}_{uid}/
+    - path: "./data/skills/users/cli_user"
+      scope: 1  # ScopeUser
     # Enterprise skills can be added here (highest priority)
-    # - path: "/etc/nuimanbot/skills"
-    #   scope: enterprise
+    # - path: "./data/skills/enterprise"
+    #   scope: 0  # ScopeEnterprise
 
 mcp:
   client:
