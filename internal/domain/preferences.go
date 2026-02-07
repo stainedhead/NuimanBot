@@ -34,7 +34,7 @@ func DefaultUserPreferences() UserPreferences {
 }
 
 // GetTemperature returns the temperature value or default if not set.
-func (p UserPreferences) GetTemperature() float64 {
+func (p *UserPreferences) GetTemperature() float64 {
 	if p.Temperature != nil {
 		return *p.Temperature
 	}
@@ -42,7 +42,7 @@ func (p UserPreferences) GetTemperature() float64 {
 }
 
 // GetMaxTokens returns the max tokens value or default if not set.
-func (p UserPreferences) GetMaxTokens() int {
+func (p *UserPreferences) GetMaxTokens() int {
 	if p.MaxTokens != nil {
 		return *p.MaxTokens
 	}
@@ -50,7 +50,7 @@ func (p UserPreferences) GetMaxTokens() int {
 }
 
 // GetResponseFormat returns the response format or default if not set.
-func (p UserPreferences) GetResponseFormat() string {
+func (p *UserPreferences) GetResponseFormat() string {
 	if p.ResponseFormat == "" {
 		return "markdown"
 	}

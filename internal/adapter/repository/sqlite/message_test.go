@@ -55,7 +55,7 @@ func setupTestDB(t *testing.T) *sql.DB {
 // TestGetRecentMessages_EmptyConversation tests retrieving from non-existent conversation
 func TestGetRecentMessages_EmptyConversation(t *testing.T) {
 	db := setupTestDB(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	repo := NewMessageRepository(db)
 	ctx := context.Background()
@@ -73,7 +73,7 @@ func TestGetRecentMessages_EmptyConversation(t *testing.T) {
 // TestGetRecentMessages_TokenLimit tests that messages are retrieved up to token limit
 func TestGetRecentMessages_TokenLimit(t *testing.T) {
 	db := setupTestDB(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	repo := NewMessageRepository(db)
 	ctx := context.Background()
@@ -176,7 +176,7 @@ func TestGetRecentMessages_TokenLimit(t *testing.T) {
 // TestGetRecentMessages_ChronologicalOrder verifies messages are returned oldest-first
 func TestGetRecentMessages_ChronologicalOrder(t *testing.T) {
 	db := setupTestDB(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	repo := NewMessageRepository(db)
 	ctx := context.Background()
@@ -225,7 +225,7 @@ func TestGetRecentMessages_ChronologicalOrder(t *testing.T) {
 // TestGetRecentMessages_ZeroTokenMessages tests handling of messages with zero tokens
 func TestGetRecentMessages_ZeroTokenMessages(t *testing.T) {
 	db := setupTestDB(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	repo := NewMessageRepository(db)
 	ctx := context.Background()
@@ -278,7 +278,7 @@ func TestGetRecentMessages_ZeroTokenMessages(t *testing.T) {
 // TestSaveMessage_Integration tests SaveMessage with the new signature
 func TestSaveMessage_Integration(t *testing.T) {
 	db := setupTestDB(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	repo := NewMessageRepository(db)
 	ctx := context.Background()
@@ -333,7 +333,7 @@ func TestSaveMessage_Integration(t *testing.T) {
 // TestInit tests the Init method (schema initialization)
 func TestInit(t *testing.T) {
 	db := setupTestDB(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	repo := NewMessageRepository(db)
 	ctx := context.Background()
@@ -359,7 +359,7 @@ func TestInit(t *testing.T) {
 // TestGetConversation tests retrieving a full conversation
 func TestGetConversation(t *testing.T) {
 	db := setupTestDB(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	repo := NewMessageRepository(db)
 	ctx := context.Background()
@@ -410,7 +410,7 @@ func TestGetConversation(t *testing.T) {
 // TestGetConversation_NotFound tests GetConversation with non-existent conversation
 func TestGetConversation_NotFound(t *testing.T) {
 	db := setupTestDB(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	repo := NewMessageRepository(db)
 	ctx := context.Background()
@@ -427,7 +427,7 @@ func TestGetConversation_NotFound(t *testing.T) {
 // TestGetConversation_WithToolCalls tests conversation retrieval with tool calls
 func TestGetConversation_WithToolCalls(t *testing.T) {
 	db := setupTestDB(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	repo := NewMessageRepository(db)
 	ctx := context.Background()
@@ -477,7 +477,7 @@ func TestGetConversation_WithToolCalls(t *testing.T) {
 // TestDeleteConversation tests conversation deletion
 func TestDeleteConversation(t *testing.T) {
 	db := setupTestDB(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	repo := NewMessageRepository(db)
 	ctx := context.Background()
@@ -530,7 +530,7 @@ func TestDeleteConversation(t *testing.T) {
 // TestDeleteConversation_NotFound tests deleting non-existent conversation
 func TestDeleteConversation_NotFound(t *testing.T) {
 	db := setupTestDB(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	repo := NewMessageRepository(db)
 	ctx := context.Background()
@@ -545,7 +545,7 @@ func TestDeleteConversation_NotFound(t *testing.T) {
 // TestListConversations tests listing conversations for a user
 func TestListConversations(t *testing.T) {
 	db := setupTestDB(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	repo := NewMessageRepository(db)
 	ctx := context.Background()
@@ -610,7 +610,7 @@ func TestListConversations(t *testing.T) {
 // TestListConversations_Empty tests listing for user with no conversations
 func TestListConversations_Empty(t *testing.T) {
 	db := setupTestDB(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	repo := NewMessageRepository(db)
 	ctx := context.Background()
@@ -628,7 +628,7 @@ func TestListConversations_Empty(t *testing.T) {
 // TestSaveMessage_MultipleMessages tests saving multiple messages to same conversation
 func TestSaveMessage_MultipleMessages(t *testing.T) {
 	db := setupTestDB(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	repo := NewMessageRepository(db)
 	ctx := context.Background()
@@ -678,7 +678,7 @@ func TestSaveMessage_MultipleMessages(t *testing.T) {
 // TestSaveMessage_WithToolCallsAndResults tests saving messages with tool data
 func TestSaveMessage_WithToolCallsAndResults(t *testing.T) {
 	db := setupTestDB(t)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	repo := NewMessageRepository(db)
 	ctx := context.Background()

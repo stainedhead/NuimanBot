@@ -222,13 +222,13 @@ func prependVersion(version int, data []byte) []byte {
 }
 
 // extractVersion extracts the version number and encrypted data.
-func extractVersion(versionedData []byte) (int, []byte, error) {
+func extractVersion(versionedData []byte) (version int, encrypted []byte, err error) {
 	if len(versionedData) < 4 {
 		return 0, nil, fmt.Errorf("versioned data too short")
 	}
 
-	version := int(binary.BigEndian.Uint32(versionedData[:4]))
-	encrypted := versionedData[4:]
+	version = int(binary.BigEndian.Uint32(versionedData[:4]))
+	encrypted = versionedData[4:]
 
 	return version, encrypted, nil
 }
