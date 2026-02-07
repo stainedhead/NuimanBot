@@ -8,7 +8,8 @@ type NuimanBotConfig struct {
 	Gateways     GatewaysConfig    `yaml:"gateways"`
 	MCP          MCPConfig         `yaml:"mcp"`
 	Storage      StorageConfig     `yaml:"storage"`
-	Tools        ToolsSystemConfig `yaml:"tools"` // Tool registry system (renamed from Skills)
+	Tools        ToolsSystemConfig `yaml:"tools"`  // Tool registry system (renamed from Skills)
+	Skills       SkillsConfig      `yaml:"skills"` // Agent Skills system (Anthropic-style)
 	Memory       MemoryConfig      `yaml:"memory"`
 	ExternalAPI  ExternalAPIConfig `yaml:"external_api"`
 	ToolSettings ToolSettings      `yaml:"tool_settings"` // Tool-specific settings (renamed from Tools)
