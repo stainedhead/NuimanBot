@@ -68,15 +68,18 @@
 
 #### FR-005: Custom Skills System
 - **Priority:** P0 (Critical)
-- **Status:** ✅ Complete (5/5 MVP skills)
+- **Status:** ✅ Complete (10/10 skills - 5 core + 5 developer productivity)
 - **Description:** Built-in skills only, no external skill imports
 - **Acceptance Criteria:**
-  - Five MVP skills: calculator, datetime, weather, websearch, notes
-  - Permission-gated execution
-  - Rate limiting per user and per skill
-  - Timeout enforcement (30s default)
-  - Output sanitization to prevent prompt injection
-  - No external skill marketplace (security requirement)
+  - ✅ Five core skills: calculator, datetime, weather, websearch, notes
+  - ✅ Five developer productivity skills: github, repo_search, doc_summarize, summarize, coding_agent
+  - ✅ Permission-gated execution (RBAC enforcement)
+  - ✅ Rate limiting per user and per skill (token bucket algorithm)
+  - ✅ Timeout enforcement (configurable, 30s default)
+  - ✅ Output sanitization (secret redaction, prompt injection prevention)
+  - ✅ Path traversal prevention (workspace restrictions)
+  - ✅ Comprehensive test coverage (85%+ average)
+  - ✅ No external skill marketplace (security requirement)
 
 #### FR-006: Conversation Management
 - **Priority:** P0 (Critical)

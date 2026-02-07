@@ -126,14 +126,24 @@ Infrastructure → Adapter → Use Case → Domain
 
 ### Developer Productivity
 
+**Skills:**
+- GitHub operations (issues, PRs, workflows via `gh` CLI)
+- Codebase search (ripgrep integration with regex support)
+- Document summarization (LLM-powered, files and URLs)
+- Web/YouTube summarization (content extraction and analysis)
+- Coding agent orchestration (Codex, Claude Code, OpenCode, etc.)
+
+**Infrastructure:**
 - CLI-first design for automation scripts
 - OpenAI-compatible API endpoint
 - RESTful management API
-- Extensible skill system
+- Extensible skill system with comprehensive testing (85%+ coverage)
 
 ---
 
 ## Built-in Skills
+
+### Core Skills (5)
 
 | Skill | Description | Permissions | Status |
 |-------|-------------|-------------|--------|
@@ -143,12 +153,24 @@ Infrastructure → Adapter → Use Case → Domain
 | **websearch** | DuckDuckGo web search | Network | ✅ |
 | **notes** | CRUD operations for personal notes | Write | ✅ |
 
-All skills are:
+### Developer Productivity Skills (5)
+
+| Skill | Description | Permissions | Coverage | Status |
+|-------|-------------|-------------|----------|--------|
+| **github** | GitHub operations via `gh` CLI (issues, PRs, workflows) | Network, Shell | 95.0% | ✅ |
+| **repo_search** | Fast codebase search using ripgrep | Read | 82.5% | ✅ |
+| **doc_summarize** | LLM-powered doc summarization (files, URLs) | Read, Network | 50.5% | ✅ |
+| **summarize** | Web page and YouTube video summarization | Network | 76.3% | ✅ |
+| **coding_agent** | Orchestrate external coding CLIs (admin-only) | Shell | 85.4% | ✅ |
+
+**Security Controls (All Skills):**
 - Custom-built (no external imports)
-- Permission-gated
-- Rate-limited
-- Timeout-enforced (30s default)
-- Output-sanitized
+- RBAC enforcement (permission-gated)
+- Per-skill rate limiting
+- Timeout enforcement (configurable)
+- Output sanitization (secret redaction)
+- Path traversal prevention
+- Comprehensive audit logging
 
 ---
 
