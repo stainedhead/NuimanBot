@@ -38,7 +38,7 @@ func TestCaptureError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer func() { _ = Shutdown() }()
+	defer func() { _ = Shutdown() }() //nolint:errcheck // Best effort cleanup in tests
 
 	// Capture an error
 	testErr := errors.New("test error")
@@ -57,7 +57,7 @@ func TestCaptureErrorWithContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer func() { _ = Shutdown() }()
+	defer func() { _ = Shutdown() }() //nolint:errcheck // Best effort cleanup in tests
 
 	// Create context with metadata
 	ctx := context.Background()
@@ -82,7 +82,7 @@ func TestCaptureMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer func() { _ = Shutdown() }()
+	defer func() { _ = Shutdown() }() //nolint:errcheck // Best effort cleanup in tests
 
 	// Capture a message
 	CaptureMessage(context.Background(), "info", "Test message")
@@ -100,7 +100,7 @@ func TestSeverityLevels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer func() { _ = Shutdown() }()
+	defer func() { _ = Shutdown() }() //nolint:errcheck // Best effort cleanup in tests
 
 	ctx := context.Background()
 
@@ -123,7 +123,7 @@ func TestDisabledTracking(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer func() { _ = Shutdown() }()
+	defer func() { _ = Shutdown() }() //nolint:errcheck // Best effort cleanup in tests
 
 	// Should be noop
 	CaptureError(context.Background(), errors.New("test error"))
@@ -142,7 +142,7 @@ func TestBreadcrumbs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer func() { _ = Shutdown() }()
+	defer func() { _ = Shutdown() }() //nolint:errcheck // Best effort cleanup in tests
 
 	ctx := context.Background()
 
@@ -170,7 +170,7 @@ func TestFingerprinting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer func() { _ = Shutdown() }()
+	defer func() { _ = Shutdown() }() //nolint:errcheck // Best effort cleanup in tests
 
 	ctx := context.Background()
 	ctx = WithFingerprint(ctx, "custom-group-key")

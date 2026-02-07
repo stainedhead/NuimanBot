@@ -46,7 +46,7 @@ func TestSendAlert(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer func() { _ = Shutdown() }()
+	defer func() { _ = Shutdown() }() //nolint:errcheck // Best effort cleanup in tests
 
 	// Send a critical alert
 	SendAlert(context.Background(), Alert{
@@ -74,7 +74,7 @@ func TestAlertSeverities(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer func() { _ = Shutdown() }()
+	defer func() { _ = Shutdown() }() //nolint:errcheck // Best effort cleanup in tests
 
 	severities := []Severity{
 		SeverityInfo,
@@ -110,7 +110,7 @@ func TestAlertThrottling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer func() { _ = Shutdown() }()
+	defer func() { _ = Shutdown() }() //nolint:errcheck // Best effort cleanup in tests
 
 	alert := Alert{
 		Severity: SeverityCritical,
@@ -149,7 +149,7 @@ func TestMultipleChannels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer func() { _ = Shutdown() }()
+	defer func() { _ = Shutdown() }() //nolint:errcheck // Best effort cleanup in tests
 
 	SendAlert(context.Background(), Alert{
 		Severity: SeverityWarning,
@@ -169,7 +169,7 @@ func TestDisabledAlerting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer func() { _ = Shutdown() }()
+	defer func() { _ = Shutdown() }() //nolint:errcheck // Best effort cleanup in tests
 
 	// Should be noop
 	SendAlert(context.Background(), Alert{
@@ -196,7 +196,7 @@ func TestAlertWithDetails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer func() { _ = Shutdown() }()
+	defer func() { _ = Shutdown() }() //nolint:errcheck // Best effort cleanup in tests
 
 	SendAlert(context.Background(), Alert{
 		Severity: SeverityError,
