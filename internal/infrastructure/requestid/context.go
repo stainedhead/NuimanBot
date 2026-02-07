@@ -45,12 +45,13 @@ func FromContext(ctx context.Context) string {
 
 // MustFromContext retrieves the request ID from the context.
 // If no request ID exists, it generates and adds one to the context.
-func MustFromContext(ctx context.Context) (context.Context, string) {
-	if id := FromContext(ctx); id != "" {
+func MustFromContext(ctx context.Context) (newCtx context.Context, id string) {
+	id = FromContext(ctx)
+	if id != "" {
 		return ctx, id
 	}
 
-	id := Generate()
+	id = Generate()
 	return WithRequestID(ctx, id), id
 }
 

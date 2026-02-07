@@ -38,7 +38,7 @@ func TestStartSpan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer Shutdown(context.Background())
+	defer func() { _ = Shutdown(context.Background()) }() //nolint:errcheck // Best effort cleanup in tests
 
 	// Start a span
 	ctx, span := StartSpan(context.Background(), "test-operation")
@@ -66,7 +66,7 @@ func TestNestedSpans(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer Shutdown(context.Background())
+	defer func() { _ = Shutdown(context.Background()) }() //nolint:errcheck // Best effort cleanup in tests
 
 	// Parent span
 	ctx1, span1 := StartSpan(context.Background(), "parent-operation")
@@ -96,7 +96,7 @@ func TestTracingDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer Shutdown(context.Background())
+	defer func() { _ = Shutdown(context.Background()) }() //nolint:errcheck // Best effort cleanup in tests
 
 	// Should still work, but be a noop
 	ctx, span := StartSpan(context.Background(), "test-operation")
@@ -120,7 +120,7 @@ func TestRecordError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer Shutdown(context.Background())
+	defer func() { _ = Shutdown(context.Background()) }() //nolint:errcheck // Best effort cleanup in tests
 
 	ctx, span := StartSpan(context.Background(), "error-operation")
 	if span == nil {
@@ -145,7 +145,7 @@ func TestTraceContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer Shutdown(context.Background())
+	defer func() { _ = Shutdown(context.Background()) }() //nolint:errcheck // Best effort cleanup in tests
 
 	// Start a span
 	ctx, span := StartSpan(context.Background(), "test-operation")
