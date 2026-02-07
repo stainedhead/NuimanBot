@@ -210,6 +210,7 @@ func TestProcessMessageStream_ContextCancellation(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	ch, err := service.ProcessMessageStream(ctx, msg)
 	if err != nil {

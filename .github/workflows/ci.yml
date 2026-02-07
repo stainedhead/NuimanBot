@@ -1,4 +1,4 @@
-name: Go CI
+name: CI/CD Pipeline
 
 on:
   push:
@@ -9,44 +9,75 @@ on:
       - main
 
 jobs:
-  build:
+  test:
+    name: Test & Build
     runs-on: ubuntu-latest
+
     steps:
-    - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.22' # Use a specific Go version
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23' # Match go.mod version
+          cache: true # Enable built-in Go cache
 
-    - name: Cache Go modules
-      uses: actions/cache@v4
-      with:
-        path: ~/go/pkg/mod
-        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-        restore-keys: |
-          ${{ runner.os }}-go-
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
 
-    - name: Download Go modules
-      run: go mod tidy
+      - name: Download dependencies
+        run: go mod download
 
-    - name: Install golangci-lint
-      run: curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.59.1 # Use specific version
+      - name: Verify dependencies
+        run: go mod verify
 
-    - name: Run Quality Gates
-      run: |
-        echo "Running go fmt..."
-        go fmt ./...
-        git diff --exit-code || (echo "go fmt failed: Please format your code" && exit 1)
+      - name: Format check
+        run: |
+          go fmt ./...
+          git diff --exit-code || (echo "❌ Code is not formatted. Run 'go fmt ./...' and commit the changes." && exit 1)
 
-        echo "Running go vet..."
-        go vet ./...
+      - name: Tidy check
+        run: |
+          go mod tidy
+          git diff --exit-code || (echo "❌ go.mod/go.sum not tidy. Run 'go mod tidy' and commit the changes." && exit 1)
 
-        echo "Running golangci-lint..."
-        golangci-lint run ./...
+      - name: Vet
+        run: go vet ./...
 
-        echo "Running go test..."
-        go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+      - name: Install golangci-lint
+        run: curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.59.1
 
-        echo "Building executable..."
-        go build -o bin/nuimanbot ./cmd/nuimanbot
+      - name: Lint
+        run: golangci-lint run --timeout 5m ./...
+
+      - name: Run tests
+        run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.out
+          flags: unittests
+          name: codecov-nuimanbot
+        continue-on-error: true # Don't fail build if upload fails
+
+      - name: Build executable
+        run: go build -o bin/nuimanbot ./cmd/nuimanbot
+
+      - name: Verify executable
+        run: |
+          chmod +x bin/nuimanbot
+          ./bin/nuimanbot --help || echo "⚠️ Executable doesn't support --help flag"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuimanbot-${{ runner.os }}-${{ github.sha }}
+          path: bin/nuimanbot
+          retention-days: 7

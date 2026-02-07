@@ -40,17 +40,17 @@ type Statistics struct {
 }
 
 var (
-	globalConfig   Config
-	initialized    bool
-	mu             sync.RWMutex
-	eventBuffer    []Event
-	metricBuffer   []Metric
-	bufferMu       sync.Mutex
-	stats          Statistics
-	statsMu        sync.RWMutex
-	uniqueUsers    map[string]bool
-	stopChan       chan struct{}
-	flushWg        sync.WaitGroup
+	globalConfig Config
+	initialized  bool
+	mu           sync.RWMutex
+	eventBuffer  []Event
+	metricBuffer []Metric
+	bufferMu     sync.Mutex
+	stats        Statistics
+	statsMu      sync.RWMutex
+	uniqueUsers  map[string]bool
+	stopChan     chan struct{}
+	flushWg      sync.WaitGroup
 )
 
 // Initialize sets up the analytics system.

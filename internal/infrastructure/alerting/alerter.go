@@ -13,10 +13,10 @@ import (
 type ChannelType string
 
 const (
-	ChannelTypeLog       ChannelType = "log"        // Log-based alerting
-	ChannelTypeSlack     ChannelType = "slack"      // Slack webhooks
-	ChannelTypePagerDuty ChannelType = "pagerduty"  // PagerDuty integration
-	ChannelTypeEmail     ChannelType = "email"      // Email notifications
+	ChannelTypeLog       ChannelType = "log"       // Log-based alerting
+	ChannelTypeSlack     ChannelType = "slack"     // Slack webhooks
+	ChannelTypePagerDuty ChannelType = "pagerduty" // PagerDuty integration
+	ChannelTypeEmail     ChannelType = "email"     // Email notifications
 )
 
 // Severity defines alert severity levels.

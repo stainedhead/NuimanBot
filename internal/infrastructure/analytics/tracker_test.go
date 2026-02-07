@@ -9,8 +9,8 @@ import (
 // Test: Initialize analytics
 func TestInitialize(t *testing.T) {
 	config := Config{
-		Enabled:     true,
-		ServiceName: "nuimanbot-test",
+		Enabled:       true,
+		ServiceName:   "nuimanbot-test",
 		FlushInterval: 5 * time.Second,
 	}
 
