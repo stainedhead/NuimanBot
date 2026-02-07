@@ -36,7 +36,7 @@ func TestTrackEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer Shutdown()
+	defer func() { _ = Shutdown() }()
 
 	// Track an event
 	TrackEvent(context.Background(), Event{
@@ -60,7 +60,7 @@ func TestTrackUserActivity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer Shutdown()
+	defer func() { _ = Shutdown() }()
 
 	ctx := context.Background()
 
@@ -98,7 +98,7 @@ func TestTrackMetric(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer Shutdown()
+	defer func() { _ = Shutdown() }()
 
 	ctx := context.Background()
 
@@ -132,7 +132,7 @@ func TestGetStatistics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer Shutdown()
+	defer func() { _ = Shutdown() }()
 
 	ctx := context.Background()
 
@@ -166,7 +166,7 @@ func TestDisabledAnalytics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer Shutdown()
+	defer func() { _ = Shutdown() }()
 
 	// Should be noop
 	TrackEvent(context.Background(), Event{
@@ -191,7 +191,7 @@ func TestEventWithTimestamp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer Shutdown()
+	defer func() { _ = Shutdown() }()
 
 	now := time.Now()
 	TrackEvent(context.Background(), Event{
@@ -214,7 +214,7 @@ func TestEventBatching(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Initialize failed: %v", err)
 	}
-	defer Shutdown()
+	defer func() { _ = Shutdown() }()
 
 	ctx := context.Background()
 
