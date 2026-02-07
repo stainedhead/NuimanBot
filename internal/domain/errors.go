@@ -26,8 +26,8 @@ var ErrInternal = errors.New("internal error")
 // ErrUserNotFound is returned when a user is not found.
 var ErrUserNotFound = errors.New("user not found")
 
-// ErrSkillNotFound is returned when a requested skill is not found.
-var ErrSkillNotFound = errors.New("skill not found")
+// ErrToolNotFound is returned when a requested tool is not found.
+var ErrToolNotFound = errors.New("tool not found")
 
 // ErrInsufficientPermissions is returned when a user lacks permission to execute an action.
 var ErrInsufficientPermissions = errors.New("insufficient permissions")

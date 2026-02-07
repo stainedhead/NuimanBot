@@ -36,13 +36,13 @@ func (r Role) HasPermission(required Role) bool {
 
 // User represents a user of the NuimanBot system.
 type User struct {
-	ID            string
-	Username      string
-	Role          Role
-	PlatformIDs   map[Platform]string // Telegram ID, Slack ID, etc.
-	AllowedSkills []string            // Optional skill whitelist. Empty = all skills allowed for user's role
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID           string
+	Username     string
+	Role         Role
+	PlatformIDs  map[Platform]string // Telegram ID, Slack ID, etc.
+	AllowedTools []string            // Optional tool whitelist. Empty = all tools allowed for user's role
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // UserRepository defines the contract for user data persistence.
