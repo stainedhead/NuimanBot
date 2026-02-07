@@ -5,34 +5,34 @@ import (
 	"testing"
 
 	"nuimanbot/internal/domain"
-	"nuimanbot/internal/usecase/skill/executor"
-	"nuimanbot/internal/usecase/skill/testutil"
+	"nuimanbot/internal/usecase/tool/executor"
+	"nuimanbot/internal/usecase/tool/testutil"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestGitHubSkill_Name(t *testing.T) {
-	skill := NewGitHubSkill(domain.SkillConfig{}, nil, nil, nil)
+	skill := NewGitHubSkill(domain.ToolConfig{}, nil, nil, nil)
 	assert.Equal(t, "github", skill.Name())
 }
 
 func TestGitHubSkill_Description(t *testing.T) {
-	skill := NewGitHubSkill(domain.SkillConfig{}, nil, nil, nil)
+	skill := NewGitHubSkill(domain.ToolConfig{}, nil, nil, nil)
 	desc := skill.Description()
 	assert.NotEmpty(t, desc)
 	assert.Contains(t, desc, "GitHub")
 }
 
 func TestGitHubSkill_RequiredPermissions(t *testing.T) {
-	skill := NewGitHubSkill(domain.SkillConfig{}, nil, nil, nil)
+	skill := NewGitHubSkill(domain.ToolConfig{}, nil, nil, nil)
 	permissions := skill.RequiredPermissions()
 	assert.Contains(t, permissions, domain.PermissionNetwork)
 	assert.Contains(t, permissions, domain.PermissionShell)
 }
 
 func TestGitHubSkill_InputSchema(t *testing.T) {
-	skill := NewGitHubSkill(domain.SkillConfig{}, nil, nil, nil)
+	skill := NewGitHubSkill(domain.ToolConfig{}, nil, nil, nil)
 	schema := skill.InputSchema()
 
 	// Verify required fields
@@ -62,7 +62,7 @@ func TestGitHubSkill_Execute_IssueList(t *testing.T) {
 		}, nil
 	}
 
-	config := domain.SkillConfig{Enabled: true}
+	config := domain.ToolConfig{Enabled: true}
 	skill := NewGitHubSkill(config, mockExec, nil, nil)
 
 	result, err := skill.Execute(context.Background(), map[string]any{
@@ -91,7 +91,7 @@ func TestGitHubSkill_Execute_IssueCreate(t *testing.T) {
 		}, nil
 	}
 
-	config := domain.SkillConfig{Enabled: true}
+	config := domain.ToolConfig{Enabled: true}
 	skill := NewGitHubSkill(config, mockExec, nil, nil)
 
 	result, err := skill.Execute(context.Background(), map[string]any{
@@ -122,7 +122,7 @@ func TestGitHubSkill_Execute_PRList(t *testing.T) {
 		}, nil
 	}
 
-	config := domain.SkillConfig{Enabled: true}
+	config := domain.ToolConfig{Enabled: true}
 	skill := NewGitHubSkill(config, mockExec, nil, nil)
 
 	result, err := skill.Execute(context.Background(), map[string]any{
@@ -149,7 +149,7 @@ func TestGitHubSkill_Execute_RepoView(t *testing.T) {
 		}, nil
 	}
 
-	config := domain.SkillConfig{Enabled: true}
+	config := domain.ToolConfig{Enabled: true}
 	skill := NewGitHubSkill(config, mockExec, nil, nil)
 
 	result, err := skill.Execute(context.Background(), map[string]any{
@@ -164,7 +164,7 @@ func TestGitHubSkill_Execute_RepoView(t *testing.T) {
 
 func TestGitHubSkill_Execute_MissingAction(t *testing.T) {
 	mockExec := testutil.NewMockExecutor()
-	config := domain.SkillConfig{Enabled: true}
+	config := domain.ToolConfig{Enabled: true}
 	skill := NewGitHubSkill(config, mockExec, nil, nil)
 
 	result, err := skill.Execute(context.Background(), map[string]any{})
@@ -176,7 +176,7 @@ func TestGitHubSkill_Execute_MissingAction(t *testing.T) {
 
 func TestGitHubSkill_Execute_InvalidAction(t *testing.T) {
 	mockExec := testutil.NewMockExecutor()
-	config := domain.SkillConfig{Enabled: true}
+	config := domain.ToolConfig{Enabled: true}
 	skill := NewGitHubSkill(config, mockExec, nil, nil)
 
 	result, err := skill.Execute(context.Background(), map[string]any{
@@ -198,7 +198,7 @@ func TestGitHubSkill_Execute_WithRateLimit(t *testing.T) {
 		}, nil
 	}
 
-	config := domain.SkillConfig{
+	config := domain.ToolConfig{
 		Enabled: true,
 		Params: map[string]interface{}{
 			"rate_limit": "30/minute",
@@ -226,7 +226,7 @@ func TestGitHubSkill_Execute_OutputSanitization(t *testing.T) {
 		}, nil
 	}
 
-	config := domain.SkillConfig{Enabled: true}
+	config := domain.ToolConfig{Enabled: true}
 	skill := NewGitHubSkill(config, mockExec, nil, nil)
 
 	result, err := skill.Execute(context.Background(), map[string]any{
@@ -251,7 +251,7 @@ func TestGitHubSkill_Execute_IssueView(t *testing.T) {
 		}, nil
 	}
 
-	config := domain.SkillConfig{Enabled: true}
+	config := domain.ToolConfig{Enabled: true}
 	skill := NewGitHubSkill(config, mockExec, nil, nil)
 
 	result, err := skill.Execute(context.Background(), map[string]any{
@@ -276,7 +276,7 @@ func TestGitHubSkill_Execute_IssueComment(t *testing.T) {
 		}, nil
 	}
 
-	config := domain.SkillConfig{Enabled: true}
+	config := domain.ToolConfig{Enabled: true}
 	skill := NewGitHubSkill(config, mockExec, nil, nil)
 
 	result, err := skill.Execute(context.Background(), map[string]any{
@@ -300,7 +300,7 @@ func TestGitHubSkill_Execute_IssueClose(t *testing.T) {
 		}, nil
 	}
 
-	config := domain.SkillConfig{Enabled: true}
+	config := domain.ToolConfig{Enabled: true}
 	skill := NewGitHubSkill(config, mockExec, nil, nil)
 
 	result, err := skill.Execute(context.Background(), map[string]any{
@@ -325,7 +325,7 @@ func TestGitHubSkill_Execute_PRCreate(t *testing.T) {
 		}, nil
 	}
 
-	config := domain.SkillConfig{Enabled: true}
+	config := domain.ToolConfig{Enabled: true}
 	skill := NewGitHubSkill(config, mockExec, nil, nil)
 
 	result, err := skill.Execute(context.Background(), map[string]any{
@@ -349,7 +349,7 @@ func TestGitHubSkill_Execute_PRView(t *testing.T) {
 		}, nil
 	}
 
-	config := domain.SkillConfig{Enabled: true}
+	config := domain.ToolConfig{Enabled: true}
 	skill := NewGitHubSkill(config, mockExec, nil, nil)
 
 	result, err := skill.Execute(context.Background(), map[string]any{
@@ -374,7 +374,7 @@ func TestGitHubSkill_Execute_PRReview(t *testing.T) {
 		}, nil
 	}
 
-	config := domain.SkillConfig{Enabled: true}
+	config := domain.ToolConfig{Enabled: true}
 	skill := NewGitHubSkill(config, mockExec, nil, nil)
 
 	result, err := skill.Execute(context.Background(), map[string]any{
@@ -398,7 +398,7 @@ func TestGitHubSkill_Execute_PRMerge(t *testing.T) {
 		}, nil
 	}
 
-	config := domain.SkillConfig{Enabled: true}
+	config := domain.ToolConfig{Enabled: true}
 	skill := NewGitHubSkill(config, mockExec, nil, nil)
 
 	result, err := skill.Execute(context.Background(), map[string]any{
@@ -422,7 +422,7 @@ func TestGitHubSkill_Execute_WorkflowRun(t *testing.T) {
 		}, nil
 	}
 
-	config := domain.SkillConfig{Enabled: true}
+	config := domain.ToolConfig{Enabled: true}
 	skill := NewGitHubSkill(config, mockExec, nil, nil)
 
 	result, err := skill.Execute(context.Background(), map[string]any{
@@ -446,7 +446,7 @@ func TestGitHubSkill_Execute_DefaultRepo(t *testing.T) {
 		}, nil
 	}
 
-	config := domain.SkillConfig{
+	config := domain.ToolConfig{
 		Enabled: true,
 		Params: map[string]interface{}{
 			"default_repo": "default/repo",
@@ -472,7 +472,7 @@ func TestGitHubSkill_Execute_GHCommandFails(t *testing.T) {
 		}, nil
 	}
 
-	config := domain.SkillConfig{Enabled: true}
+	config := domain.ToolConfig{Enabled: true}
 	skill := NewGitHubSkill(config, mockExec, nil, nil)
 
 	result, err := skill.Execute(context.Background(), map[string]any{

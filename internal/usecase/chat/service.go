@@ -27,11 +27,11 @@ type MemoryRepository interface {
 	ListConversations(ctx context.Context, userID string) ([]domain.ConversationSummary, error)
 }
 
-// SkillExecutionService defines the interface for skill execution required by the ChatService.
-// This will be defined by the Skills Core Agent.
-type SkillExecutionService interface {
-	Execute(ctx context.Context, skillName string, params map[string]any) (*domain.SkillResult, error)
-	ListSkills(ctx context.Context, userID string) ([]domain.Skill, error)
+// ToolExecutionService defines the interface for tool execution required by the ChatService.
+// This will be defined by the Tools Core Agent.
+type ToolExecutionService interface {
+	Execute(ctx context.Context, toolName string, params map[string]any) (*domain.ExecutionResult, error)
+	ListTools(ctx context.Context, userID string) ([]domain.Tool, error)
 	// Other methods for skill management (e.g., registration, permission checks)
 }
 
@@ -53,7 +53,7 @@ type LLMCache interface {
 type Service struct {
 	llmService       LLMService
 	memoryRepo       MemoryRepository
-	skillExecService SkillExecutionService // Currently PENDING (will be mocked or basic for now)
+	toolExecService ToolExecutionService // Currently PENDING (will be mocked or basic for now)
 	securityService  SecurityService
 	cache            LLMCache // Optional cache for LLM responses
 	// config            *config.ChatConfig // If ChatService needs its own config
@@ -63,13 +63,13 @@ type Service struct {
 func NewService(
 	llmService LLMService,
 	memoryRepo MemoryRepository,
-	skillExecService SkillExecutionService,
+	toolExecService ToolExecutionService,
 	securityService SecurityService,
 ) *Service {
 	return &Service{
 		llmService:       llmService,
 		memoryRepo:       memoryRepo,
-		skillExecService: skillExecService,
+		toolExecService: toolExecService,
 		securityService:  securityService,
 	}
 }
@@ -115,7 +115,7 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 
 	// 3. Get available skills and convert to tools
 	// Note: Using PlatformUID as user identifier for skill permissions
-	skills, err := s.skillExecService.ListSkills(ctx, incomingMsg.PlatformUID)
+	skills, err := s.toolExecService.ListTools(ctx, incomingMsg.PlatformUID)
 	if err != nil {
 		return domain.OutgoingMessage{}, fmt.Errorf("failed to list skills: %w", err)
 	}

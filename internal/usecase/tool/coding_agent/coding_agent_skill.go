@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"nuimanbot/internal/domain"
-	"nuimanbot/internal/usecase/skill/common"
-	"nuimanbot/internal/usecase/skill/executor"
+	"nuimanbot/internal/usecase/tool/common"
+	"nuimanbot/internal/usecase/tool/executor"
 )
 
 const (
@@ -17,7 +17,7 @@ const (
 
 // CodingAgentSkill orchestrates external coding CLI tools
 type CodingAgentSkill struct {
-	config   domain.SkillConfig
+	config   domain.ToolConfig
 	executor executor.ExecutorService
 	pathVal  *common.PathValidator
 }
@@ -51,7 +51,7 @@ type CodingAgentOutput struct {
 
 // NewCodingAgentSkill creates a new CodingAgentSkill instance
 func NewCodingAgentSkill(
-	config domain.SkillConfig,
+	config domain.ToolConfig,
 	executor executor.ExecutorService,
 	pathVal *common.PathValidator,
 ) *CodingAgentSkill {
@@ -78,7 +78,7 @@ func (s *CodingAgentSkill) RequiredPermissions() []domain.Permission {
 }
 
 // Config returns the skill configuration
-func (s *CodingAgentSkill) Config() domain.SkillConfig {
+func (s *CodingAgentSkill) Config() domain.ToolConfig {
 	return s.config
 }
 
@@ -120,7 +120,7 @@ func (s *CodingAgentSkill) InputSchema() map[string]any {
 }
 
 // Execute runs the coding agent task
-func (s *CodingAgentSkill) Execute(ctx context.Context, params map[string]any) (*domain.SkillResult, error) {
+func (s *CodingAgentSkill) Execute(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) {
 	tool, task, err := s.validateParams(params)
 	if err != nil {
 		return nil, err
@@ -145,7 +145,7 @@ func (s *CodingAgentSkill) Execute(ctx context.Context, params map[string]any) (
 
 	output := s.formatOutput(execResult, duration, mode)
 
-	return &domain.SkillResult{
+	return &domain.ExecutionResult{
 		Output: output,
 		Metadata: map[string]any{
 			"tool":      tool,

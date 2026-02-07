@@ -5,34 +5,34 @@ import (
 	"testing"
 
 	"nuimanbot/internal/domain"
-	"nuimanbot/internal/usecase/skill/common"
-	"nuimanbot/internal/usecase/skill/executor"
-	"nuimanbot/internal/usecase/skill/testutil"
+	"nuimanbot/internal/usecase/tool/common"
+	"nuimanbot/internal/usecase/tool/executor"
+	"nuimanbot/internal/usecase/tool/testutil"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestCodingAgentSkill_Name(t *testing.T) {
-	skill := NewCodingAgentSkill(domain.SkillConfig{}, nil, nil)
+	skill := NewCodingAgentSkill(domain.ToolConfig{}, nil, nil)
 	assert.Equal(t, "coding_agent", skill.Name())
 }
 
 func TestCodingAgentSkill_Description(t *testing.T) {
-	skill := NewCodingAgentSkill(domain.SkillConfig{}, nil, nil)
+	skill := NewCodingAgentSkill(domain.ToolConfig{}, nil, nil)
 	desc := skill.Description()
 	assert.NotEmpty(t, desc)
 	assert.Contains(t, desc, "coding")
 }
 
 func TestCodingAgentSkill_RequiredPermissions(t *testing.T) {
-	skill := NewCodingAgentSkill(domain.SkillConfig{}, nil, nil)
+	skill := NewCodingAgentSkill(domain.ToolConfig{}, nil, nil)
 	permissions := skill.RequiredPermissions()
 	assert.Contains(t, permissions, domain.PermissionShell)
 }
 
 func TestCodingAgentSkill_InputSchema(t *testing.T) {
-	skill := NewCodingAgentSkill(domain.SkillConfig{}, nil, nil)
+	skill := NewCodingAgentSkill(domain.ToolConfig{}, nil, nil)
 	schema := skill.InputSchema()
 
 	assert.NotNil(t, schema)
@@ -47,7 +47,7 @@ func TestCodingAgentSkill_InputSchema(t *testing.T) {
 }
 
 func TestCodingAgentSkill_Execute_MissingTool(t *testing.T) {
-	skill := NewCodingAgentSkill(domain.SkillConfig{}, nil, nil)
+	skill := NewCodingAgentSkill(domain.ToolConfig{}, nil, nil)
 
 	result, err := skill.Execute(context.Background(), map[string]any{
 		"task": "Create a function",
@@ -59,7 +59,7 @@ func TestCodingAgentSkill_Execute_MissingTool(t *testing.T) {
 }
 
 func TestCodingAgentSkill_Execute_MissingTask(t *testing.T) {
-	skill := NewCodingAgentSkill(domain.SkillConfig{}, nil, nil)
+	skill := NewCodingAgentSkill(domain.ToolConfig{}, nil, nil)
 
 	result, err := skill.Execute(context.Background(), map[string]any{
 		"tool": "claude_code",
@@ -71,7 +71,7 @@ func TestCodingAgentSkill_Execute_MissingTask(t *testing.T) {
 }
 
 func TestCodingAgentSkill_Execute_InvalidTool(t *testing.T) {
-	skill := NewCodingAgentSkill(domain.SkillConfig{}, nil, nil)
+	skill := NewCodingAgentSkill(domain.ToolConfig{}, nil, nil)
 
 	result, err := skill.Execute(context.Background(), map[string]any{
 		"tool": "unknown_tool",
@@ -94,7 +94,7 @@ func TestCodingAgentSkill_Execute_ClaudeCode(t *testing.T) {
 		}, nil
 	}
 
-	config := domain.SkillConfig{
+	config := domain.ToolConfig{
 		Enabled: true,
 		Params: map[string]interface{}{
 			"allowed_tools": []interface{}{"claude_code"},
@@ -126,7 +126,7 @@ func TestCodingAgentSkill_Execute_WithWorkspace(t *testing.T) {
 
 	pathVal := common.NewPathValidator([]string{"/tmp/workspace"})
 
-	config := domain.SkillConfig{
+	config := domain.ToolConfig{
 		Enabled: true,
 		Params: map[string]interface{}{
 			"allowed_tools": []interface{}{"codex"},
@@ -149,7 +149,7 @@ func TestCodingAgentSkill_Execute_WorkspacePathTraversal(t *testing.T) {
 	mockExec := testutil.NewMockExecutor()
 	pathVal := common.NewPathValidator([]string{"/tmp/workspace"})
 
-	config := domain.SkillConfig{
+	config := domain.ToolConfig{
 		Enabled: true,
 		Params: map[string]interface{}{
 			"allowed_tools": []interface{}{"codex"},
@@ -180,7 +180,7 @@ func TestCodingAgentSkill_Execute_WithTimeout(t *testing.T) {
 		}, nil
 	}
 
-	config := domain.SkillConfig{
+	config := domain.ToolConfig{
 		Enabled: true,
 		Params: map[string]interface{}{
 			"allowed_tools": []interface{}{"claude_code"},
@@ -209,7 +209,7 @@ func TestCodingAgentSkill_Execute_InteractiveMode(t *testing.T) {
 		}, nil
 	}
 
-	config := domain.SkillConfig{
+	config := domain.ToolConfig{
 		Enabled: true,
 		Params: map[string]interface{}{
 			"allowed_tools": []interface{}{"claude_code"},

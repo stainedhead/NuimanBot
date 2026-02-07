@@ -29,7 +29,7 @@ func TestProcessMessageStream_NoToolCalls(t *testing.T) {
 		},
 	}
 
-	service := createTestService(llmService, memoryRepo, &mockSkillExecutionService{}, &mockSecurityService{})
+	service := createTestService(llmService, memoryRepo, &mockToolExecutionService{}, &mockSecurityService{})
 
 	// Create test message
 	msg := &domain.IncomingMessage{
@@ -94,7 +94,7 @@ func TestProcessMessageStream_WithToolCalls(t *testing.T) {
 		},
 	}
 
-	service := createTestService(llmService, memoryRepo, &mockSkillExecutionService{}, &mockSecurityService{})
+	service := createTestService(llmService, memoryRepo, &mockToolExecutionService{}, &mockSecurityService{})
 
 	msg := &domain.IncomingMessage{
 		Platform:    domain.PlatformCLI,
@@ -146,7 +146,7 @@ func TestProcessMessageStream_LLMError(t *testing.T) {
 		},
 	}
 
-	service := createTestService(llmService, memoryRepo, &mockSkillExecutionService{}, &mockSecurityService{})
+	service := createTestService(llmService, memoryRepo, &mockToolExecutionService{}, &mockSecurityService{})
 
 	msg := &domain.IncomingMessage{
 		Platform:    domain.PlatformCLI,
@@ -201,7 +201,7 @@ func TestProcessMessageStream_ContextCancellation(t *testing.T) {
 		},
 	}
 
-	service := createTestService(llmService, memoryRepo, &mockSkillExecutionService{}, &mockSecurityService{})
+	service := createTestService(llmService, memoryRepo, &mockToolExecutionService{}, &mockSecurityService{})
 
 	msg := &domain.IncomingMessage{
 		Platform:    domain.PlatformCLI,

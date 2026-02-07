@@ -71,23 +71,23 @@ func (m *mockMemoryRepository) ListConversations(ctx context.Context, userID str
 	return nil, errors.New("not implemented")
 }
 
-type mockSkillExecutionService struct {
-	executeFunc    func(ctx context.Context, skillName string, params map[string]any) (*domain.SkillResult, error)
-	listSkillsFunc func(ctx context.Context, userID string) ([]domain.Skill, error)
+type mockToolExecutionService struct {
+	executeFunc    func(ctx context.Context, toolName string, params map[string]any) (*domain.ExecutionResult, error)
+	listSkillsFunc func(ctx context.Context, userID string) ([]domain.Tool, error)
 }
 
-func (m *mockSkillExecutionService) Execute(ctx context.Context, skillName string, params map[string]any) (*domain.SkillResult, error) {
+func (m *mockToolExecutionService) Execute(ctx context.Context, toolName string, params map[string]any) (*domain.ExecutionResult, error) {
 	if m.executeFunc != nil {
-		return m.executeFunc(ctx, skillName, params)
+		return m.executeFunc(ctx, toolName, params)
 	}
-	return &domain.SkillResult{Output: "mock skill result"}, nil
+	return &domain.ExecutionResult{Output: "mock skill result"}, nil
 }
 
-func (m *mockSkillExecutionService) ListSkills(ctx context.Context, userID string) ([]domain.Skill, error) {
+func (m *mockToolExecutionService) ListTools(ctx context.Context, userID string) ([]domain.Tool, error) {
 	if m.listSkillsFunc != nil {
 		return m.listSkillsFunc(ctx, userID)
 	}
-	return []domain.Skill{}, nil
+	return []domain.Tool{}, nil
 }
 
 type mockSecurityService struct {
@@ -127,26 +127,26 @@ func (m *mockSkill) InputSchema() map[string]any {
 	return m.inputSchema
 }
 
-func (m *mockSkill) Execute(ctx context.Context, params map[string]any) (*domain.SkillResult, error) {
-	return &domain.SkillResult{Output: "mock result"}, nil
+func (m *mockSkill) Execute(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) {
+	return &domain.ExecutionResult{Output: "mock result"}, nil
 }
 
 func (m *mockSkill) RequiredPermissions() []domain.Permission {
 	return []domain.Permission{}
 }
 
-func (m *mockSkill) Config() domain.SkillConfig {
-	return domain.SkillConfig{Enabled: true}
+func (m *mockSkill) Config() domain.ToolConfig {
+	return domain.ToolConfig{Enabled: true}
 }
 
 // Test helper to create a service with mocks
 func createTestService(
 	llmService LLMService,
 	memoryRepo MemoryRepository,
-	skillExecService SkillExecutionService,
+	toolExecService ToolExecutionService,
 	securityService SecurityService,
 ) *Service {
-	return NewService(llmService, memoryRepo, skillExecService, securityService)
+	return NewService(llmService, memoryRepo, toolExecService, securityService)
 }
 
 // TestProcessMessage_NoToolCalls tests basic message processing without tool calls
@@ -172,15 +172,15 @@ func TestProcessMessage_NoToolCalls(t *testing.T) {
 		},
 	}
 
-	skillExecService := &mockSkillExecutionService{
-		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Skill, error) {
-			return []domain.Skill{}, nil
+	toolExecService := &mockToolExecutionService{
+		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+			return []domain.Tool{}, nil
 		},
 	}
 
 	securityService := &mockSecurityService{}
 
-	service := createTestService(llmService, memoryRepo, skillExecService, securityService)
+	service := createTestService(llmService, memoryRepo, toolExecService, securityService)
 
 	incomingMsg := &domain.IncomingMessage{
 		ID:          "test-msg-1",
@@ -253,9 +253,9 @@ func TestProcessMessage_WithToolCalls(t *testing.T) {
 		},
 	}
 
-	skillExecService := &mockSkillExecutionService{
-		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Skill, error) {
-			return []domain.Skill{
+	toolExecService := &mockToolExecutionService{
+		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+			return []domain.Tool{
 				&mockSkill{
 					name:        "calculator",
 					description: "Performs arithmetic operations",
@@ -270,11 +270,11 @@ func TestProcessMessage_WithToolCalls(t *testing.T) {
 				},
 			}, nil
 		},
-		executeFunc: func(ctx context.Context, skillName string, params map[string]any) (*domain.SkillResult, error) {
-			if skillName != "calculator" {
+		executeFunc: func(ctx context.Context, toolName string, params map[string]any) (*domain.ExecutionResult, error) {
+			if toolName != "calculator" {
 				return nil, errors.New("unknown skill")
 			}
-			return &domain.SkillResult{
+			return &domain.ExecutionResult{
 				Output: "8",
 			}, nil
 		},
@@ -282,7 +282,7 @@ func TestProcessMessage_WithToolCalls(t *testing.T) {
 
 	securityService := &mockSecurityService{}
 
-	service := createTestService(llmService, memoryRepo, skillExecService, securityService)
+	service := createTestService(llmService, memoryRepo, toolExecService, securityService)
 
 	incomingMsg := &domain.IncomingMessage{
 		ID:          "test-msg-2",
@@ -344,20 +344,20 @@ func TestProcessMessage_MultipleToolIterations(t *testing.T) {
 		},
 	}
 
-	skillExecService := &mockSkillExecutionService{
-		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Skill, error) {
-			return []domain.Skill{
+	toolExecService := &mockToolExecutionService{
+		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+			return []domain.Tool{
 				&mockSkill{name: "calculator", description: "Calculator", inputSchema: map[string]any{}},
 			}, nil
 		},
-		executeFunc: func(ctx context.Context, skillName string, params map[string]any) (*domain.SkillResult, error) {
-			return &domain.SkillResult{Output: "result"}, nil
+		executeFunc: func(ctx context.Context, toolName string, params map[string]any) (*domain.ExecutionResult, error) {
+			return &domain.ExecutionResult{Output: "result"}, nil
 		},
 	}
 
 	securityService := &mockSecurityService{}
 
-	service := createTestService(llmService, memoryRepo, skillExecService, securityService)
+	service := createTestService(llmService, memoryRepo, toolExecService, securityService)
 
 	incomingMsg := &domain.IncomingMessage{
 		ID:          "test-msg-3",
@@ -403,20 +403,20 @@ func TestProcessMessage_MaxIterationsExceeded(t *testing.T) {
 		},
 	}
 
-	skillExecService := &mockSkillExecutionService{
-		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Skill, error) {
-			return []domain.Skill{
+	toolExecService := &mockToolExecutionService{
+		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+			return []domain.Tool{
 				&mockSkill{name: "calculator", description: "Calculator", inputSchema: map[string]any{}},
 			}, nil
 		},
-		executeFunc: func(ctx context.Context, skillName string, params map[string]any) (*domain.SkillResult, error) {
-			return &domain.SkillResult{Output: "result"}, nil
+		executeFunc: func(ctx context.Context, toolName string, params map[string]any) (*domain.ExecutionResult, error) {
+			return &domain.ExecutionResult{Output: "result"}, nil
 		},
 	}
 
 	securityService := &mockSecurityService{}
 
-	service := createTestService(llmService, memoryRepo, skillExecService, securityService)
+	service := createTestService(llmService, memoryRepo, toolExecService, securityService)
 
 	incomingMsg := &domain.IncomingMessage{
 		ID:          "test-msg-4",
@@ -469,20 +469,20 @@ func TestProcessMessage_ToolExecutionError(t *testing.T) {
 		},
 	}
 
-	skillExecService := &mockSkillExecutionService{
-		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Skill, error) {
-			return []domain.Skill{
+	toolExecService := &mockToolExecutionService{
+		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+			return []domain.Tool{
 				&mockSkill{name: "calculator", description: "Calculator", inputSchema: map[string]any{}},
 			}, nil
 		},
-		executeFunc: func(ctx context.Context, skillName string, params map[string]any) (*domain.SkillResult, error) {
+		executeFunc: func(ctx context.Context, toolName string, params map[string]any) (*domain.ExecutionResult, error) {
 			return nil, errors.New("tool execution failed")
 		},
 	}
 
 	securityService := &mockSecurityService{}
 
-	service := createTestService(llmService, memoryRepo, skillExecService, securityService)
+	service := createTestService(llmService, memoryRepo, toolExecService, securityService)
 
 	incomingMsg := &domain.IncomingMessage{
 		ID:          "test-msg-5",
@@ -507,7 +507,7 @@ func TestProcessMessage_ToolExecutionError(t *testing.T) {
 func TestProcessMessage_InputValidationError(t *testing.T) {
 	llmService := &mockLLMService{}
 	memoryRepo := &mockMemoryRepository{}
-	skillExecService := &mockSkillExecutionService{}
+	toolExecService := &mockToolExecutionService{}
 
 	securityService := &mockSecurityService{
 		validateInputFunc: func(ctx context.Context, input string, maxLength int) (string, error) {
@@ -515,7 +515,7 @@ func TestProcessMessage_InputValidationError(t *testing.T) {
 		},
 	}
 
-	service := createTestService(llmService, memoryRepo, skillExecService, securityService)
+	service := createTestService(llmService, memoryRepo, toolExecService, securityService)
 
 	incomingMsg := &domain.IncomingMessage{
 		ID:          "test-msg-6",
@@ -545,15 +545,15 @@ func TestProcessMessage_SkillListingError(t *testing.T) {
 		},
 	}
 
-	skillExecService := &mockSkillExecutionService{
-		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Skill, error) {
+	toolExecService := &mockToolExecutionService{
+		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
 			return nil, errors.New("skill service unavailable")
 		},
 	}
 
 	securityService := &mockSecurityService{}
 
-	service := createTestService(llmService, memoryRepo, skillExecService, securityService)
+	service := createTestService(llmService, memoryRepo, toolExecService, securityService)
 
 	incomingMsg := &domain.IncomingMessage{
 		ID:          "test-msg-7",
@@ -587,15 +587,15 @@ func TestProcessMessage_LLMCompletionError(t *testing.T) {
 		},
 	}
 
-	skillExecService := &mockSkillExecutionService{
-		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Skill, error) {
-			return []domain.Skill{}, nil
+	toolExecService := &mockToolExecutionService{
+		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+			return []domain.Tool{}, nil
 		},
 	}
 
 	securityService := &mockSecurityService{}
 
-	service := createTestService(llmService, memoryRepo, skillExecService, securityService)
+	service := createTestService(llmService, memoryRepo, toolExecService, securityService)
 
 	incomingMsg := &domain.IncomingMessage{
 		ID:          "test-msg-8",
@@ -671,15 +671,15 @@ func TestProcessMessage_CacheHit(t *testing.T) {
 		},
 	}
 
-	skillExecService := &mockSkillExecutionService{
-		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Skill, error) {
-			return []domain.Skill{}, nil
+	toolExecService := &mockToolExecutionService{
+		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+			return []domain.Tool{}, nil
 		},
 	}
 
 	securityService := &mockSecurityService{}
 
-	service := createTestService(llmService, memoryRepo, skillExecService, securityService)
+	service := createTestService(llmService, memoryRepo, toolExecService, securityService)
 
 	// Set up cache
 	cache := &mockLLMCache{entries: make(map[string]*domain.LLMResponse)}
@@ -741,15 +741,15 @@ func TestProcessMessage_CacheMiss(t *testing.T) {
 		},
 	}
 
-	skillExecService := &mockSkillExecutionService{
-		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Skill, error) {
-			return []domain.Skill{}, nil
+	toolExecService := &mockToolExecutionService{
+		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+			return []domain.Tool{}, nil
 		},
 	}
 
 	securityService := &mockSecurityService{}
 
-	service := createTestService(llmService, memoryRepo, skillExecService, securityService)
+	service := createTestService(llmService, memoryRepo, toolExecService, securityService)
 
 	// Set up cache
 	cache := &mockLLMCache{entries: make(map[string]*domain.LLMResponse)}
@@ -823,20 +823,20 @@ func TestProcessMessage_NoCacheForToolCalls(t *testing.T) {
 		},
 	}
 
-	skillExecService := &mockSkillExecutionService{
-		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Skill, error) {
-			return []domain.Skill{
+	toolExecService := &mockToolExecutionService{
+		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+			return []domain.Tool{
 				&mockSkill{name: "calculator", description: "Calculator", inputSchema: map[string]any{}},
 			}, nil
 		},
-		executeFunc: func(ctx context.Context, skillName string, params map[string]any) (*domain.SkillResult, error) {
-			return &domain.SkillResult{Output: "result"}, nil
+		executeFunc: func(ctx context.Context, toolName string, params map[string]any) (*domain.ExecutionResult, error) {
+			return &domain.ExecutionResult{Output: "result"}, nil
 		},
 	}
 
 	securityService := &mockSecurityService{}
 
-	service := createTestService(llmService, memoryRepo, skillExecService, securityService)
+	service := createTestService(llmService, memoryRepo, toolExecService, securityService)
 
 	// Set up cache
 	cache := &mockLLMCache{entries: make(map[string]*domain.LLMResponse)}

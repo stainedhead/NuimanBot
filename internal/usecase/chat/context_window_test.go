@@ -20,7 +20,7 @@ func TestBuildContextWindow_FitsInWindow(t *testing.T) {
 		},
 	}
 
-	service := createTestService(&mockLLMService{}, memoryRepo, &mockSkillExecutionService{}, &mockSecurityService{})
+	service := createTestService(&mockLLMService{}, memoryRepo, &mockToolExecutionService{}, &mockSecurityService{})
 
 	messages, totalTokens := service.BuildContextWindow(context.Background(), "conv-123", domain.LLMProviderAnthropic, 1000)
 
@@ -48,7 +48,7 @@ func TestBuildContextWindow_ExceedsLimit(t *testing.T) {
 		},
 	}
 
-	service := createTestService(&mockLLMService{}, memoryRepo, &mockSkillExecutionService{}, &mockSecurityService{})
+	service := createTestService(&mockLLMService{}, memoryRepo, &mockToolExecutionService{}, &mockSecurityService{})
 
 	// Limit to 400 tokens (should drop oldest messages)
 	messages, totalTokens := service.BuildContextWindow(context.Background(), "conv-123", domain.LLMProviderAnthropic, 400)
@@ -90,7 +90,7 @@ func TestBuildContextWindow_ProviderLimits(t *testing.T) {
 					}
 					return []domain.StoredMessage{}, nil
 				},
-			}, &mockSkillExecutionService{}, &mockSecurityService{})
+			}, &mockToolExecutionService{}, &mockSecurityService{})
 
 			service.BuildContextWindow(context.Background(), "conv-123", tt.provider, tt.expectedLimit)
 		})
@@ -105,7 +105,7 @@ func TestBuildContextWindow_EmptyConversation(t *testing.T) {
 		},
 	}
 
-	service := createTestService(&mockLLMService{}, memoryRepo, &mockSkillExecutionService{}, &mockSecurityService{})
+	service := createTestService(&mockLLMService{}, memoryRepo, &mockToolExecutionService{}, &mockSecurityService{})
 
 	messages, totalTokens := service.BuildContextWindow(context.Background(), "conv-123", domain.LLMProviderAnthropic, 1000)
 
@@ -128,7 +128,7 @@ func TestBuildContextWindow_SingleMessage(t *testing.T) {
 		},
 	}
 
-	service := createTestService(&mockLLMService{}, memoryRepo, &mockSkillExecutionService{}, &mockSecurityService{})
+	service := createTestService(&mockLLMService{}, memoryRepo, &mockToolExecutionService{}, &mockSecurityService{})
 
 	messages, totalTokens := service.BuildContextWindow(context.Background(), "conv-123", domain.LLMProviderAnthropic, 1000)
 

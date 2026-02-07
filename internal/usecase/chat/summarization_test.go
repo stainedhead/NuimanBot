@@ -39,7 +39,7 @@ func TestSummarizeConversation_Success(t *testing.T) {
 		},
 	}
 
-	service := createTestService(llmService, memoryRepo, &mockSkillExecutionService{}, &mockSecurityService{})
+	service := createTestService(llmService, memoryRepo, &mockToolExecutionService{}, &mockSecurityService{})
 
 	summary, err := service.SummarizeConversation(context.Background(), "conv-123", 1000)
 	if err != nil {
@@ -63,7 +63,7 @@ func TestSummarizeConversation_EmptyConversation(t *testing.T) {
 		},
 	}
 
-	service := createTestService(&mockLLMService{}, memoryRepo, &mockSkillExecutionService{}, &mockSecurityService{})
+	service := createTestService(&mockLLMService{}, memoryRepo, &mockToolExecutionService{}, &mockSecurityService{})
 
 	summary, err := service.SummarizeConversation(context.Background(), "conv-123", 1000)
 	if err == nil {
@@ -91,7 +91,7 @@ func TestSummarizeConversation_LLMError(t *testing.T) {
 		},
 	}
 
-	service := createTestService(llmService, memoryRepo, &mockSkillExecutionService{}, &mockSecurityService{})
+	service := createTestService(llmService, memoryRepo, &mockToolExecutionService{}, &mockSecurityService{})
 
 	_, err := service.SummarizeConversation(context.Background(), "conv-123", 1000)
 	if err == nil {
@@ -107,7 +107,7 @@ func TestSummarizeConversation_RepositoryError(t *testing.T) {
 		},
 	}
 
-	service := createTestService(&mockLLMService{}, memoryRepo, &mockSkillExecutionService{}, &mockSecurityService{})
+	service := createTestService(&mockLLMService{}, memoryRepo, &mockToolExecutionService{}, &mockSecurityService{})
 
 	_, err := service.SummarizeConversation(context.Background(), "conv-123", 1000)
 	if err == nil {
@@ -142,7 +142,7 @@ func TestSummarizeConversation_PreservesKeyInformation(t *testing.T) {
 		},
 	}
 
-	service := createTestService(llmService, memoryRepo, &mockSkillExecutionService{}, &mockSecurityService{})
+	service := createTestService(llmService, memoryRepo, &mockToolExecutionService{}, &mockSecurityService{})
 
 	summary, err := service.SummarizeConversation(context.Background(), "conv-123", 1000)
 	if err != nil {

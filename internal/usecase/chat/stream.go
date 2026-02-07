@@ -47,7 +47,7 @@ func (s *Service) ProcessMessageStream(ctx context.Context, incomingMsg *domain.
 		}
 
 		// 3. Get available skills and convert to tools
-		skills, err := s.skillExecService.ListSkills(ctx, incomingMsg.PlatformUID)
+		skills, err := s.toolExecService.ListTools(ctx, incomingMsg.PlatformUID)
 		if err != nil {
 			outCh <- domain.StreamChunk{Error: fmt.Errorf("failed to list skills: %w", err)}
 			return

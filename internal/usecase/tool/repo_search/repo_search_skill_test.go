@@ -5,34 +5,34 @@ import (
 	"testing"
 
 	"nuimanbot/internal/domain"
-	"nuimanbot/internal/usecase/skill/common"
-	"nuimanbot/internal/usecase/skill/executor"
-	"nuimanbot/internal/usecase/skill/testutil"
+	"nuimanbot/internal/usecase/tool/common"
+	"nuimanbot/internal/usecase/tool/executor"
+	"nuimanbot/internal/usecase/tool/testutil"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRepoSearchSkill_Name(t *testing.T) {
-	skill := NewRepoSearchSkill(domain.SkillConfig{}, nil, nil, nil)
+	skill := NewRepoSearchSkill(domain.ToolConfig{}, nil, nil, nil)
 	assert.Equal(t, "repo_search", skill.Name())
 }
 
 func TestRepoSearchSkill_Description(t *testing.T) {
-	skill := NewRepoSearchSkill(domain.SkillConfig{}, nil, nil, nil)
+	skill := NewRepoSearchSkill(domain.ToolConfig{}, nil, nil, nil)
 	desc := skill.Description()
 	assert.NotEmpty(t, desc)
 	assert.Contains(t, desc, "codebase")
 }
 
 func TestRepoSearchSkill_RequiredPermissions(t *testing.T) {
-	skill := NewRepoSearchSkill(domain.SkillConfig{}, nil, nil, nil)
+	skill := NewRepoSearchSkill(domain.ToolConfig{}, nil, nil, nil)
 	permissions := skill.RequiredPermissions()
 	assert.Contains(t, permissions, domain.PermissionRead)
 }
 
 func TestRepoSearchSkill_InputSchema(t *testing.T) {
-	skill := NewRepoSearchSkill(domain.SkillConfig{}, nil, nil, nil)
+	skill := NewRepoSearchSkill(domain.ToolConfig{}, nil, nil, nil)
 	schema := skill.InputSchema()
 
 	// Verify required fields are present
@@ -58,7 +58,7 @@ func TestRepoSearchSkill_Execute_Success(t *testing.T) {
 		}, nil
 	}
 
-	config := domain.SkillConfig{
+	config := domain.ToolConfig{
 		Enabled: true,
 		Params: map[string]interface{}{
 			"allowed_directories": []interface{}{"/tmp/workspace"},
@@ -80,7 +80,7 @@ func TestRepoSearchSkill_Execute_Success(t *testing.T) {
 func TestRepoSearchSkill_Execute_MissingQuery(t *testing.T) {
 	mockExec := testutil.NewMockExecutor()
 
-	config := domain.SkillConfig{
+	config := domain.ToolConfig{
 		Enabled: true,
 	}
 
@@ -96,7 +96,7 @@ func TestRepoSearchSkill_Execute_MissingQuery(t *testing.T) {
 func TestRepoSearchSkill_Execute_PathTraversal(t *testing.T) {
 	mockExec := testutil.NewMockExecutor()
 
-	config := domain.SkillConfig{
+	config := domain.ToolConfig{
 		Enabled: true,
 		Params: map[string]interface{}{
 			"allowed_directories": []interface{}{"/tmp/workspace"},
@@ -121,7 +121,7 @@ func TestRepoSearchSkill_Execute_PathTraversal(t *testing.T) {
 func TestRepoSearchSkill_Execute_OutsideWorkspace(t *testing.T) {
 	mockExec := testutil.NewMockExecutor()
 
-	config := domain.SkillConfig{
+	config := domain.ToolConfig{
 		Enabled: true,
 		Params: map[string]interface{}{
 			"allowed_directories": []interface{}{"/tmp/workspace"},
@@ -157,7 +157,7 @@ func TestRepoSearchSkill_Execute_WithFileType(t *testing.T) {
 		}, nil
 	}
 
-	config := domain.SkillConfig{
+	config := domain.ToolConfig{
 		Enabled: true,
 		Params: map[string]interface{}{
 			"allowed_directories": []interface{}{"/tmp/workspace"},
@@ -190,7 +190,7 @@ func TestRepoSearchSkill_Execute_WithMaxResults(t *testing.T) {
 		}, nil
 	}
 
-	config := domain.SkillConfig{
+	config := domain.ToolConfig{
 		Enabled: true,
 		Params: map[string]interface{}{
 			"allowed_directories": []interface{}{"/tmp/workspace"},

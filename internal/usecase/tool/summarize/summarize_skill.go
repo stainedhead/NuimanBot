@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"nuimanbot/internal/domain"
-	"nuimanbot/internal/usecase/skill/executor"
+	"nuimanbot/internal/usecase/tool/executor"
 )
 
 const (
@@ -22,7 +22,7 @@ const (
 
 // SummarizeSkill provides URL and YouTube video summarization
 type SummarizeSkill struct {
-	config     domain.SkillConfig
+	config     domain.ToolConfig
 	llmService domain.LLMService
 	executor   executor.ExecutorService
 	httpClient *http.Client
@@ -42,7 +42,7 @@ type SummaryOutput struct {
 
 // NewSummarizeSkill creates a new SummarizeSkill instance
 func NewSummarizeSkill(
-	config domain.SkillConfig,
+	config domain.ToolConfig,
 	llmService domain.LLMService,
 	executor executor.ExecutorService,
 	httpClient *http.Client,
@@ -77,7 +77,7 @@ func (s *SummarizeSkill) RequiredPermissions() []domain.Permission {
 }
 
 // Config returns the skill configuration
-func (s *SummarizeSkill) Config() domain.SkillConfig {
+func (s *SummarizeSkill) Config() domain.ToolConfig {
 	return s.config
 }
 
@@ -107,7 +107,7 @@ func (s *SummarizeSkill) InputSchema() map[string]any {
 }
 
 // Execute runs the URL summarization
-func (s *SummarizeSkill) Execute(ctx context.Context, params map[string]any) (*domain.SkillResult, error) {
+func (s *SummarizeSkill) Execute(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) {
 	urlStr, err := s.validateURL(params)
 	if err != nil {
 		return nil, err
@@ -125,7 +125,7 @@ func (s *SummarizeSkill) Execute(ctx context.Context, params map[string]any) (*d
 
 	output := s.formatOutput(summary, urlStr, sourceType, params)
 
-	return &domain.SkillResult{
+	return &domain.ExecutionResult{
 		Output: output,
 		Metadata: map[string]any{
 			"url":         urlStr,

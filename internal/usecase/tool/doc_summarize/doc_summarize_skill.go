@@ -23,7 +23,7 @@ const (
 
 // DocSummarizeSkill provides document summarization capabilities
 type DocSummarizeSkill struct {
-	config     domain.SkillConfig
+	config     domain.ToolConfig
 	llmService domain.LLMService
 	httpClient *http.Client
 }
@@ -39,7 +39,7 @@ type SummaryOutput struct {
 
 // NewDocSummarizeSkill creates a new DocSummarizeSkill instance
 func NewDocSummarizeSkill(
-	config domain.SkillConfig,
+	config domain.ToolConfig,
 	llmService domain.LLMService,
 	httpClient *http.Client,
 ) *DocSummarizeSkill {
@@ -75,7 +75,7 @@ func (s *DocSummarizeSkill) RequiredPermissions() []domain.Permission {
 }
 
 // Config returns the skill configuration
-func (s *DocSummarizeSkill) Config() domain.SkillConfig {
+func (s *DocSummarizeSkill) Config() domain.ToolConfig {
 	return s.config
 }
 
@@ -103,7 +103,7 @@ func (s *DocSummarizeSkill) InputSchema() map[string]any {
 }
 
 // Execute runs the document summarization
-func (s *DocSummarizeSkill) Execute(ctx context.Context, params map[string]any) (*domain.SkillResult, error) {
+func (s *DocSummarizeSkill) Execute(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) {
 	source, err := s.validateSource(params)
 	if err != nil {
 		return nil, err
@@ -121,7 +121,7 @@ func (s *DocSummarizeSkill) Execute(ctx context.Context, params map[string]any) 
 
 	output := s.formatOutput(summary, source, params)
 
-	return &domain.SkillResult{
+	return &domain.ExecutionResult{
 		Output: output,
 		Metadata: map[string]any{
 			"source":     source,
