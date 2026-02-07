@@ -1,5 +1,9 @@
 # NuimanBot
 
+<div align="center">
+  <img src="./img/NuimanWebImage.jpg" alt="NuimanBot">
+</div>
+
 An AI agent framework built with Clean Architecture principles, featuring LLM integration, extensible tool system, and multiple messaging gateway support.
 
 ## Features
