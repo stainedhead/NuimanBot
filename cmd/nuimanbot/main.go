@@ -510,7 +510,7 @@ func (app *application) Run(ctx context.Context) error {
 			slog.Warn("Failed to create Slack gateway", "error", err)
 		} else {
 			app.connectGateway(slackGateway)
-			gateways = append(gateways, slackGateway) //nolint:staticcheck // Reserved for future shutdown handling
+			gateways = append(gateways, slackGateway) //nolint:ineffassign,staticcheck // Reserved for future shutdown handling
 
 			// Start Slack gateway in background
 			go func() {

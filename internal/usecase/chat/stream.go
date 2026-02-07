@@ -120,11 +120,11 @@ func (s *Service) ProcessMessageStream(ctx context.Context, incomingMsg *domain.
 		}
 
 		// 8. Save assistant response (best effort - don't fail stream on save error)
-		_ = s.memoryRepo.SaveMessage(ctx, conversationID, incomingMsg.PlatformUID, incomingMsg.Platform, domain.StoredMessage{
+		_ = s.memoryRepo.SaveMessage(ctx, conversationID, incomingMsg.PlatformUID, incomingMsg.Platform, domain.StoredMessage{ //nolint:errcheck // Best effort persistence in stream context
 			Role:       "assistant",
 			Content:    fullContent,
 			TokenCount: len(fullContent) / 4, // Rough estimate
-		}) //nolint:errcheck // Best effort persistence in stream context
+		})
 
 		// Send final done marker
 		outCh <- domain.StreamChunk{Done: true}

@@ -32,16 +32,10 @@ linters-settings:
       - diagnostic
       - performance
     disabled-checks:
-      - hugeParam       # Allow large params by value (will fix in comprehensive cleanup)
-      - unnamedResult   # Allow unnamed results (will fix in comprehensive cleanup)
-      - rangeValCopy    # Allow value copies in range (will fix in comprehensive cleanup)
-      - nestingReduce   # Allow nested if statements (will fix in comprehensive cleanup)
-      - httpNoBody      # Allow nil body in HTTP requests (will fix in comprehensive cleanup)
-      - exitAfterDefer  # Allow log.Fatal after defer (will fix in comprehensive cleanup)
-      - paramTypeCombine # Allow separate parameter types (will fix in comprehensive cleanup)
-      - octalLiteral    # Allow old octal literal style (will fix in comprehensive cleanup)
-      - typeAssertChain # Allow if-else type assertions (will fix in comprehensive cleanup)
-      - ifElseChain     # Allow if-else chains (will fix in comprehensive cleanup)
+      - hugeParam     # Allow large params by value (will fix in comprehensive cleanup)
+      - rangeValCopy  # Allow value copies in range (will fix in comprehensive cleanup)
+      - exitAfterDefer # Allow log.Fatal after defer (will fix in comprehensive cleanup)
+      - ifElseChain   # Allow if-else chains (will fix in comprehensive cleanup)
 
   staticcheck:
     checks: ["all", "-SA1029", "-SA4008", "-SA9003"]

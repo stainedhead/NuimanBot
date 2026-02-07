@@ -80,7 +80,7 @@ func (c *Client) Stream(ctx context.Context, provider domain.LLMProvider, req *d
 	// Process stream in goroutine
 	go func() {
 		defer close(outChan)
-		defer stream.Close()
+		defer stream.Close() //nolint:errcheck // Best effort cleanup in defer
 
 		for {
 			resp, err := stream.Recv()
