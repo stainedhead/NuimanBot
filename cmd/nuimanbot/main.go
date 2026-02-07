@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -36,6 +37,13 @@ import (
 	"nuimanbot/internal/usecase/memory"
 	"nuimanbot/internal/usecase/security"
 	"nuimanbot/internal/usecase/skill"
+	"nuimanbot/internal/usecase/skill/coding_agent"
+	"nuimanbot/internal/usecase/skill/common"
+	"nuimanbot/internal/usecase/skill/doc_summarize"
+	"nuimanbot/internal/usecase/skill/executor"
+	"nuimanbot/internal/usecase/skill/github"
+	"nuimanbot/internal/usecase/skill/repo_search"
+	"nuimanbot/internal/usecase/skill/summarize"
 )
 
 // application represents the core NuimanBot application.
@@ -163,7 +171,7 @@ func main() {
 	skillRegistry := skill.NewInMemoryRegistry()
 
 	// Register built-in skills
-	if err := registerBuiltInSkills(skillRegistry, notesRepo); err != nil {
+	if err := registerBuiltInSkills(skillRegistry, notesRepo, llmService); err != nil {
 		log.Fatalf("Failed to register skills: %v", err)
 	}
 
@@ -302,7 +310,7 @@ func initializeLLMService(cfg *config.NuimanBotConfig) (domain.LLMService, error
 }
 
 // registerBuiltInSkills registers all built-in skills with the registry.
-func registerBuiltInSkills(registry skill.SkillRegistry, notesRepo *sqlite.NotesRepository) error {
+func registerBuiltInSkills(registry skill.SkillRegistry, notesRepo *sqlite.NotesRepository, llmService domain.LLMService) error {
 	// Register Calculator skill
 	calc := calculator.NewCalculator()
 	if err := registry.Register(calc); err != nil {
@@ -341,7 +349,101 @@ func registerBuiltInSkills(registry skill.SkillRegistry, notesRepo *sqlite.Notes
 	}
 	slog.Info("Skill registered", "skill", "notes")
 
+	// Register Developer Productivity Skills (Phase 5)
+	if err := registerDeveloperProductivitySkills(registry, llmService); err != nil {
+		return fmt.Errorf("failed to register developer productivity skills: %w", err)
+	}
+
 	slog.Info("Registered built-in skills successfully")
+	return nil
+}
+
+// registerDeveloperProductivitySkills registers developer productivity skills.
+func registerDeveloperProductivitySkills(registry skill.SkillRegistry, llmService domain.LLMService) error {
+	// Create shared dependencies
+	executorSvc := executor.NewExecutorService()
+	rateLimiter := common.NewRateLimiter()
+	sanitizer := common.NewOutputSanitizer()
+	httpClient := &http.Client{Timeout: 60 * time.Second}
+
+	// Default workspace paths (can be configured later)
+	workspacePaths := []string{"."}
+	if cwd, err := os.Getwd(); err == nil {
+		workspacePaths = []string{cwd}
+	}
+	pathValidator := common.NewPathValidator(workspacePaths)
+
+	// Register GitHubSkill
+	githubConfig := domain.SkillConfig{
+		Enabled: true,
+		Params: map[string]interface{}{
+			"timeout":     30,
+			"rate_limit":  "30/minute",
+		},
+	}
+	githubSkill := github.NewGitHubSkill(githubConfig, executorSvc, rateLimiter, sanitizer)
+	if err := registry.Register(githubSkill); err != nil {
+		return fmt.Errorf("failed to register github skill: %w", err)
+	}
+	slog.Info("Skill registered", "skill", "github")
+
+	// Register RepoSearchSkill
+	repoSearchConfig := domain.SkillConfig{
+		Enabled: true,
+		Params: map[string]interface{}{
+			"allowed_directories": workspacePaths,
+		},
+	}
+	repoSearchSkill := repo_search.NewRepoSearchSkill(repoSearchConfig, executorSvc, pathValidator, sanitizer)
+	if err := registry.Register(repoSearchSkill); err != nil {
+		return fmt.Errorf("failed to register repo_search skill: %w", err)
+	}
+	slog.Info("Skill registered", "skill", "repo_search")
+
+	// Register DocSummarizeSkill
+	docSummarizeConfig := domain.SkillConfig{
+		Enabled: true,
+		Params: map[string]interface{}{
+			"allowed_domains":   []interface{}{"github.com", "docs.google.com", "notion.so"},
+			"max_document_size": 5 * 1024 * 1024,
+		},
+	}
+	docSummarizeSkill := doc_summarize.NewDocSummarizeSkill(docSummarizeConfig, llmService, httpClient)
+	if err := registry.Register(docSummarizeSkill); err != nil {
+		return fmt.Errorf("failed to register doc_summarize skill: %w", err)
+	}
+	slog.Info("Skill registered", "skill", "doc_summarize")
+
+	// Register SummarizeSkill
+	summarizeConfig := domain.SkillConfig{
+		Enabled: true,
+		Params: map[string]interface{}{
+			"timeout":    90,
+			"user_agent": "NuimanBot/1.0",
+		},
+	}
+	summarizeSkill := summarize.NewSummarizeSkill(summarizeConfig, llmService, executorSvc, httpClient)
+	if err := registry.Register(summarizeSkill); err != nil {
+		return fmt.Errorf("failed to register summarize skill: %w", err)
+	}
+	slog.Info("Skill registered", "skill", "summarize")
+
+	// Register CodingAgentSkill
+	codingAgentConfig := domain.SkillConfig{
+		Enabled: false, // Admin must explicitly enable
+		Params: map[string]interface{}{
+			"allowed_tools":  []interface{}{"codex", "claude_code"},
+			"default_mode":   "interactive",
+			"pty_mode":       true,
+		},
+	}
+	codingAgentSkill := coding_agent.NewCodingAgentSkill(codingAgentConfig, executorSvc, pathValidator)
+	if err := registry.Register(codingAgentSkill); err != nil {
+		return fmt.Errorf("failed to register coding_agent skill: %w", err)
+	}
+	slog.Info("Skill registered", "skill", "coding_agent")
+
+	slog.Info("Registered developer productivity skills successfully")
 	return nil
 }
 
