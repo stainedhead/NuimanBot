@@ -1,6 +1,6 @@
 # NuimanBot
 
-An AI agent framework built with Clean Architecture principles, featuring LLM integration, extensible skill system, and multiple messaging gateway support.
+An AI agent framework built with Clean Architecture principles, featuring LLM integration, extensible tool system, and multiple messaging gateway support.
 
 ## Features
 
@@ -9,12 +9,12 @@ An AI agent framework built with Clean Architecture principles, featuring LLM in
 - **Multi-LLM Support**: Anthropic Claude, OpenAI GPT, and Ollama (local models)
 - **Multi-Provider Fallback**: Automatic failover across LLM providers for high availability
 - **Streaming Responses**: Real-time token-by-token LLM responses with graceful degradation
-- **Rich Skill Library**: 10 built-in skills (calculator, datetime, weather, web search, notes, github, repo_search, doc_summarize, summarize, coding_agent)
+- **Rich Tool Library**: 10 built-in tools (calculator, datetime, weather, web search, notes, github, repo_search, doc_summarize, summarize, coding_agent)
 - **Multiple Gateways**: CLI, Telegram, and Slack interfaces with concurrent operation
 
 ### Security & Access Control
 - **RBAC System**: Role-based access control with user management
-- **Rate Limiting**: Token bucket algorithm with per-user and per-skill limits
+- **Rate Limiting**: Token bucket algorithm with per-user and per-tool limits
 - **Secure Credentials**: AES-256-GCM encrypted credential vault with key rotation support
 - **Input Validation**: Comprehensive protection against injection attacks and malicious input
 - **Audit Logging**: Security event tracking for compliance and monitoring
@@ -61,7 +61,7 @@ An AI agent framework built with Clean Architecture principles, featuring LLM in
   - Anthropic Claude (recommended)
   - OpenAI GPT
   - Ollama (for local models, no API key needed)
-- Optional: OpenWeatherMap API key (for weather skill)
+- Optional: OpenWeatherMap API key (for weather tool)
 - Optional: Telegram Bot Token (for Telegram gateway)
 - Optional: Slack Bot/App Tokens (for Slack gateway)
 
@@ -120,7 +120,7 @@ gateways:
     bot_token: "xoxb-your-bot-token"
     app_token: "xapp-your-app-token"  # required for Socket Mode
 
-skills:
+tools:
   entries:
     calculator:
       enabled: true
@@ -160,8 +160,8 @@ export NUIMANBOT_GATEWAYS_SLACK_ENABLED="true"
 export NUIMANBOT_GATEWAYS_SLACK_BOTTOKEN="xoxb-your-bot-token"
 export NUIMANBOT_GATEWAYS_SLACK_APPTOKEN="xapp-your-app-token"
 
-# Skills Configuration
-export OPENWEATHERMAP_API_KEY="your-openweathermap-key"  # for weather skill
+# Tools Configuration
+export OPENWEATHERMAP_API_KEY="your-openweathermap-key"  # for weather tool
 
 # Optional overrides
 export NUIMANBOT_SERVER_LOGLEVEL="debug"
@@ -185,7 +185,7 @@ export NUIMANBOT_LLM_OPENAI_APIKEY="sk-your-openai-key"
 # Option C: Ollama (local)
 export NUIMANBOT_LLM_OLLAMA_BASEURL="http://localhost:11434"
 
-# Optional: Weather skill
+# Optional: Weather tool
 export OPENWEATHERMAP_API_KEY="your-weather-api-key"
 
 # Run the application
@@ -198,22 +198,22 @@ The CLI will start and you can interact with the bot:
 NuimanBot starting...
 Config file used: ./config.yaml
 2026/02/06 12:00:00 Database schema initialized successfully
-2026/02/06 12:00:00 Calculator skill registered
-2026/02/06 12:00:00 DateTime skill registered
-2026/02/06 12:00:00 Weather skill registered
-2026/02/06 12:00:00 WebSearch skill registered
-2026/02/06 12:00:00 Notes skill registered
-2026/02/06 12:00:00 Registered built-in skills successfully
+2026/02/06 12:00:00 Calculator tool registered
+2026/02/06 12:00:00 DateTime tool registered
+2026/02/06 12:00:00 Weather tool registered
+2026/02/06 12:00:00 WebSearch tool registered
+2026/02/06 12:00:00 Notes tool registered
+2026/02/06 12:00:00 Registered built-in tools successfully
 2026/02/06 12:00:00 NuimanBot initialized with:
 2026/02/06 12:00:00   Log Level: info
 2026/02/06 12:00:00   Debug Mode: false
 2026/02/06 12:00:00   LLM Provider: anthropic
-2026/02/06 12:00:00   Skills Registered: 5
+2026/02/06 12:00:00   Tools Registered: 5
 
 Starting CLI Gateway...
 Type your messages below. Commands:
   - Type 'exit' or 'quit' to stop
-  - Type 'help' for available skills
+  - Type 'help' for available tools
 
 > Hello!
 Bot: Hi! I'm NuimanBot. How can I help you today?
@@ -253,7 +253,7 @@ NuimanBot implements comprehensive security measures to protect against common a
 - Input validation failures tracked
 - Audit interface extensible for custom logging backends
 
-## Built-in Skills
+## Built-in Tools
 
 ### Calculator
 Performs basic arithmetic operations:
@@ -301,7 +301,7 @@ Create, read, update, and delete personal notes:
 - **Storage**: SQLite with user isolation
 - **Usage**: "Create a note titled 'Meeting' with content 'Q1 planning session'", "List my notes"
 
-## Developer Productivity Skills
+## Developer Productivity Tools
 
 ### GitHub
 GitHub operations via `gh` CLI integration:
@@ -354,7 +354,7 @@ Orchestrate external coding CLI tools (admin-only):
 - **Requirements**: Respective CLI tool installed (e.g., `claude-code`, `codex`)
 - **Usage**: "Use claude_code to add error handling to utils.go", "Run codex to refactor this function"
 
-**Note**: All developer productivity skills follow RBAC, include audit logging, and have comprehensive test coverage (85%+).
+**Note**: All developer productivity tools follow RBAC, include audit logging, and have comprehensive test coverage (85%+).
 
 ## Development
 
@@ -371,7 +371,7 @@ Orchestrate external coding CLI tools (admin-only):
 │   │   ├── security/      # Security & encryption
 │   │   ├── user/          # User management
 │   │   ├── notes/         # Notes repository interface
-│   │   └── skill/         # Skill execution framework with RBAC
+│   │   └── tool/         # Tool execution framework with RBAC
 │   ├── adapter/           # Interface adapters
 │   │   ├── gateway/       # CLI, Telegram, Slack gateways
 │   │   └── repository/    # SQLite repositories (users, messages, notes)
@@ -380,7 +380,7 @@ Orchestrate external coding CLI tools (admin-only):
 │       ├── llm/           # LLM provider clients (Anthropic, OpenAI, Ollama)
 │       ├── weather/       # OpenWeatherMap client
 │       └── search/        # DuckDuckGo search client
-├── internal/skills/       # Built-in skills (calculator, datetime, weather, websearch, notes)
+├── internal/tools/       # Built-in tools (calculator, datetime, weather, websearch, notes)
 │   ├── calculator/
 │   └── datetime/
 ├── config.yaml            # Configuration file
@@ -401,10 +401,10 @@ go test -cover ./...
 # Run specific test types
 go test ./internal/...            # Unit and integration tests
 go test ./e2e/...                 # End-to-end tests
-go test ./internal/skills/...     # Skill tests only
+go test ./internal/tools/...     # Tool tests only
 
 # Run specific package tests
-go test ./internal/skills/calculator/... -v
+go test ./internal/tools/calculator/... -v
 
 # Run with race detection
 go test -race ./...
@@ -422,7 +422,7 @@ go test -v ./e2e/...
 **Unit Tests** (`*_test.go`)
 - Fast, isolated tests for individual functions and methods
 - Located in same package as code under test
-- Example: `internal/skills/calculator/calculator_test.go`
+- Example: `internal/tools/calculator/calculator_test.go`
 
 **Integration Tests** (`*_test.go`)
 - Test interactions between multiple components
@@ -433,7 +433,7 @@ go test -v ./e2e/...
 - Full application initialization with all layers
 - Test scenarios include:
   - Full application lifecycle (startup, operation, shutdown)
-  - CLI to skill execution flow
+  - CLI to tool execution flow
   - Conversation persistence
   - Input validation rejection
   - Configuration loading
@@ -485,7 +485,7 @@ See `AGENTS.md` for detailed development guidelines.
 **Domain Layer** (`internal/domain/`)
 - Pure business entities and interfaces
 - No external dependencies (only stdlib)
-- Defines: User, Message, Skill, LLM interfaces
+- Defines: User, Message, Tool, LLM interfaces
 
 **Use Case Layer** (`internal/usecase/`)
 - Application business logic
@@ -537,13 +537,13 @@ All configuration can be set via environment variables with the `NUIMANBOT_` pre
 ### Storage
 - `NUIMANBOT_STORAGE_DSN` - Database connection string
 
-### Skills
-- `NUIMANBOT_SKILLS_ENTRIES_CALCULATOR_APIKEY` - API key for calculator skill
-- `NUIMANBOT_SKILLS_ENTRIES_DATETIME_APIKEY` - API key for datetime skill
+### Tools
+- `NUIMANBOT_SKILLS_ENTRIES_CALCULATOR_APIKEY` - API key for calculator tool
+- `NUIMANBOT_SKILLS_ENTRIES_DATETIME_APIKEY` - API key for datetime tool
 
-## Creating Custom Skills
+## Creating Custom Tools
 
-Implement the `domain.Skill` interface:
+Implement the `domain.Tool` interface:
 
 ```go
 package myskill
@@ -568,7 +568,7 @@ func (s *MySkill) Name() string {
 }
 
 func (s *MySkill) Description() string {
-    return "Description of what my skill does"
+    return "Description of what my tool does"
 }
 
 func (s *MySkill) InputSchema() map[string]any {
@@ -585,7 +585,7 @@ func (s *MySkill) InputSchema() map[string]any {
 }
 
 func (s *MySkill) Execute(ctx context.Context, params map[string]any) (*domain.SkillResult, error) {
-    // Skill logic here
+    // Tool logic here
     return &domain.SkillResult{
         Output: "result",
         Metadata: map[string]any{},
@@ -605,10 +605,10 @@ func (s *MySkill) Config() domain.SkillConfig {
 Register in `cmd/nuimanbot/main.go`:
 
 ```go
-import "nuimanbot/internal/skills/myskill"
+import "nuimanbot/internal/tools/myskill"
 
-func registerBuiltInSkills(registry skill.SkillRegistry) error {
-    // ... existing skills ...
+func registerBuiltInSkills(registry tool.SkillRegistry) error {
+    // ... existing tools ...
 
     myskill := myskill.NewMySkill()
     if err := registry.Register(myskill); err != nil {
@@ -648,7 +648,7 @@ See `AGENTS.md` for detailed contribution guidelines.
 - ✅ Clean Architecture foundation with strict dependency rules
 - ✅ Multi-gateway support (CLI, Telegram, Slack)
 - ✅ Multi-LLM integration (Anthropic, OpenAI, Ollama)
-- ✅ 5 built-in skills with RBAC permissions
+- ✅ 5 built-in tools with RBAC permissions
 - ✅ SQLite storage with migrations
 - ✅ Configuration system with environment-aware validation
 - ✅ Comprehensive test coverage (85%+ across all packages)
@@ -669,7 +669,7 @@ See `AGENTS.md` for detailed contribution guidelines.
 
 **Phase 5: Feature Completion (100%)**
 - ✅ Conversation summarization (automatic LLM-based compression)
-- ✅ Rate limiting (token bucket with per-user/per-skill limits)
+- ✅ Rate limiting (token bucket with per-user/per-tool limits)
 - ✅ Token window management (dynamic context sizing per provider)
 - ✅ Streaming response support
 - ✅ Multi-provider fallback
@@ -677,7 +677,7 @@ See `AGENTS.md` for detailed contribution guidelines.
 - ✅ Conversation export (JSON, Markdown)
 
 **Phase 6: Observability & Monitoring (100%)**
-- ✅ Prometheus metrics (HTTP, LLM, skills, cache, database, security)
+- ✅ Prometheus metrics (HTTP, LLM, tools, cache, database, security)
 - ✅ Distributed tracing (OpenTelemetry-style span tracking)
 - ✅ Error tracking (structured capture with context)
 - ✅ Real-time alerting (multi-channel with throttling)
