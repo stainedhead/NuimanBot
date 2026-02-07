@@ -1,8 +1,6 @@
 run:
   timeout: 5m
   tests: true  # Run linters on test files
-  skip-dirs:
-    - vendor
 
 linters:
   enable:
