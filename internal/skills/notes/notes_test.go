@@ -8,6 +8,11 @@ import (
 	"nuimanbot/internal/skills/notes"
 )
 
+// contextKey is a custom type for context keys to avoid collisions
+type contextKey string
+
+const userIDKey contextKey = "user_id"
+
 // mockNotesRepo is a mock notes repository for testing
 type mockNotesRepo struct {
 	notes map[string]*domain.Note
@@ -79,7 +84,7 @@ func TestNotesSkill_Execute_Create(t *testing.T) {
 	skill := notes.NewNotes(repo)
 
 	// Add user_id to context
-	ctx := context.WithValue(context.Background(), "user_id", "user1")
+	ctx := context.WithValue(context.Background(), userIDKey, "user1")
 
 	result, err := skill.Execute(ctx, map[string]any{
 		"operation": "create",
@@ -98,7 +103,7 @@ func TestNotesSkill_Execute_MissingOperation(t *testing.T) {
 	repo := newMockNotesRepo()
 	skill := notes.NewNotes(repo)
 
-	ctx := context.WithValue(context.Background(), "user_id", "user1")
+	ctx := context.WithValue(context.Background(), userIDKey, "user1")
 
 	result, err := skill.Execute(ctx, map[string]any{
 		"title": "Test Note",
@@ -115,7 +120,7 @@ func TestNotesSkill_Execute_InvalidOperation(t *testing.T) {
 	repo := newMockNotesRepo()
 	skill := notes.NewNotes(repo)
 
-	ctx := context.WithValue(context.Background(), "user_id", "user1")
+	ctx := context.WithValue(context.Background(), userIDKey, "user1")
 
 	result, err := skill.Execute(ctx, map[string]any{
 		"operation": "invalid",
@@ -175,7 +180,7 @@ func TestNotesSkill_Execute_CreateWithTags(t *testing.T) {
 	repo := newMockNotesRepo()
 	skill := notes.NewNotes(repo)
 
-	ctx := context.WithValue(context.Background(), "user_id", "user1")
+	ctx := context.WithValue(context.Background(), userIDKey, "user1")
 
 	result, err := skill.Execute(ctx, map[string]any{
 		"operation": "create",
@@ -198,7 +203,7 @@ func TestNotesSkill_Execute_CreateMissingTitle(t *testing.T) {
 	repo := newMockNotesRepo()
 	skill := notes.NewNotes(repo)
 
-	ctx := context.WithValue(context.Background(), "user_id", "user1")
+	ctx := context.WithValue(context.Background(), userIDKey, "user1")
 
 	result, err := skill.Execute(ctx, map[string]any{
 		"operation": "create",
@@ -216,7 +221,7 @@ func TestNotesSkill_Execute_CreateMissingContent(t *testing.T) {
 	repo := newMockNotesRepo()
 	skill := notes.NewNotes(repo)
 
-	ctx := context.WithValue(context.Background(), "user_id", "user1")
+	ctx := context.WithValue(context.Background(), userIDKey, "user1")
 
 	result, err := skill.Execute(ctx, map[string]any{
 		"operation": "create",
@@ -234,7 +239,7 @@ func TestNotesSkill_Execute_Read(t *testing.T) {
 	repo := newMockNotesRepo()
 	skill := notes.NewNotes(repo)
 
-	ctx := context.WithValue(context.Background(), "user_id", "user1")
+	ctx := context.WithValue(context.Background(), userIDKey, "user1")
 
 	// Create a note first
 	createResult, _ := skill.Execute(ctx, map[string]any{
@@ -264,7 +269,7 @@ func TestNotesSkill_Execute_ReadMissingID(t *testing.T) {
 	repo := newMockNotesRepo()
 	skill := notes.NewNotes(repo)
 
-	ctx := context.WithValue(context.Background(), "user_id", "user1")
+	ctx := context.WithValue(context.Background(), userIDKey, "user1")
 
 	result, err := skill.Execute(ctx, map[string]any{
 		"operation": "read",
@@ -281,7 +286,7 @@ func TestNotesSkill_Execute_ReadNotFound(t *testing.T) {
 	repo := newMockNotesRepo()
 	skill := notes.NewNotes(repo)
 
-	ctx := context.WithValue(context.Background(), "user_id", "user1")
+	ctx := context.WithValue(context.Background(), userIDKey, "user1")
 
 	result, err := skill.Execute(ctx, map[string]any{
 		"operation": "read",
@@ -299,7 +304,7 @@ func TestNotesSkill_Execute_Update(t *testing.T) {
 	repo := newMockNotesRepo()
 	skill := notes.NewNotes(repo)
 
-	ctx := context.WithValue(context.Background(), "user_id", "user1")
+	ctx := context.WithValue(context.Background(), userIDKey, "user1")
 
 	// Create a note first
 	createResult, _ := skill.Execute(ctx, map[string]any{
@@ -328,7 +333,7 @@ func TestNotesSkill_Execute_UpdatePartial(t *testing.T) {
 	repo := newMockNotesRepo()
 	skill := notes.NewNotes(repo)
 
-	ctx := context.WithValue(context.Background(), "user_id", "user1")
+	ctx := context.WithValue(context.Background(), userIDKey, "user1")
 
 	// Create a note first
 	createResult, _ := skill.Execute(ctx, map[string]any{
@@ -356,7 +361,7 @@ func TestNotesSkill_Execute_UpdateWithTags(t *testing.T) {
 	repo := newMockNotesRepo()
 	skill := notes.NewNotes(repo)
 
-	ctx := context.WithValue(context.Background(), "user_id", "user1")
+	ctx := context.WithValue(context.Background(), userIDKey, "user1")
 
 	// Create a note first
 	createResult, _ := skill.Execute(ctx, map[string]any{
@@ -384,7 +389,7 @@ func TestNotesSkill_Execute_UpdateMissingID(t *testing.T) {
 	repo := newMockNotesRepo()
 	skill := notes.NewNotes(repo)
 
-	ctx := context.WithValue(context.Background(), "user_id", "user1")
+	ctx := context.WithValue(context.Background(), userIDKey, "user1")
 
 	result, err := skill.Execute(ctx, map[string]any{
 		"operation": "update",
@@ -402,7 +407,7 @@ func TestNotesSkill_Execute_UpdateNotFound(t *testing.T) {
 	repo := newMockNotesRepo()
 	skill := notes.NewNotes(repo)
 
-	ctx := context.WithValue(context.Background(), "user_id", "user1")
+	ctx := context.WithValue(context.Background(), userIDKey, "user1")
 
 	result, err := skill.Execute(ctx, map[string]any{
 		"operation": "update",
@@ -421,7 +426,7 @@ func TestNotesSkill_Execute_Delete(t *testing.T) {
 	repo := newMockNotesRepo()
 	skill := notes.NewNotes(repo)
 
-	ctx := context.WithValue(context.Background(), "user_id", "user1")
+	ctx := context.WithValue(context.Background(), userIDKey, "user1")
 
 	// Create a note first
 	createResult, _ := skill.Execute(ctx, map[string]any{
@@ -448,7 +453,7 @@ func TestNotesSkill_Execute_DeleteMissingID(t *testing.T) {
 	repo := newMockNotesRepo()
 	skill := notes.NewNotes(repo)
 
-	ctx := context.WithValue(context.Background(), "user_id", "user1")
+	ctx := context.WithValue(context.Background(), userIDKey, "user1")
 
 	result, err := skill.Execute(ctx, map[string]any{
 		"operation": "delete",
@@ -465,7 +470,7 @@ func TestNotesSkill_Execute_DeleteNotFound(t *testing.T) {
 	repo := newMockNotesRepo()
 	skill := notes.NewNotes(repo)
 
-	ctx := context.WithValue(context.Background(), "user_id", "user1")
+	ctx := context.WithValue(context.Background(), userIDKey, "user1")
 
 	result, err := skill.Execute(ctx, map[string]any{
 		"operation": "delete",
@@ -483,7 +488,7 @@ func TestNotesSkill_Execute_List(t *testing.T) {
 	repo := newMockNotesRepo()
 	skill := notes.NewNotes(repo)
 
-	ctx := context.WithValue(context.Background(), "user_id", "user1")
+	ctx := context.WithValue(context.Background(), userIDKey, "user1")
 
 	// Create multiple notes
 	skill.Execute(ctx, map[string]any{
@@ -520,7 +525,7 @@ func TestNotesSkill_Execute_ListEmpty(t *testing.T) {
 	repo := newMockNotesRepo()
 	skill := notes.NewNotes(repo)
 
-	ctx := context.WithValue(context.Background(), "user_id", "user1")
+	ctx := context.WithValue(context.Background(), userIDKey, "user1")
 
 	result, err := skill.Execute(ctx, map[string]any{
 		"operation": "list",

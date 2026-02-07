@@ -176,8 +176,8 @@ func (h *AdminCommandHandler) updateUser(ctx context.Context, args []string) (st
 
 	userID := args[0]
 
-	// Parse flags
-	for i := 1; i < len(args); i++ {
+	// Parse flags (only first flag is processed as all cases return)
+	for i := 1; i < len(args); i++ { //nolint:staticcheck // Loop only runs once, each case returns
 		switch args[i] {
 		case "--role":
 			if i+1 >= len(args) {

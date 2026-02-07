@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -94,7 +95,7 @@ func (b *MessageBatcher) Stop() {
 
 	// Final flush
 	if err := b.Flush(context.Background()); err != nil {
-		// Log error but don't return it (best effort on shutdown)
+		slog.Warn("Failed to flush messages on shutdown", "error", err)
 	}
 }
 
@@ -134,8 +135,8 @@ func (b *MessageBatcher) doFlush() {
 	b.mu.Unlock()
 
 	if err := b.flushItems(ctx, items); err != nil {
-		// Log error but continue (messages are lost on error)
-		// In production, could implement retry logic or dead letter queue
+		slog.Error("Failed to flush messages", "error", err, "count", len(items))
+		// Messages are lost on error - in production, could implement retry logic or dead letter queue
 	}
 }
 
