@@ -28,22 +28,22 @@ import (
 	ollama "nuimanbot/internal/infrastructure/llm/ollama"
 	openai "nuimanbot/internal/infrastructure/llm/openai"
 	"nuimanbot/internal/infrastructure/logger"
-	"nuimanbot/internal/skills/calculator"
-	"nuimanbot/internal/skills/datetime"
-	"nuimanbot/internal/skills/notes"
-	"nuimanbot/internal/skills/weather"
-	"nuimanbot/internal/skills/websearch"
+	"nuimanbot/internal/tools/calculator"
+	"nuimanbot/internal/tools/datetime"
+	"nuimanbot/internal/tools/notes"
+	"nuimanbot/internal/tools/weather"
+	"nuimanbot/internal/tools/websearch"
 	"nuimanbot/internal/usecase/chat"
 	"nuimanbot/internal/usecase/memory"
 	"nuimanbot/internal/usecase/security"
-	"nuimanbot/internal/usecase/skill"
-	"nuimanbot/internal/usecase/skill/coding_agent"
-	"nuimanbot/internal/usecase/skill/common"
-	"nuimanbot/internal/usecase/skill/doc_summarize"
-	"nuimanbot/internal/usecase/skill/executor"
-	"nuimanbot/internal/usecase/skill/github"
-	"nuimanbot/internal/usecase/skill/repo_search"
-	"nuimanbot/internal/usecase/skill/summarize"
+	"nuimanbot/internal/usecase/tool"
+	"nuimanbot/internal/usecase/tool/coding_agent"
+	"nuimanbot/internal/usecase/tool/common"
+	"nuimanbot/internal/usecase/tool/doc_summarize"
+	"nuimanbot/internal/usecase/tool/executor"
+	"nuimanbot/internal/usecase/tool/github"
+	"nuimanbot/internal/usecase/tool/repo_search"
+	"nuimanbot/internal/usecase/tool/summarize"
 )
 
 // application represents the core NuimanBot application.
@@ -54,9 +54,9 @@ type application struct {
 	LLMService            domain.LLMService
 	Memory                memory.MemoryRepository
 	SecurityService       *security.Service
-	SkillRegistry         skill.SkillRegistry
+	ToolRegistry tool.ToolRegistry
 	Vault                 domain.CredentialVault
-	SkillExecutionService *skill.Service
+	ToolExecutionService *tool.Service
 	HealthServer          *health.Server
 	DB                    *sql.DB
 }
@@ -168,17 +168,17 @@ func main() {
 	slog.Info("Health check server initialized")
 
 	// 9. Initialize Skill System
-	skillRegistry := skill.NewInMemoryRegistry()
+	toolRegistry := tool.NewInMemoryRegistry()
 
 	// Register built-in skills
-	if err := registerBuiltInSkills(skillRegistry, notesRepo, llmService); err != nil {
+	if err := registerBuiltInTools(toolRegistry, notesRepo, llmService); err != nil {
 		log.Fatalf("Failed to register skills: %v", err)
 	}
 
-	skillExecutionService := skill.NewService(&cfg.Skills, skillRegistry, securityService)
+	toolExecutionService := tool.NewService(&cfg.Tools, toolRegistry, securityService)
 
 	// 10. Initialize Chat Service
-	chatService := chat.NewService(llmService, memoryRepo, skillExecutionService, securityService)
+	chatService := chat.NewService(llmService, memoryRepo, toolExecutionService, securityService)
 
 	// Configure LLM response cache (optional)
 	llmCache := cache.NewLLMCache(1000, 1*time.Hour) // Cache up to 1000 responses for 1 hour
@@ -195,9 +195,9 @@ func main() {
 		SecurityService:       securityService,
 		Memory:                memoryRepo,
 		LLMService:            llmService,
-		SkillRegistry:         skillRegistry,
+		ToolRegistry:         toolRegistry,
 		ChatService:           chatService,
-		SkillExecutionService: skillExecutionService,
+		ToolExecutionService: toolExecutionService,
 		HealthServer:          healthServer,
 		DB:                    db,
 	}
@@ -309,8 +309,8 @@ func initializeLLMService(cfg *config.NuimanBotConfig) (domain.LLMService, error
 	return nil, fmt.Errorf("no LLM providers configured (set llm.openai.api_key, llm.ollama.base_url, or llm.anthropic.api_key)")
 }
 
-// registerBuiltInSkills registers all built-in skills with the registry.
-func registerBuiltInSkills(registry skill.SkillRegistry, notesRepo *sqlite.NotesRepository, llmService domain.LLMService) error {
+// registerBuiltInTools registers all built-in skills with the registry.
+func registerBuiltInTools(registry tool.ToolRegistry, notesRepo *sqlite.NotesRepository, llmService domain.LLMService) error {
 	// Register Calculator skill
 	calc := calculator.NewCalculator()
 	if err := registry.Register(calc); err != nil {
@@ -350,7 +350,7 @@ func registerBuiltInSkills(registry skill.SkillRegistry, notesRepo *sqlite.Notes
 	slog.Info("Skill registered", "skill", "notes")
 
 	// Register Developer Productivity Skills (Phase 5)
-	if err := registerDeveloperProductivitySkills(registry, llmService); err != nil {
+	if err := registerDeveloperProductivityTools(registry, llmService); err != nil {
 		return fmt.Errorf("failed to register developer productivity skills: %w", err)
 	}
 
@@ -358,8 +358,8 @@ func registerBuiltInSkills(registry skill.SkillRegistry, notesRepo *sqlite.Notes
 	return nil
 }
 
-// registerDeveloperProductivitySkills registers developer productivity skills.
-func registerDeveloperProductivitySkills(registry skill.SkillRegistry, llmService domain.LLMService) error {
+// registerDeveloperProductivityTools registers developer productivity skills.
+func registerDeveloperProductivityTools(registry tool.ToolRegistry, llmService domain.LLMService) error {
 	// Create shared dependencies
 	executorSvc := executor.NewExecutorService()
 	rateLimiter := common.NewRateLimiter()
@@ -374,7 +374,7 @@ func registerDeveloperProductivitySkills(registry skill.SkillRegistry, llmServic
 	pathValidator := common.NewPathValidator(workspacePaths)
 
 	// Register GitHubSkill
-	githubConfig := domain.SkillConfig{
+	githubConfig := domain.ToolConfig{
 		Enabled: true,
 		Params: map[string]interface{}{
 			"timeout":    30,
@@ -388,7 +388,7 @@ func registerDeveloperProductivitySkills(registry skill.SkillRegistry, llmServic
 	slog.Info("Skill registered", "skill", "github")
 
 	// Register RepoSearchSkill
-	repoSearchConfig := domain.SkillConfig{
+	repoSearchConfig := domain.ToolConfig{
 		Enabled: true,
 		Params: map[string]interface{}{
 			"allowed_directories": workspacePaths,
@@ -401,7 +401,7 @@ func registerDeveloperProductivitySkills(registry skill.SkillRegistry, llmServic
 	slog.Info("Skill registered", "skill", "repo_search")
 
 	// Register DocSummarizeSkill
-	docSummarizeConfig := domain.SkillConfig{
+	docSummarizeConfig := domain.ToolConfig{
 		Enabled: true,
 		Params: map[string]interface{}{
 			"allowed_domains":   []interface{}{"github.com", "docs.google.com", "notion.so"},
@@ -415,7 +415,7 @@ func registerDeveloperProductivitySkills(registry skill.SkillRegistry, llmServic
 	slog.Info("Skill registered", "skill", "doc_summarize")
 
 	// Register SummarizeSkill
-	summarizeConfig := domain.SkillConfig{
+	summarizeConfig := domain.ToolConfig{
 		Enabled: true,
 		Params: map[string]interface{}{
 			"timeout":    90,
@@ -429,7 +429,7 @@ func registerDeveloperProductivitySkills(registry skill.SkillRegistry, llmServic
 	slog.Info("Skill registered", "skill", "summarize")
 
 	// Register CodingAgentSkill
-	codingAgentConfig := domain.SkillConfig{
+	codingAgentConfig := domain.ToolConfig{
 		Enabled: false, // Admin must explicitly enable
 		Params: map[string]interface{}{
 			"allowed_tools": []interface{}{"codex", "claude_code"},
@@ -629,7 +629,7 @@ func (app *application) Run(ctx context.Context) error {
 		"log_level", app.Config.Server.LogLevel,
 		"debug_mode", app.Config.Server.Debug,
 		"llm_provider", app.Config.LLM.Providers[0].Type,
-		"skills_registered", len(app.SkillRegistry.List()),
+		"skills_registered", len(app.ToolRegistry.List()),
 	)
 
 	fmt.Println("\nStarting CLI Gateway...")

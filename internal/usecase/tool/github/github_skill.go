@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"nuimanbot/internal/domain"
-	"nuimanbot/internal/usecase/skill/common"
-	"nuimanbot/internal/usecase/skill/executor"
+	"nuimanbot/internal/usecase/tool/common"
+	"nuimanbot/internal/usecase/tool/executor"
 )
 
 const (
@@ -19,7 +19,7 @@ const (
 
 // GitHubSkill provides GitHub operations via gh CLI
 type GitHubSkill struct {
-	config      domain.SkillConfig
+	config      domain.ToolConfig
 	executor    executor.ExecutorService
 	rateLimiter *common.RateLimiter
 	sanitizer   *common.OutputSanitizer
@@ -43,7 +43,7 @@ const (
 
 // NewGitHubSkill creates a new GitHubSkill instance
 func NewGitHubSkill(
-	config domain.SkillConfig,
+	config domain.ToolConfig,
 	executor executor.ExecutorService,
 	rateLimiter *common.RateLimiter,
 	sanitizer *common.OutputSanitizer,
@@ -75,7 +75,7 @@ func (s *GitHubSkill) RequiredPermissions() []domain.Permission {
 }
 
 // Config returns the skill configuration
-func (s *GitHubSkill) Config() domain.SkillConfig {
+func (s *GitHubSkill) Config() domain.ToolConfig {
 	return s.config
 }
 
@@ -109,7 +109,7 @@ func (s *GitHubSkill) InputSchema() map[string]any {
 }
 
 // Execute runs the GitHub operation
-func (s *GitHubSkill) Execute(ctx context.Context, params map[string]any) (*domain.SkillResult, error) {
+func (s *GitHubSkill) Execute(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) {
 	action, err := s.validateAction(params)
 	if err != nil {
 		return nil, err
@@ -130,7 +130,7 @@ func (s *GitHubSkill) Execute(ctx context.Context, params map[string]any) (*doma
 
 	output := s.formatOutput(execResult.Stdout)
 
-	return &domain.SkillResult{
+	return &domain.ExecutionResult{
 		Output: output,
 		Metadata: map[string]any{
 			"action":    action,

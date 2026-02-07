@@ -276,8 +276,8 @@ func TestHandleAdminCommand_UpdateUserSkills(t *testing.T) {
 
 	// Verify skills were updated
 	updated, _ := repo.GetUserByID(ctx, alice.ID)
-	if len(updated.AllowedSkills) != 2 {
-		t.Errorf("Expected 2 skills, got %d", len(updated.AllowedSkills))
+	if len(updated.AllowedTools) != 2 {
+		t.Errorf("Expected 2 skills, got %d", len(updated.AllowedTools))
 	}
 }
 

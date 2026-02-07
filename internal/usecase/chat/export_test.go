@@ -27,7 +27,7 @@ func TestExportConversation_JSON(t *testing.T) {
 		},
 	}
 
-	service := createTestService(&mockLLMService{}, memoryRepo, &mockSkillExecutionService{}, &mockSecurityService{})
+	service := createTestService(&mockLLMService{}, memoryRepo, &mockToolExecutionService{}, &mockSecurityService{})
 
 	exported, err := service.ExportConversation(context.Background(), "conv-123", ExportFormatJSON)
 	if err != nil {
@@ -66,7 +66,7 @@ func TestExportConversation_Markdown(t *testing.T) {
 		},
 	}
 
-	service := createTestService(&mockLLMService{}, memoryRepo, &mockSkillExecutionService{}, &mockSecurityService{})
+	service := createTestService(&mockLLMService{}, memoryRepo, &mockToolExecutionService{}, &mockSecurityService{})
 
 	exported, err := service.ExportConversation(context.Background(), "conv-123", ExportFormatMarkdown)
 	if err != nil {
@@ -101,7 +101,7 @@ func TestExportConversation_UnsupportedFormat(t *testing.T) {
 		},
 	}
 
-	service := createTestService(&mockLLMService{}, memoryRepo, &mockSkillExecutionService{}, &mockSecurityService{})
+	service := createTestService(&mockLLMService{}, memoryRepo, &mockToolExecutionService{}, &mockSecurityService{})
 
 	_, err := service.ExportConversation(context.Background(), "conv-123", ExportFormat("xml"))
 	if err == nil {

@@ -2,7 +2,7 @@ package testutil
 
 import (
 	"context"
-	"nuimanbot/internal/usecase/skill/executor"
+	"nuimanbot/internal/usecase/tool/executor"
 )
 
 // MockExecutor is a mock implementation of ExecutorService for testing

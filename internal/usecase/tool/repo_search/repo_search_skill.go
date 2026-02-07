@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"nuimanbot/internal/domain"
-	"nuimanbot/internal/usecase/skill/common"
-	"nuimanbot/internal/usecase/skill/executor"
+	"nuimanbot/internal/usecase/tool/common"
+	"nuimanbot/internal/usecase/tool/executor"
 )
 
 const (
@@ -22,7 +22,7 @@ const (
 
 // RepoSearchSkill provides fast codebase search using ripgrep
 type RepoSearchSkill struct {
-	config    domain.SkillConfig
+	config    domain.ToolConfig
 	executor  executor.ExecutorService
 	pathVal   *common.PathValidator
 	sanitizer *common.OutputSanitizer
@@ -46,7 +46,7 @@ type SearchOutput struct {
 
 // NewRepoSearchSkill creates a new RepoSearchSkill instance
 func NewRepoSearchSkill(
-	config domain.SkillConfig,
+	config domain.ToolConfig,
 	executor executor.ExecutorService,
 	pathVal *common.PathValidator,
 	sanitizer *common.OutputSanitizer,
@@ -75,7 +75,7 @@ func (s *RepoSearchSkill) RequiredPermissions() []domain.Permission {
 }
 
 // Config returns the skill configuration
-func (s *RepoSearchSkill) Config() domain.SkillConfig {
+func (s *RepoSearchSkill) Config() domain.ToolConfig {
 	return s.config
 }
 
@@ -112,7 +112,7 @@ func (s *RepoSearchSkill) InputSchema() map[string]any {
 }
 
 // Execute runs the codebase search
-func (s *RepoSearchSkill) Execute(ctx context.Context, params map[string]any) (*domain.SkillResult, error) {
+func (s *RepoSearchSkill) Execute(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) {
 	query, searchPath, err := s.validateAndExtractParams(params)
 	if err != nil {
 		return nil, err
@@ -125,7 +125,7 @@ func (s *RepoSearchSkill) Execute(ctx context.Context, params map[string]any) (*
 
 	output := s.formatOutput(execResult.Stdout, params)
 
-	return &domain.SkillResult{
+	return &domain.ExecutionResult{
 		Output: output,
 		Metadata: map[string]any{
 			"query":       query,

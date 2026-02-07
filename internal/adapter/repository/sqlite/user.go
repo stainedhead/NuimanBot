@@ -45,7 +45,7 @@ func (r *UserRepository) SaveUser(ctx context.Context, user *domain.User) error 
 	if err != nil {
 		return fmt.Errorf("failed to marshal platform IDs: %w", err)
 	}
-	allowedSkillsJSON, err := json.Marshal(user.AllowedSkills)
+	allowedSkillsJSON, err := json.Marshal(user.AllowedTools)
 	if err != nil {
 		return fmt.Errorf("failed to marshal allowed skills: %w", err)
 	}
@@ -110,7 +110,7 @@ func (r *UserRepository) GetUserByID(ctx context.Context, id string) (*domain.Us
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal platform IDs: %w", err)
 	}
-	err = json.Unmarshal(allowedSkillsJSON, &user.AllowedSkills)
+	err = json.Unmarshal(allowedSkillsJSON, &user.AllowedTools)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal allowed skills: %w", err)
 	}
@@ -156,7 +156,7 @@ func (r *UserRepository) GetUserByPlatformID(ctx context.Context, platform domai
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal platform IDs: %w", err)
 	}
-	err = json.Unmarshal(allowedSkillsJSON, &user.AllowedSkills)
+	err = json.Unmarshal(allowedSkillsJSON, &user.AllowedTools)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal allowed skills: %w", err)
 	}

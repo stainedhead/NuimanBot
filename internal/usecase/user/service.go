@@ -52,7 +52,7 @@ func (s *Service) CreateUser(ctx context.Context, platform domain.Platform, plat
 		PlatformIDs: map[domain.Platform]string{
 			platform: platformUID,
 		},
-		AllowedSkills: []string{}, // Empty = all skills for role
+		AllowedTools: []string{}, // Empty = all skills for role
 		CreatedAt:     time.Now(),
 		UpdatedAt:     time.Now(),
 	}
@@ -134,7 +134,7 @@ func (s *Service) UpdateAllowedSkills(ctx context.Context, userID string, skills
 	}
 
 	// Update allowed skills
-	user.AllowedSkills = skills
+	user.AllowedTools = skills
 	user.UpdatedAt = time.Now()
 
 	// Save user

@@ -121,8 +121,8 @@ func (h *AdminCommandHandler) listUsers(ctx context.Context) (string, error) {
 		result.WriteString(fmt.Sprintf("%d. ID: %s\n", i+1, u.ID))
 		result.WriteString(fmt.Sprintf("   Username: %s\n", u.Username))
 		result.WriteString(fmt.Sprintf("   Role: %s\n", u.Role))
-		if len(u.AllowedSkills) > 0 {
-			result.WriteString(fmt.Sprintf("   Allowed Skills: %v\n", u.AllowedSkills))
+		if len(u.AllowedTools) > 0 {
+			result.WriteString(fmt.Sprintf("   Allowed Skills: %v\n", u.AllowedTools))
 		}
 		result.WriteString("\n")
 	}
@@ -158,8 +158,8 @@ func (h *AdminCommandHandler) getUser(ctx context.Context, args []string) (strin
 		}
 	}
 
-	if len(user.AllowedSkills) > 0 {
-		result.WriteString(fmt.Sprintf("Allowed Skills: %v\n", user.AllowedSkills))
+	if len(user.AllowedTools) > 0 {
+		result.WriteString(fmt.Sprintf("Allowed Skills: %v\n", user.AllowedTools))
 	} else {
 		result.WriteString("Allowed Skills: all (for role)\n")
 	}

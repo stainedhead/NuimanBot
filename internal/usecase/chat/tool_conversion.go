@@ -8,7 +8,7 @@ import (
 )
 
 // convertSkillsToTools converts a list of skills to LLM tool definitions
-func convertSkillsToTools(skills []domain.Skill) []domain.ToolDefinition {
+func convertSkillsToTools(skills []domain.Tool) []domain.ToolDefinition {
 	tools := make([]domain.ToolDefinition, 0, len(skills))
 
 	for _, skill := range skills {
@@ -28,7 +28,7 @@ func (s *Service) executeToolCalls(ctx context.Context, toolCalls []domain.ToolC
 	results := make([]domain.ToolResult, 0, len(toolCalls))
 
 	for _, toolCall := range toolCalls {
-		result, err := s.skillExecService.Execute(ctx, toolCall.ToolName, toolCall.Arguments)
+		result, err := s.toolExecService.Execute(ctx, toolCall.ToolName, toolCall.Arguments)
 
 		toolResult := domain.ToolResult{
 			ToolName: toolCall.ToolName,

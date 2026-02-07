@@ -5,33 +5,33 @@ import (
 	"testing"
 
 	"nuimanbot/internal/domain"
-	"nuimanbot/internal/usecase/skill/testutil"
+	"nuimanbot/internal/usecase/tool/testutil"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestDocSummarizeSkill_Name(t *testing.T) {
-	skill := NewDocSummarizeSkill(domain.SkillConfig{}, nil, nil)
+	skill := NewDocSummarizeSkill(domain.ToolConfig{}, nil, nil)
 	assert.Equal(t, "doc_summarize", skill.Name())
 }
 
 func TestDocSummarizeSkill_Description(t *testing.T) {
-	skill := NewDocSummarizeSkill(domain.SkillConfig{}, nil, nil)
+	skill := NewDocSummarizeSkill(domain.ToolConfig{}, nil, nil)
 	desc := skill.Description()
 	assert.NotEmpty(t, desc)
 	assert.Contains(t, desc, "documentation")
 }
 
 func TestDocSummarizeSkill_RequiredPermissions(t *testing.T) {
-	skill := NewDocSummarizeSkill(domain.SkillConfig{}, nil, nil)
+	skill := NewDocSummarizeSkill(domain.ToolConfig{}, nil, nil)
 	permissions := skill.RequiredPermissions()
 	assert.Contains(t, permissions, domain.PermissionRead)
 	assert.Contains(t, permissions, domain.PermissionNetwork)
 }
 
 func TestDocSummarizeSkill_InputSchema(t *testing.T) {
-	skill := NewDocSummarizeSkill(domain.SkillConfig{}, nil, nil)
+	skill := NewDocSummarizeSkill(domain.ToolConfig{}, nil, nil)
 	schema := skill.InputSchema()
 
 	assert.NotNil(t, schema)
@@ -45,7 +45,7 @@ func TestDocSummarizeSkill_InputSchema(t *testing.T) {
 }
 
 func TestDocSummarizeSkill_Execute_MissingSource(t *testing.T) {
-	skill := NewDocSummarizeSkill(domain.SkillConfig{}, nil, nil)
+	skill := NewDocSummarizeSkill(domain.ToolConfig{}, nil, nil)
 
 	result, err := skill.Execute(context.Background(), map[string]any{})
 
@@ -64,7 +64,7 @@ func TestDocSummarizeSkill_Execute_LocalFile(t *testing.T) {
 		},
 	}
 
-	config := domain.SkillConfig{
+	config := domain.ToolConfig{
 		Enabled: true,
 		Params: map[string]interface{}{
 			"allowed_domains": []interface{}{"github.com"},
@@ -99,7 +99,7 @@ func TestDocSummarizeSkill_Execute_HTTPSAllowedDomain(t *testing.T) {
 		},
 	}
 
-	config := domain.SkillConfig{
+	config := domain.ToolConfig{
 		Enabled: true,
 		Params: map[string]interface{}{
 			"allowed_domains": []interface{}{"github.com"},
@@ -125,7 +125,7 @@ func TestDocSummarizeSkill_Execute_HTTPSAllowedDomain(t *testing.T) {
 func TestDocSummarizeSkill_Execute_HTTPSDisallowedDomain(t *testing.T) {
 	mockLLM := &MockLLMService{}
 
-	config := domain.SkillConfig{
+	config := domain.ToolConfig{
 		Enabled: true,
 		Params: map[string]interface{}{
 			"allowed_domains": []interface{}{"github.com"},
@@ -161,7 +161,7 @@ func TestDocSummarizeSkill_Execute_WithFocus(t *testing.T) {
 		},
 	}
 
-	config := domain.SkillConfig{
+	config := domain.ToolConfig{
 		Enabled: true,
 		Params: map[string]interface{}{
 			"allowed_domains": []interface{}{"github.com"},
@@ -191,7 +191,7 @@ func TestDocSummarizeSkill_Execute_WithMaxWords(t *testing.T) {
 		},
 	}
 
-	config := domain.SkillConfig{
+	config := domain.ToolConfig{
 		Enabled: true,
 		Params: map[string]interface{}{
 			"allowed_domains": []interface{}{"github.com"},

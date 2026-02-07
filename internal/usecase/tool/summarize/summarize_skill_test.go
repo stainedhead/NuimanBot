@@ -6,33 +6,33 @@ import (
 	"testing"
 
 	"nuimanbot/internal/domain"
-	"nuimanbot/internal/usecase/skill/executor"
-	"nuimanbot/internal/usecase/skill/testutil"
+	"nuimanbot/internal/usecase/tool/executor"
+	"nuimanbot/internal/usecase/tool/testutil"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestSummarizeSkill_Name(t *testing.T) {
-	skill := NewSummarizeSkill(domain.SkillConfig{}, nil, nil, nil)
+	skill := NewSummarizeSkill(domain.ToolConfig{}, nil, nil, nil)
 	assert.Equal(t, "summarize", skill.Name())
 }
 
 func TestSummarizeSkill_Description(t *testing.T) {
-	skill := NewSummarizeSkill(domain.SkillConfig{}, nil, nil, nil)
+	skill := NewSummarizeSkill(domain.ToolConfig{}, nil, nil, nil)
 	desc := skill.Description()
 	assert.NotEmpty(t, desc)
 	assert.Contains(t, strings.ToLower(desc), "summarize")
 }
 
 func TestSummarizeSkill_RequiredPermissions(t *testing.T) {
-	skill := NewSummarizeSkill(domain.SkillConfig{}, nil, nil, nil)
+	skill := NewSummarizeSkill(domain.ToolConfig{}, nil, nil, nil)
 	permissions := skill.RequiredPermissions()
 	assert.Contains(t, permissions, domain.PermissionNetwork)
 }
 
 func TestSummarizeSkill_InputSchema(t *testing.T) {
-	skill := NewSummarizeSkill(domain.SkillConfig{}, nil, nil, nil)
+	skill := NewSummarizeSkill(domain.ToolConfig{}, nil, nil, nil)
 	schema := skill.InputSchema()
 
 	assert.NotNil(t, schema)
@@ -46,7 +46,7 @@ func TestSummarizeSkill_InputSchema(t *testing.T) {
 }
 
 func TestSummarizeSkill_Execute_MissingURL(t *testing.T) {
-	skill := NewSummarizeSkill(domain.SkillConfig{}, nil, nil, nil)
+	skill := NewSummarizeSkill(domain.ToolConfig{}, nil, nil, nil)
 
 	result, err := skill.Execute(context.Background(), map[string]any{})
 
@@ -56,7 +56,7 @@ func TestSummarizeSkill_Execute_MissingURL(t *testing.T) {
 }
 
 func TestSummarizeSkill_Execute_InvalidURL(t *testing.T) {
-	skill := NewSummarizeSkill(domain.SkillConfig{}, nil, nil, nil)
+	skill := NewSummarizeSkill(domain.ToolConfig{}, nil, nil, nil)
 
 	result, err := skill.Execute(context.Background(), map[string]any{
 		"url": "not-a-url",
@@ -67,7 +67,7 @@ func TestSummarizeSkill_Execute_InvalidURL(t *testing.T) {
 }
 
 func TestSummarizeSkill_Execute_LocalhostRejected(t *testing.T) {
-	skill := NewSummarizeSkill(domain.SkillConfig{}, nil, nil, nil)
+	skill := NewSummarizeSkill(domain.ToolConfig{}, nil, nil, nil)
 
 	result, err := skill.Execute(context.Background(), map[string]any{
 		"url": "http://localhost:8080/secret",
@@ -87,7 +87,7 @@ func TestSummarizeSkill_Execute_HTTPSWebPage(t *testing.T) {
 		},
 	}
 
-	config := domain.SkillConfig{Enabled: true}
+	config := domain.ToolConfig{Enabled: true}
 	skill := NewSummarizeSkill(config, mockLLM, nil, nil)
 
 	result, err := skill.Execute(context.Background(), map[string]any{
@@ -122,7 +122,7 @@ func TestSummarizeSkill_Execute_YouTubeVideo(t *testing.T) {
 		}, nil
 	}
 
-	config := domain.SkillConfig{Enabled: true}
+	config := domain.ToolConfig{Enabled: true}
 	skill := NewSummarizeSkill(config, mockLLM, mockExec, nil)
 
 	result, err := skill.Execute(context.Background(), map[string]any{
@@ -144,7 +144,7 @@ func TestSummarizeSkill_Execute_WithFormat(t *testing.T) {
 		},
 	}
 
-	config := domain.SkillConfig{Enabled: true}
+	config := domain.ToolConfig{Enabled: true}
 	skill := NewSummarizeSkill(config, mockLLM, nil, nil)
 
 	result, err := skill.Execute(context.Background(), map[string]any{
@@ -170,7 +170,7 @@ func TestSummarizeSkill_Execute_WithIncludeQuotes(t *testing.T) {
 		},
 	}
 
-	config := domain.SkillConfig{Enabled: true}
+	config := domain.ToolConfig{Enabled: true}
 	skill := NewSummarizeSkill(config, mockLLM, nil, nil)
 
 	result, err := skill.Execute(context.Background(), map[string]any{
