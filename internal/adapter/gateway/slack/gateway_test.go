@@ -33,7 +33,10 @@ func TestPlatform(t *testing.T) {
 		AppToken: domain.NewSecureStringFromString("xapp-test-token"),
 	}
 
-	gw, _ := slack.New(cfg)
+	gw, err := slack.New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create gateway: %v", err)
+	}
 
 	if gw.Platform() != domain.PlatformSlack {
 		t.Errorf("Expected platform %s, got %s", domain.PlatformSlack, gw.Platform())
@@ -75,7 +78,10 @@ func TestSend_InvalidConfig(t *testing.T) {
 		AppToken: domain.NewSecureStringFromString("xapp-test-token"),
 	}
 
-	gw, _ := slack.New(cfg)
+	gw, err := slack.New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create gateway: %v", err)
+	}
 	ctx := context.Background()
 
 	msg := domain.OutgoingMessage{
@@ -85,7 +91,7 @@ func TestSend_InvalidConfig(t *testing.T) {
 	}
 
 	// Send should fail because client is not initialized (Start not called)
-	err := gw.Send(ctx, msg)
+	err = gw.Send(ctx, msg)
 	if err == nil {
 		t.Error("Send() should error when client not initialized")
 	}
@@ -98,7 +104,10 @@ func TestSend_MissingChannelID(t *testing.T) {
 		AppToken: domain.NewSecureStringFromString("xapp-test-token"),
 	}
 
-	gw, _ := slack.New(cfg)
+	gw, err := slack.New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create gateway: %v", err)
+	}
 	ctx := context.Background()
 
 	msg := domain.OutgoingMessage{
@@ -108,7 +117,7 @@ func TestSend_MissingChannelID(t *testing.T) {
 	}
 
 	// Send should fail because no channel ID
-	err := gw.Send(ctx, msg)
+	err = gw.Send(ctx, msg)
 	if err == nil {
 		t.Error("Send() should error when channel ID missing")
 	}
@@ -121,7 +130,10 @@ func TestSend_WithChannelInMetadata(t *testing.T) {
 		AppToken: domain.NewSecureStringFromString("xapp-test-token"),
 	}
 
-	gw, _ := slack.New(cfg)
+	gw, err := slack.New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create gateway: %v", err)
+	}
 	ctx := context.Background()
 
 	msg := domain.OutgoingMessage{
@@ -134,7 +146,7 @@ func TestSend_WithChannelInMetadata(t *testing.T) {
 	}
 
 	// Send should attempt to send (will fail without client, but tests channel extraction)
-	err := gw.Send(ctx, msg)
+	err = gw.Send(ctx, msg)
 	if err == nil {
 		t.Error("Send() should error when client not initialized")
 	}
@@ -151,7 +163,10 @@ func TestSend_WithThreadTS(t *testing.T) {
 		AppToken: domain.NewSecureStringFromString("xapp-test-token"),
 	}
 
-	gw, _ := slack.New(cfg)
+	gw, err := slack.New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create gateway: %v", err)
+	}
 	ctx := context.Background()
 
 	msg := domain.OutgoingMessage{
@@ -164,7 +179,7 @@ func TestSend_WithThreadTS(t *testing.T) {
 	}
 
 	// Send should attempt to send (will fail without client)
-	err := gw.Send(ctx, msg)
+	err = gw.Send(ctx, msg)
 	if err == nil {
 		t.Error("Send() should error when client not initialized")
 	}
@@ -177,11 +192,14 @@ func TestStop(t *testing.T) {
 		AppToken: domain.NewSecureStringFromString("xapp-test-token"),
 	}
 
-	gw, _ := slack.New(cfg)
+	gw, err := slack.New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create gateway: %v", err)
+	}
 	ctx := context.Background()
 
 	// Stop should not error even if not started
-	err := gw.Stop(ctx)
+	err = gw.Stop(ctx)
 	if err != nil {
 		t.Errorf("Stop() returned error: %v", err)
 	}
@@ -234,7 +252,10 @@ func TestSend_FallbackToRecipientID(t *testing.T) {
 		AppToken: domain.NewSecureStringFromString("xapp-test-token"),
 	}
 
-	gw, _ := slack.New(cfg)
+	gw, err := slack.New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create gateway: %v", err)
+	}
 	ctx := context.Background()
 
 	msg := domain.OutgoingMessage{
@@ -245,7 +266,7 @@ func TestSend_FallbackToRecipientID(t *testing.T) {
 	}
 
 	// Send should attempt to send (will fail without client, but tests fallback logic)
-	err := gw.Send(ctx, msg)
+	err = gw.Send(ctx, msg)
 	if err == nil {
 		t.Error("Send() should error when client not initialized")
 	}

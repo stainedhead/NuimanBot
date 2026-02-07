@@ -59,7 +59,7 @@ func (c *Client) Search(ctx context.Context, query string, limit int) ([]SearchR
 	fullURL := fmt.Sprintf("%s?%s", c.baseURL, params.Encode())
 
 	// Create request
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, http.NoBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -72,7 +72,7 @@ func (c *Client) Search(ctx context.Context, query string, limit int) ([]SearchR
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Check status code
 	if resp.StatusCode != http.StatusOK {

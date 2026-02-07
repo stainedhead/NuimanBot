@@ -152,7 +152,7 @@ func TestSQLiteAuditor_Query_ByUserID(t *testing.T) {
 		UserID: "user1",
 	}
 
-	results, err := auditor.Query(ctx, criteria)
+	results, err := auditor.Query(ctx, &criteria)
 	if err != nil {
 		t.Fatalf("Query() returned error: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestSQLiteAuditor_Query_ByAction(t *testing.T) {
 		Action: "login",
 	}
 
-	results, err := auditor.Query(ctx, criteria)
+	results, err := auditor.Query(ctx, &criteria)
 	if err != nil {
 		t.Fatalf("Query() returned error: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestSQLiteAuditor_Query_ByOutcome(t *testing.T) {
 		Outcome: "failure",
 	}
 
-	results, err := auditor.Query(ctx, criteria)
+	results, err := auditor.Query(ctx, &criteria)
 	if err != nil {
 		t.Fatalf("Query() returned error: %v", err)
 	}
@@ -268,7 +268,7 @@ func TestSQLiteAuditor_Query_ByTimeRange(t *testing.T) {
 		EndTime:   tomorrow,
 	}
 
-	results, err := auditor.Query(ctx, criteria)
+	results, err := auditor.Query(ctx, &criteria)
 	if err != nil {
 		t.Fatalf("Query() returned error: %v", err)
 	}
@@ -306,7 +306,7 @@ func TestSQLiteAuditor_Query_WithLimit(t *testing.T) {
 		Limit:  5,
 	}
 
-	results, err := auditor.Query(ctx, criteria)
+	results, err := auditor.Query(ctx, &criteria)
 	if err != nil {
 		t.Fatalf("Query() returned error: %v", err)
 	}
@@ -393,7 +393,7 @@ func TestSQLiteAuditor_Query_MultipleFilters(t *testing.T) {
 		Outcome: "success",
 	}
 
-	results, err := auditor.Query(ctx, criteria)
+	results, err := auditor.Query(ctx, &criteria)
 	if err != nil {
 		t.Fatalf("Query() returned error: %v", err)
 	}

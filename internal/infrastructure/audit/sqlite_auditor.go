@@ -98,7 +98,7 @@ func (a *SQLiteAuditor) Audit(ctx context.Context, event *domain.AuditEvent) err
 }
 
 // Query retrieves audit events matching the given criteria.
-func (a *SQLiteAuditor) Query(ctx context.Context, criteria AuditQueryCriteria) ([]domain.AuditEvent, error) {
+func (a *SQLiteAuditor) Query(ctx context.Context, criteria *AuditQueryCriteria) ([]domain.AuditEvent, error) {
 	query := `
 		SELECT id, timestamp, user_id, action, resource, outcome, details
 		FROM audit_log
@@ -145,7 +145,7 @@ func (a *SQLiteAuditor) Query(ctx context.Context, criteria AuditQueryCriteria) 
 	if err != nil {
 		return nil, fmt.Errorf("failed to query audit events: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var events []domain.AuditEvent
 	for rows.Next() {
