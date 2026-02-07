@@ -26,8 +26,8 @@ func LoadConfig(configPaths ...string) (*NuimanBotConfig, error) {
 		return nil, fmt.Errorf("%s is not set in environment", encryptionKeyEnv)
 	}
 
-	// Load .env file
-	_ = godotenv.Load()
+	// Load .env file (optional - OK if it doesn't exist)
+	_ = godotenv.Load() //nolint:errcheck // .env file is optional
 
 	v := viper.New()
 	v.SetConfigName(defaultConfigFileName)

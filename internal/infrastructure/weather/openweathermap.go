@@ -100,7 +100,7 @@ func (c *Client) makeRequest(ctx context.Context, endpoint, location, units stri
 	// Check status code
 	if resp.StatusCode != http.StatusOK {
 		var errorResp map[string]interface{}
-		_ = json.NewDecoder(resp.Body).Decode(&errorResp)
+		_ = json.NewDecoder(resp.Body).Decode(&errorResp) //nolint:errcheck // Best effort error message extraction
 		return nil, fmt.Errorf("API error (status %d): %v", resp.StatusCode, errorResp["message"])
 	}
 

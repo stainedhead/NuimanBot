@@ -209,7 +209,7 @@ func (s *Service) checkNotLastAdmin(ctx context.Context, userID string) error {
 // auditSuccess logs a successful operation to the audit log.
 // This helper reduces code duplication across user management operations.
 func (s *Service) auditSuccess(ctx context.Context, action, resource string, details map[string]any) {
-	s.securitySvc.Audit(ctx, &domain.AuditEvent{
+	_ = s.securitySvc.Audit(ctx, &domain.AuditEvent{ //nolint:errcheck // Best effort audit logging
 		Timestamp: time.Now(),
 		Action:    action,
 		Resource:  resource,

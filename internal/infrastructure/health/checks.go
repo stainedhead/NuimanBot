@@ -88,7 +88,7 @@ func (h *DefaultHealthChecker) CheckVault() bool {
 		slog.Warn("vault file not readable", "error", err)
 		return false
 	}
-	f.Close()
+	_ = f.Close() //nolint:errcheck // Best effort cleanup in health check
 
 	return true
 }
