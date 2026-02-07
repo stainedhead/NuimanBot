@@ -9,33 +9,33 @@ import (
 	searchClient "nuimanbot/internal/infrastructure/search"
 )
 
-// WebSearch implements the domain.Skill interface for web search.
+// WebSearch implements the domain.Tool interface for web search.
 type WebSearch struct {
 	client *searchClient.Client
-	config domain.SkillConfig
+	config domain.ToolConfig
 }
 
-// NewWebSearch creates a new WebSearch skill.
+// NewWebSearch creates a new WebSearch tool.
 func NewWebSearch(timeoutSeconds int) *WebSearch {
 	return &WebSearch{
 		client: searchClient.NewClient(timeoutSeconds),
-		config: domain.SkillConfig{
+		config: domain.ToolConfig{
 			Enabled: true,
 		},
 	}
 }
 
-// Name returns the skill name.
+// Name returns the tool name.
 func (w *WebSearch) Name() string {
 	return "websearch"
 }
 
-// Description returns the skill description.
+// Description returns the tool description.
 func (w *WebSearch) Description() string {
 	return "Perform web searches using DuckDuckGo and return relevant results"
 }
 
-// InputSchema returns the JSON schema for the skill's input parameters.
+// InputSchema returns the JSON schema for the tool's input parameters.
 func (w *WebSearch) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
@@ -57,11 +57,11 @@ func (w *WebSearch) InputSchema() map[string]any {
 }
 
 // Execute performs the web search operation.
-func (w *WebSearch) Execute(ctx context.Context, params map[string]any) (*domain.SkillResult, error) {
+func (w *WebSearch) Execute(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) {
 	// Extract and validate query
 	query, ok := params["query"].(string)
 	if !ok || query == "" {
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Error: "missing query parameter",
 		}, nil
 	}
@@ -76,7 +76,7 @@ func (w *WebSearch) Execute(ctx context.Context, params map[string]any) (*domain
 
 	// Validate limit
 	if limit < 1 || limit > 50 {
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Error: "limit must be between 1 and 50",
 		}, nil
 	}
@@ -84,7 +84,7 @@ func (w *WebSearch) Execute(ctx context.Context, params map[string]any) (*domain
 	// Perform search
 	results, err := w.client.Search(ctx, query, limit)
 	if err != nil {
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Error: fmt.Sprintf("search failed: %v", err),
 		}, nil
 	}
@@ -116,7 +116,7 @@ func (w *WebSearch) Execute(ctx context.Context, params map[string]any) (*domain
 		}
 	}
 
-	return &domain.SkillResult{
+	return &domain.ExecutionResult{
 		Output: output.String(),
 		Metadata: map[string]any{
 			"query":   query,
@@ -126,12 +126,12 @@ func (w *WebSearch) Execute(ctx context.Context, params map[string]any) (*domain
 	}, nil
 }
 
-// RequiredPermissions returns the permissions required for this skill.
+// RequiredPermissions returns the permissions required for this tool.
 func (w *WebSearch) RequiredPermissions() []domain.Permission {
 	return []domain.Permission{domain.PermissionNetwork}
 }
 
-// Config returns the skill's configuration.
-func (w *WebSearch) Config() domain.SkillConfig {
+// Config returns the tool's configuration.
+func (w *WebSearch) Config() domain.ToolConfig {
 	return w.config
 }

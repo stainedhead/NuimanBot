@@ -9,33 +9,33 @@ import (
 	weatherClient "nuimanbot/internal/infrastructure/weather"
 )
 
-// Weather implements the domain.Skill interface for weather information.
+// Weather implements the domain.Tool interface for weather information.
 type Weather struct {
 	client *weatherClient.Client
-	config domain.SkillConfig
+	config domain.ToolConfig
 }
 
-// NewWeather creates a new Weather skill.
+// NewWeather creates a new Weather tool.
 func NewWeather(apiKey string, timeoutSeconds int) *Weather {
 	return &Weather{
 		client: weatherClient.NewClient(apiKey, timeoutSeconds),
-		config: domain.SkillConfig{
+		config: domain.ToolConfig{
 			Enabled: true,
 		},
 	}
 }
 
-// Name returns the skill name.
+// Name returns the tool name.
 func (w *Weather) Name() string {
 	return "weather"
 }
 
-// Description returns the skill description.
+// Description returns the tool description.
 func (w *Weather) Description() string {
 	return "Get current weather or forecast for any location using OpenWeatherMap API"
 }
 
-// InputSchema returns the JSON schema for the skill's input parameters.
+// InputSchema returns the JSON schema for the tool's input parameters.
 func (w *Weather) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
@@ -60,12 +60,12 @@ func (w *Weather) InputSchema() map[string]any {
 	}
 }
 
-// Execute performs the weather skill operation.
-func (w *Weather) Execute(ctx context.Context, params map[string]any) (*domain.SkillResult, error) {
+// Execute performs the weather tool operation.
+func (w *Weather) Execute(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) {
 	// Extract and validate operation
 	operation, ok := params["operation"].(string)
 	if !ok || operation == "" {
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Error: "missing operation parameter",
 		}, nil
 	}
@@ -73,7 +73,7 @@ func (w *Weather) Execute(ctx context.Context, params map[string]any) (*domain.S
 	// Extract and validate location
 	location, ok := params["location"].(string)
 	if !ok || location == "" {
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Error: "missing location parameter",
 		}, nil
 	}
@@ -86,7 +86,7 @@ func (w *Weather) Execute(ctx context.Context, params map[string]any) (*domain.S
 
 	// Validate units
 	if units != "metric" && units != "imperial" && units != "standard" {
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Error: fmt.Sprintf("invalid units: %s (must be metric, imperial, or standard)", units),
 		}, nil
 	}
@@ -98,17 +98,17 @@ func (w *Weather) Execute(ctx context.Context, params map[string]any) (*domain.S
 	case "forecast":
 		return w.getForecast(ctx, location, units)
 	default:
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Error: fmt.Sprintf("invalid operation: %s (must be 'current' or 'forecast')", operation),
 		}, nil
 	}
 }
 
 // getCurrentWeather fetches current weather for a location.
-func (w *Weather) getCurrentWeather(ctx context.Context, location, units string) (*domain.SkillResult, error) {
+func (w *Weather) getCurrentWeather(ctx context.Context, location, units string) (*domain.ExecutionResult, error) {
 	current, err := w.client.GetCurrentWeather(ctx, location, units)
 	if err != nil {
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Error: fmt.Sprintf("failed to get current weather: %v", err),
 		}, nil
 	}
@@ -122,7 +122,7 @@ func (w *Weather) getCurrentWeather(ctx context.Context, location, units string)
 	output += fmt.Sprintf("Pressure: %d hPa\n", current.Pressure)
 	output += fmt.Sprintf("Wind Speed: %.1f m/s", current.WindSpeed)
 
-	return &domain.SkillResult{
+	return &domain.ExecutionResult{
 		Output: output,
 		Metadata: map[string]any{
 			"location":    current.Location,
@@ -138,10 +138,10 @@ func (w *Weather) getCurrentWeather(ctx context.Context, location, units string)
 }
 
 // getForecast fetches 5-day forecast for a location.
-func (w *Weather) getForecast(ctx context.Context, location, units string) (*domain.SkillResult, error) {
+func (w *Weather) getForecast(ctx context.Context, location, units string) (*domain.ExecutionResult, error) {
 	forecast, err := w.client.GetForecast(ctx, location, units)
 	if err != nil {
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Error: fmt.Sprintf("failed to get forecast: %v", err),
 		}, nil
 	}
@@ -176,7 +176,7 @@ func (w *Weather) getForecast(ctx context.Context, location, units string) (*dom
 		}
 	}
 
-	return &domain.SkillResult{
+	return &domain.ExecutionResult{
 		Output: output,
 		Metadata: map[string]any{
 			"location":  forecast.Location,
@@ -200,13 +200,13 @@ func (w *Weather) getUnitsSymbol(units string) string {
 	}
 }
 
-// RequiredPermissions returns the permissions required for this skill.
+// RequiredPermissions returns the permissions required for this tool.
 func (w *Weather) RequiredPermissions() []domain.Permission {
-	// Weather skill requires network permission to call external API
+	// Weather tool requires network permission to call external API
 	return []domain.Permission{domain.PermissionNetwork}
 }
 
-// Config returns the skill's configuration.
-func (w *Weather) Config() domain.SkillConfig {
+// Config returns the tool's configuration.
+func (w *Weather) Config() domain.ToolConfig {
 	return w.config
 }

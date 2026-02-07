@@ -12,33 +12,33 @@ import (
 	notesRepo "nuimanbot/internal/usecase/notes"
 )
 
-// Notes implements the domain.Skill interface for note management.
+// Notes implements the domain.Tool interface for note management.
 type Notes struct {
 	repo   notesRepo.Repository
-	config domain.SkillConfig
+	config domain.ToolConfig
 }
 
-// NewNotes creates a new Notes skill.
+// NewNotes creates a new Notes tool.
 func NewNotes(repo notesRepo.Repository) *Notes {
 	return &Notes{
 		repo: repo,
-		config: domain.SkillConfig{
+		config: domain.ToolConfig{
 			Enabled: true,
 		},
 	}
 }
 
-// Name returns the skill name.
+// Name returns the tool name.
 func (n *Notes) Name() string {
 	return "notes"
 }
 
-// Description returns the skill description.
+// Description returns the tool description.
 func (n *Notes) Description() string {
 	return "Create, read, update, delete, and list user notes"
 }
 
-// InputSchema returns the JSON schema for the skill's input parameters.
+// InputSchema returns the JSON schema for the tool's input parameters.
 func (n *Notes) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
@@ -71,11 +71,11 @@ func (n *Notes) InputSchema() map[string]any {
 }
 
 // Execute performs the notes operation.
-func (n *Notes) Execute(ctx context.Context, params map[string]any) (*domain.SkillResult, error) {
+func (n *Notes) Execute(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) {
 	// Extract user ID from context
 	userID, ok := ctx.Value("user_id").(string)
 	if !ok || userID == "" {
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Error: "user_id not found in context",
 		}, nil
 	}
@@ -83,7 +83,7 @@ func (n *Notes) Execute(ctx context.Context, params map[string]any) (*domain.Ski
 	// Extract operation
 	operation, ok := params["operation"].(string)
 	if !ok || operation == "" {
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Error: "missing operation parameter",
 		}, nil
 	}
@@ -101,24 +101,24 @@ func (n *Notes) Execute(ctx context.Context, params map[string]any) (*domain.Ski
 	case "list":
 		return n.listNotes(ctx, userID)
 	default:
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Error: fmt.Sprintf("invalid operation: %s", operation),
 		}, nil
 	}
 }
 
 // createNote creates a new note.
-func (n *Notes) createNote(ctx context.Context, userID string, params map[string]any) (*domain.SkillResult, error) {
+func (n *Notes) createNote(ctx context.Context, userID string, params map[string]any) (*domain.ExecutionResult, error) {
 	title, ok := params["title"].(string)
 	if !ok || title == "" {
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Error: "missing title parameter",
 		}, nil
 	}
 
 	content, ok := params["content"].(string)
 	if !ok || content == "" {
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Error: "missing content parameter",
 		}, nil
 	}
@@ -145,12 +145,12 @@ func (n *Notes) createNote(ctx context.Context, userID string, params map[string
 	}
 
 	if err := n.repo.Create(ctx, note); err != nil {
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Error: fmt.Sprintf("failed to create note: %v", err),
 		}, nil
 	}
 
-	return &domain.SkillResult{
+	return &domain.ExecutionResult{
 		Output: fmt.Sprintf("Note created successfully with ID: %s", note.ID),
 		Metadata: map[string]any{
 			"note_id": note.ID,
@@ -159,17 +159,17 @@ func (n *Notes) createNote(ctx context.Context, userID string, params map[string
 }
 
 // readNote retrieves a note by ID.
-func (n *Notes) readNote(ctx context.Context, params map[string]any) (*domain.SkillResult, error) {
+func (n *Notes) readNote(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) {
 	noteID, ok := params["id"].(string)
 	if !ok || noteID == "" {
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Error: "missing id parameter",
 		}, nil
 	}
 
 	note, err := n.repo.GetByID(ctx, noteID)
 	if err != nil {
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Error: fmt.Sprintf("failed to read note: %v", err),
 		}, nil
 	}
@@ -183,7 +183,7 @@ func (n *Notes) readNote(ctx context.Context, params map[string]any) (*domain.Sk
 	output.WriteString(fmt.Sprintf("Created: %s\n", note.CreatedAt.Format("2006-01-02 15:04:05")))
 	output.WriteString(fmt.Sprintf("Updated: %s", note.UpdatedAt.Format("2006-01-02 15:04:05")))
 
-	return &domain.SkillResult{
+	return &domain.ExecutionResult{
 		Output: output.String(),
 		Metadata: map[string]any{
 			"note": map[string]any{
@@ -197,10 +197,10 @@ func (n *Notes) readNote(ctx context.Context, params map[string]any) (*domain.Sk
 }
 
 // updateNote updates an existing note.
-func (n *Notes) updateNote(ctx context.Context, params map[string]any) (*domain.SkillResult, error) {
+func (n *Notes) updateNote(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) {
 	noteID, ok := params["id"].(string)
 	if !ok || noteID == "" {
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Error: "missing id parameter",
 		}, nil
 	}
@@ -208,7 +208,7 @@ func (n *Notes) updateNote(ctx context.Context, params map[string]any) (*domain.
 	// Get existing note
 	note, err := n.repo.GetByID(ctx, noteID)
 	if err != nil {
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Error: fmt.Sprintf("failed to find note: %v", err),
 		}, nil
 	}
@@ -231,47 +231,47 @@ func (n *Notes) updateNote(ctx context.Context, params map[string]any) (*domain.
 	}
 
 	if err := n.repo.Update(ctx, note); err != nil {
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Error: fmt.Sprintf("failed to update note: %v", err),
 		}, nil
 	}
 
-	return &domain.SkillResult{
+	return &domain.ExecutionResult{
 		Output: "Note updated successfully",
 	}, nil
 }
 
 // deleteNote deletes a note by ID.
-func (n *Notes) deleteNote(ctx context.Context, params map[string]any) (*domain.SkillResult, error) {
+func (n *Notes) deleteNote(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) {
 	noteID, ok := params["id"].(string)
 	if !ok || noteID == "" {
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Error: "missing id parameter",
 		}, nil
 	}
 
 	if err := n.repo.Delete(ctx, noteID); err != nil {
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Error: fmt.Sprintf("failed to delete note: %v", err),
 		}, nil
 	}
 
-	return &domain.SkillResult{
+	return &domain.ExecutionResult{
 		Output: "Note deleted successfully",
 	}, nil
 }
 
 // listNotes lists all notes for a user.
-func (n *Notes) listNotes(ctx context.Context, userID string) (*domain.SkillResult, error) {
+func (n *Notes) listNotes(ctx context.Context, userID string) (*domain.ExecutionResult, error) {
 	notes, err := n.repo.List(ctx, userID)
 	if err != nil {
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Error: fmt.Sprintf("failed to list notes: %v", err),
 		}, nil
 	}
 
 	if len(notes) == 0 {
-		return &domain.SkillResult{
+		return &domain.ExecutionResult{
 			Output: "No notes found",
 		}, nil
 	}
@@ -297,7 +297,7 @@ func (n *Notes) listNotes(ctx context.Context, userID string) (*domain.SkillResu
 		}
 	}
 
-	return &domain.SkillResult{
+	return &domain.ExecutionResult{
 		Output: output.String(),
 		Metadata: map[string]any{
 			"count": len(notes),
@@ -306,12 +306,12 @@ func (n *Notes) listNotes(ctx context.Context, userID string) (*domain.SkillResu
 	}, nil
 }
 
-// RequiredPermissions returns the permissions required for this skill.
+// RequiredPermissions returns the permissions required for this tool.
 func (n *Notes) RequiredPermissions() []domain.Permission {
 	return []domain.Permission{domain.PermissionWrite}
 }
 
-// Config returns the skill's configuration.
-func (n *Notes) Config() domain.SkillConfig {
+// Config returns the tool's configuration.
+func (n *Notes) Config() domain.ToolConfig {
 	return n.config
 }

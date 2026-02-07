@@ -30,7 +30,7 @@ func TestExecute_WithMockServer_MultipleResults(t *testing.T) {
 	client := searchClient.NewClientWithBaseURL(10, server.URL)
 	w := &WebSearch{
 		client: client,
-		config: domain.SkillConfig{Enabled: true},
+		config: domain.ToolConfig{Enabled: true},
 	}
 
 	result, err := w.Execute(context.Background(), map[string]any{
@@ -82,7 +82,7 @@ func TestExecute_WithMockServer_NoResults(t *testing.T) {
 	client := searchClient.NewClientWithBaseURL(10, server.URL)
 	w := &WebSearch{
 		client: client,
-		config: domain.SkillConfig{Enabled: true},
+		config: domain.ToolConfig{Enabled: true},
 	}
 
 	result, err := w.Execute(context.Background(), map[string]any{
@@ -118,7 +118,7 @@ func TestExecute_WithMockServer_ResultsWithoutSnippets(t *testing.T) {
 	client := searchClient.NewClientWithBaseURL(10, server.URL)
 	w := &WebSearch{
 		client: client,
-		config: domain.SkillConfig{Enabled: true},
+		config: domain.ToolConfig{Enabled: true},
 	}
 
 	result, err := w.Execute(context.Background(), map[string]any{
@@ -156,7 +156,7 @@ func TestExecute_WithMockServer_ServerError(t *testing.T) {
 	client := searchClient.NewClientWithBaseURL(10, server.URL)
 	w := &WebSearch{
 		client: client,
-		config: domain.SkillConfig{Enabled: true},
+		config: domain.ToolConfig{Enabled: true},
 	}
 
 	result, err := w.Execute(context.Background(), map[string]any{
@@ -191,7 +191,7 @@ func TestExecute_WithMockServer_LimitAsFloat64(t *testing.T) {
 	client := searchClient.NewClientWithBaseURL(10, server.URL)
 	w := &WebSearch{
 		client: client,
-		config: domain.SkillConfig{Enabled: true},
+		config: domain.ToolConfig{Enabled: true},
 	}
 
 	result, err := w.Execute(context.Background(), map[string]any{
@@ -225,7 +225,7 @@ func TestExecute_WithMockServer_LimitAsInt(t *testing.T) {
 	client := searchClient.NewClientWithBaseURL(10, server.URL)
 	w := &WebSearch{
 		client: client,
-		config: domain.SkillConfig{Enabled: true},
+		config: domain.ToolConfig{Enabled: true},
 	}
 
 	result, err := w.Execute(context.Background(), map[string]any{
@@ -260,7 +260,7 @@ func TestExecute_WithMockServer_ManyResults(t *testing.T) {
 	client := searchClient.NewClientWithBaseURL(10, server.URL)
 	w := &WebSearch{
 		client: client,
-		config: domain.SkillConfig{Enabled: true},
+		config: domain.ToolConfig{Enabled: true},
 	}
 
 	result, err := w.Execute(context.Background(), map[string]any{

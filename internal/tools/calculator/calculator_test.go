@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"nuimanbot/internal/skills/calculator"
+	"nuimanbot/internal/tools/calculator"
 )
 
 func TestCalculator_Name(t *testing.T) {

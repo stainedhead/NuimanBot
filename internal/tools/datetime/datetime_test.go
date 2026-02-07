@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"nuimanbot/internal/skills/datetime"
+	"nuimanbot/internal/tools/datetime"
 )
 
 func TestDateTime_Name(t *testing.T) {
