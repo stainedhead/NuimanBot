@@ -1,0 +1,129 @@
+# NuimanBot Configuration Example
+# Copy this file to config.yaml and customize for your environment
+
+# Server Configuration
+server:
+  log_level: info  # Options: debug, info, warn, error
+  debug: false     # Enable debug mode (more verbose logging)
+
+# Security Configuration
+security:
+  input_max_length: 4096           # Maximum input length in characters
+  vault_path: "./data/vault.enc"   # Path to encrypted credential vault
+  # encryption_key: Set via NUIMANBOT_ENCRYPTION_KEY environment variable
+
+# Storage Configuration
+storage:
+  type: sqlite                    # Database type (sqlite only for now)
+  dsn: "./data/nuimanbot.db"      # Database connection string
+
+# LLM Provider Configuration
+llm:
+  default_model:
+    primary: anthropic/claude-sonnet  # Default model to use
+  providers:
+    # Anthropic Claude
+    - id: anthropic-main
+      type: anthropic
+      api_key: "your-api-key-here"  # Set via NUIMANBOT_LLM_PROVIDERS_0_APIKEY env var
+
+    # OpenAI (alternative)
+    # - id: openai-main
+    #   type: openai
+    #   api_key: "your-openai-key"
+    #   base_url: "https://api.openai.com/v1"  # Optional
+
+    # Ollama (local models)
+    # - id: ollama-local
+    #   type: ollama
+    #   base_url: "http://localhost:11434"
+
+# Gateway Configuration
+gateways:
+  cli:
+    debug_mode: false
+    history_file: ".nuimanbot_history"
+
+  # Telegram Gateway (optional)
+  # telegram:
+  #   enabled: true
+  #   bot_token: "your-bot-token"  # Set via NUIMANBOT_GATEWAYS_TELEGRAM_BOTTOKEN
+
+  # Slack Gateway (optional)
+  # slack:
+  #   enabled: true
+  #   bot_token: "xoxb-your-token"  # Set via NUIMANBOT_GATEWAYS_SLACK_BOTTOKEN
+  #   app_token: "xapp-your-token"  # Set via NUIMANBOT_GATEWAYS_SLACK_APPTOKEN
+
+# Tool System Configuration (built-in tools)
+tools:
+  entries:
+    calculator:
+      enabled: true
+    datetime:
+      enabled: true
+    # weather:
+    #   enabled: true
+    #   api_key: "your-weather-api-key"
+
+# Agent Skills System (Anthropic-style file-based skills)
+# Skills are reusable prompt templates that can be invoked via /skill-name
+skills:
+  enabled: true
+  roots:
+    # User-level skills (stored in home directory)
+    # Priority: Medium (200)
+    - path: "~/.claude/skills"
+      scope: user
+
+    # Project-level skills (stored in project directory)
+    # Priority: Low (100)
+    - path: "./.claude/skills"
+      scope: project
+
+    # Enterprise skills (organization-wide, optional)
+    # Priority: Highest (300)
+    # - path: "/etc/nuimanbot/skills"
+    #   scope: enterprise
+
+    # Plugin skills (third-party, optional)
+    # Priority: Lowest (50)
+    # - path: "./plugins/skills"
+    #   scope: plugin
+
+# Skill Directory Structure:
+# Each skill lives in its own directory with a SKILL.md file:
+#   .claude/skills/
+#   ├── code-review/
+#   │   └── SKILL.md
+#   ├── debugging/
+#   │   └── SKILL.md
+#   └── testing/
+#       └── SKILL.md
+#
+# Invoke skills with: /skill-name [arguments]
+# List skills with: /help
+# Describe skill with: /describe skill-name
+
+# MCP (Model Context Protocol) Configuration
+mcp:
+  client:
+    timeout: "30s"
+
+# Memory Configuration
+# memory:
+#   max_tokens: 4000
+#   summarization_threshold: 0.8
+
+# External API Configuration
+# external_api:
+#   weather:
+#     api_key: "your-api-key"
+#   news:
+#     api_key: "your-api-key"
+
+# Tool-Specific Settings
+# tool_settings:
+#   websearch:
+#     max_results: 10
+#     timeout: 30

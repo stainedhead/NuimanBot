@@ -30,6 +30,20 @@ tools:
     datetime:
       enabled: true
 
+# Agent Skills System (Anthropic-style file-based skills)
+skills:
+  enabled: true
+  roots:
+    # User-level skills (higher priority than project)
+    - path: "~/.claude/skills"
+      scope: user
+    # Project-level skills
+    - path: "./.claude/skills"
+      scope: project
+    # Enterprise skills can be added here (highest priority)
+    # - path: "/etc/nuimanbot/skills"
+    #   scope: enterprise
+
 mcp:
   client:
     timeout: "30s"

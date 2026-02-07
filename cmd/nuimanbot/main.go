@@ -583,27 +583,33 @@ func (app *application) Run(ctx context.Context) error {
 	// Track active gateways for proper shutdown
 	var gateways []domain.Gateway
 
-	// Initialize Agent Skills System (Phase 5)
+	// Initialize Agent Skills System (Phase 6: Config Integration)
 	skillRepo := skillinfra.NewFilesystemSkillRepository()
 	skillRegistry := skillusecase.NewInMemorySkillRegistry(skillRepo)
 	skillRenderer := skillusecase.NewDefaultSkillRenderer()
 
-	// Initialize skill registry with skill roots
-	skillRoots := []domain.SkillRoot{
-		{Path: ".claude/skills", Scope: domain.ScopeProject},
-		// User skills can be added when config system is ready (Phase 6)
-		// {Path: "~/.claude/skills", Scope: domain.ScopeUser},
-	}
-	if err := skillRegistry.Initialize(ctx, skillRoots); err != nil {
-		slog.Warn("Failed to initialize Agent Skills system",
+	// Get skill roots from configuration
+	skillRoots, err := app.Config.Skills.GetRoots()
+	if err != nil {
+		slog.Warn("Failed to get skill roots from config",
 			"error", err,
 			"note", "Continuing without skills (non-fatal)",
 		)
-		// Continue without skills (non-fatal)
+	} else if len(skillRoots) > 0 {
+		// Initialize skill registry with configured roots
+		if err := skillRegistry.Initialize(ctx, skillRoots); err != nil {
+			slog.Warn("Failed to initialize Agent Skills system",
+				"error", err,
+				"note", "Continuing without skills (non-fatal)",
+			)
+		} else {
+			slog.Info("Agent Skills system initialized",
+				"skills_loaded", len(skillRegistry.List()),
+				"roots_configured", len(skillRoots),
+			)
+		}
 	} else {
-		slog.Info("Agent Skills system initialized",
-			"skills_loaded", len(skillRegistry.List()),
-		)
+		slog.Info("Agent Skills system disabled (no roots configured)")
 	}
 
 	// Create skill CLI command handler
