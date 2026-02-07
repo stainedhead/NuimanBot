@@ -7,6 +7,8 @@ An AI agent framework built with Clean Architecture principles, featuring LLM in
 ### Core Architecture
 - **Clean Architecture**: Strict layer separation (Domain, Use Case, Adapter, Infrastructure)
 - **Multi-LLM Support**: Anthropic Claude, OpenAI GPT, and Ollama (local models)
+- **Multi-Provider Fallback**: Automatic failover across LLM providers for high availability
+- **Streaming Responses**: Real-time token-by-token LLM responses with graceful degradation
 - **Rich Skill Library**: 5 built-in skills (calculator, datetime, weather, web search, notes)
 - **Multiple Gateways**: CLI, Telegram, and Slack interfaces with concurrent operation
 
@@ -21,12 +23,16 @@ An AI agent framework built with Clean Architecture principles, featuring LLM in
 - **SQLite Storage**: Persistent conversations, users, and notes with full CRUD
 - **Conversation Summarization**: Automatic LLM-based summarization when context limits approached
 - **Token Window Management**: Dynamic context sizing based on provider limits (200k Claude, 128k GPT-4, 32k Ollama)
+- **Conversation Export**: Export conversations in JSON or Markdown format with full metadata
+- **User Preferences**: Customizable LLM settings (provider, model, temperature, tokens), response formats, and context windows
 
 ### Performance & Observability
 - **Connection Pooling**: Optimized database connections (25 max open, 5 idle, lifecycle management)
 - **LLM Response Caching**: In-memory cache with SHA256 hashing (1000 entries, 1-hour TTL, 100% test coverage)
 - **Message Batching**: Buffered writes with dual flush strategy (size-based + time-based)
 - **Prometheus Metrics**: 14+ metric types exposed at `/metrics` endpoint
+- **Distributed Tracing**: OpenTelemetry-style tracing with span tracking and context propagation
+- **Error Tracking**: Structured error capture with user context, tags, breadcrumbs, and custom fingerprints
 - **Health Checks**: Liveness, readiness, and version endpoints
 - **Request Tracing**: Request ID propagation for distributed debugging
 
@@ -566,7 +572,15 @@ See `AGENTS.md` for detailed contribution guidelines.
 
 ## Status
 
-✅ **Production-Ready MVP** - 75% Complete (33/44 planned features)
+✅ **Production-Ready MVP** - 85% Complete (40/44 planned features)
+
+**Recently Completed (Phase 5 & 6)**:
+- ✅ Streaming Response Support - Real-time token-by-token LLM responses
+- ✅ Multi-Provider Fallback - Automatic provider failover for resilience
+- ✅ User Preferences - Customizable LLM and response settings
+- ✅ Conversation Export - JSON and Markdown export formats
+- ✅ Distributed Tracing - Request tracking with OpenTelemetry-style API
+- ✅ Error Tracking - Structured error capture with rich context
 
 ### Completed Features ✅
 
