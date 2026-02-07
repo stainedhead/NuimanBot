@@ -16,6 +16,24 @@ import (
 	"nuimanbot/internal/domain"
 )
 
+// safeBuffer is a thread-safe wrapper around bytes.Buffer for test infrastructure
+type safeBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *safeBuffer) Write(p []byte) (n int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *safeBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
+
 // Helper to create a new Gateway with mocked reader/writer for testing
 func newTestGateway(cfg *config.CLIConfig, inputString string, output io.Writer) (g *cli.Gateway, r, w *os.File) {
 	var err error // Declare err explicitly
@@ -66,7 +84,7 @@ func TestPlatform(t *testing.T) {
 
 func TestStartStop(t *testing.T) {
 	cfg := &config.CLIConfig{}
-	output := new(bytes.Buffer)
+	output := &safeBuffer{}
 	g, readerPipe, writerPipe := newTestGateway(cfg, "", output) // No initial input for this test
 
 	defer func() {
@@ -82,14 +100,12 @@ func TestStartStop(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel() // Ensure the test context is cancelled
 	var wg sync.WaitGroup
+	var startErr error
 	wg.Add(1)
 
 	go func() {
 		defer wg.Done()
-		err := g.Start(ctx)
-		if err != nil {
-			t.Errorf("Start returned an error: %v", err)
-		}
+		startErr = g.Start(ctx)
 	}()
 
 	// Wait for the "started" message to appear, indicating the REPL loop is running.
@@ -114,6 +130,10 @@ func TestStartStop(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	wg.Wait() // Wait for g.Start goroutine to finish
+
+	if startErr != nil {
+		t.Errorf("Start returned an error: %v", startErr)
+	}
 
 	if !strings.Contains(output.String(), "CLI Gateway stopping...") {
 		t.Errorf("Expected output to contain 'CLI Gateway stopping...', got: %s", output.String())
