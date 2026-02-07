@@ -23,7 +23,7 @@ gateways:
     debug_mode: false
     history_file: ".nuimanbot_history"
 
-skills:
+tools:
   entries:
     calculator:
       enabled: true
