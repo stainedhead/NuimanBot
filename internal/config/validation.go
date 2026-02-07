@@ -31,6 +31,11 @@ func Validate(cfg *NuimanBotConfig) error {
 		errs = append(errs, err)
 	}
 
+	// Validate Skills config
+	if err := cfg.Skills.Validate(); err != nil {
+		errs = append(errs, fmt.Errorf("skills: %w", err))
+	}
+
 	// If there are errors, combine them
 	if len(errs) > 0 {
 		return fmt.Errorf("configuration validation failed: %w", errors.Join(errs...))

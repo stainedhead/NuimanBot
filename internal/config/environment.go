@@ -100,6 +100,12 @@ func ApplyEnvironmentDefaults(cfg *NuimanBotConfig) {
 		}
 	}
 
+	// Apply skills defaults if not configured
+	if len(cfg.Skills.Roots) == 0 {
+		defaultSkills := DefaultSkillsConfig()
+		cfg.Skills = *defaultSkills
+	}
+
 	slog.Debug("Applied environment defaults",
 		"environment", env,
 		"log_level", cfg.Server.LogLevel,
