@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3" // SQLite driver
 
@@ -110,6 +111,18 @@ func main() {
 		log.Fatalf("Failed to open database: %v", err)
 	}
 	defer db.Close()
+
+	// Configure connection pool for optimal performance
+	db.SetMaxOpenConns(25)                 // Maximum number of open connections
+	db.SetMaxIdleConns(5)                  // Maximum number of idle connections
+	db.SetConnMaxLifetime(5 * time.Minute) // Maximum lifetime of a connection
+	db.SetConnMaxIdleTime(1 * time.Minute) // Maximum idle time before closing
+	slog.Info("Database connection pool configured",
+		"max_open", 25,
+		"max_idle", 5,
+		"max_lifetime", "5m",
+		"max_idle_time", "1m",
+	)
 
 	// Verify database connection
 	if err := db.Ping(); err != nil {

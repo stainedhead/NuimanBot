@@ -342,3 +342,9 @@ func (r *MessageRepository) ListConversations(ctx context.Context, userID string
 	}
 	return summaries, nil
 }
+
+// PoolStats returns database connection pool statistics.
+// Useful for monitoring and performance tuning.
+func (r *MessageRepository) PoolStats() sql.DBStats {
+	return r.db.Stats()
+}
