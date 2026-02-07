@@ -245,23 +245,14 @@ issues:
 
 ### Required Files
 
-Maintain these documentation files with every change cycle:
+Maintain these files in the `documentation/` directory. Also maintain README.md at the root direrctoty.  These are collectively called **product docs** (or **product documentation**) and must be kept current for architecturally significant changes and any updates that materially improve human/agent understanding.
 
 | File | Purpose |
 |------|---------|
 | `README.md` | Project overview, quick start, usage examples |
-| `PRODUCT_REQUIREMENT_DOC.md` | High-level product description, goals, feature specifications, and user workflows |
-| `documentation/technical-details.md` | Architecture decisions, API docs, data flows (if applicable, otherwise can be removed) |
-
-### Product Documentation (documents/)
-
-Maintain these files in the `documents/` directory. These are collectively called **product docs** (or **product documentation**) and must be kept current for architecturally significant changes and any updates that materially improve human/agent understanding.
-
-| File | Purpose |
-|------|---------|
-| `documents/product-summary.md` | Executive overview of the product and its objectives |
-| `documents/product-details.md` | Detailed product requirements, workflows, and constraints |
-| `documents/technical-details.md` | Architecture, system design, and technical decisions |
+| `documentation/product-summary.md` | Executive overview of the product and its objectives |
+| `documentation/product-details.md` | Detailed product requirements, workflows, and constraints |
+| `documentation/technical-details.md` | Architecture, system design, and technical decisions, API docs, data flows (if applicable, otherwise can be removed) |
 
 **Rules:**
 - Treat product docs as a key delivery artifact for changes.
@@ -420,7 +411,6 @@ dist/
 ├── CLAUDE.md              # References this file
 ├── AGENTS.md              # This file - agent guidelines
 ├── README.md              # Project overview, quick start, usage examples
-├── PRODUCT_REQUIREMENT_DOC.md # High-level product description, goals, feature specifications, and user workflows
 ├── .gitignore             # Git ignore rules (required)
 ├── .golangci.yml          # Linter configuration
 ├── go.mod                 # Go module definition

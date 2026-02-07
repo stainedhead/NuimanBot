@@ -42,6 +42,7 @@ dist/
 specs/
 
 # Example bots (external projects)
+examples/
 examples/HomeBots/lettabot/
 examples/HomeBots/nanobot/
 examples/HomeBots/openclaw/
