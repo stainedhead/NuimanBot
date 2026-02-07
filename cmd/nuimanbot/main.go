@@ -620,6 +620,18 @@ func (app *application) Run(ctx context.Context) error {
 	cliGateway := cli.NewGateway(&app.Config.Gateways.CLI)
 	cliGateway.SetSkillHandler(skillHandler) // Enable /skill-name command support
 	app.connectGateway(cliGateway)
+
+	// Phase 7: Connect skill handler to chat service through gateway's message handler
+	// This enables skills to process through the full chat pipeline (LLM + tools)
+	messageHandler := func(ctx context.Context, msg domain.IncomingMessage) error {
+		response, err := app.ChatService.ProcessMessage(ctx, &msg)
+		if err != nil {
+			return err
+		}
+		return cliGateway.Send(ctx, response)
+	}
+	skillHandler.SetMessageHandler(messageHandler, domain.PlatformCLI, "cli_user")
+
 	gateways = append(gateways, cliGateway) //nolint:staticcheck // Reserved for future shutdown handling
 	_ = gateways                            // Prevent unused variable warning
 
