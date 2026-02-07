@@ -484,7 +484,7 @@ func (app *application) Run(ctx context.Context) error {
 	cliGateway := cli.NewGateway(&app.Config.Gateways.CLI)
 	app.connectGateway(cliGateway)
 	gateways = append(gateways, cliGateway) //nolint:staticcheck // Reserved for future shutdown handling
-	_ = gateways // Prevent unused variable warning
+	_ = gateways                            // Prevent unused variable warning
 
 	// Initialize Telegram gateway if enabled
 	if app.Config.Gateways.Telegram.Enabled {
