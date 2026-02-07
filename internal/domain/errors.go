@@ -35,6 +35,9 @@ var ErrInsufficientPermissions = errors.New("insufficient permissions")
 // ErrCannotDeleteLastAdmin is returned when attempting to delete the last admin user.
 var ErrCannotDeleteLastAdmin = errors.New("cannot delete last admin user")
 
+// ErrRateLimitExceeded is returned when a rate limit is exceeded.
+var ErrRateLimitExceeded = errors.New("rate limit exceeded")
+
 // Other potential errors could be added here as needed, e.g.:
 // ErrLLMProviderNotConfigured
 // ErrCredentialRotationFailed

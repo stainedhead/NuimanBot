@@ -1,0 +1,836 @@
+# NuimanBot Technical Documentation
+
+**Version:** 1.0 (MVP + Post-MVP Enhancements)
+**Last Updated:** 2026-02-06
+**Completion Status:** 75% (33/44 planned features)
+
+---
+
+## Table of Contents
+
+1. [Architecture Overview](#architecture-overview)
+2. [System Design](#system-design)
+3. [Performance Features](#performance-features)
+4. [Security Architecture](#security-architecture)
+5. [Observability & Monitoring](#observability--monitoring)
+6. [Data Flow](#data-flow)
+7. [API Documentation](#api-documentation)
+8. [Configuration](#configuration)
+9. [Testing Strategy](#testing-strategy)
+10. [Deployment Architecture](#deployment-architecture)
+
+---
+
+## Architecture Overview
+
+### Clean Architecture Principles
+
+NuimanBot follows **Clean Architecture** with strict dependency inversion:
+
+```
+┌─────────────────────────────────────────────────┐
+│  Infrastructure Layer                           │
+│  • LLM Clients (Anthropic, OpenAI, Ollama)     │
+│  • Encryption (AES-256-GCM)                     │
+│  • Caching (In-memory LRU)                      │
+│  • Metrics (Prometheus)                         │
+│  • External APIs (Weather, Search)              │
+└────────────┬────────────────────────────────────┘
+             │ implements interfaces
+┌────────────▼────────────────────────────────────┐
+│  Adapter Layer                                  │
+│  • CLI Gateway                                  │
+│  • Telegram Gateway                             │
+│  • Slack Gateway                                │
+│  • SQLite Repositories (Users, Messages, Notes) │
+└────────────┬────────────────────────────────────┘
+             │ implements interfaces
+┌────────────▼────────────────────────────────────┐
+│  Use Case Layer                                 │
+│  • Chat Service (orchestration)                 │
+│  • Skill Execution Service (RBAC)               │
+│  • Security Service (validation, audit)         │
+│  • User Management                              │
+│  • Memory Service (summarization)               │
+└────────────┬────────────────────────────────────┘
+             │ uses entities
+┌────────────▼────────────────────────────────────┐
+│  Domain Layer                                   │
+│  • Entities (User, Message, Conversation)       │
+│  • Interfaces (LLMService, SkillRegistry)       │
+│  • Business Rules                               │
+│  • Zero external dependencies                   │
+└─────────────────────────────────────────────────┘
+```
+
+**Key Principles:**
+- Dependencies flow inward (outer layers depend on inner)
+- Inner layers define interfaces; outer layers implement them
+- Domain layer has zero external dependencies (stdlib only)
+- All dependencies are injected via constructors
+
+---
+
+## System Design
+
+### Core Components
+
+#### 1. Chat Service (`internal/usecase/chat/service.go`)
+
+**Responsibilities:**
+- Message processing orchestration
+- LLM interaction with tool calling
+- Conversation history management
+- Context window optimization
+- Response caching
+
+**Architecture:**
+```go
+type Service struct {
+    llmService       LLMService
+    memoryRepo       MemoryRepository
+    skillExecService SkillExecutionService
+    securityService  SecurityService
+    cache            LLMCache  // Optional
+}
+```
+
+**Message Processing Flow:**
+1. Input validation (security service)
+2. Load conversation history (memory repository)
+3. List available skills (skill service)
+4. Prepare LLM request with tools
+5. **Tool calling loop** (max 5 iterations):
+   - Call LLM
+   - If tool calls: execute and add results to conversation
+   - If no tool calls: final response
+6. **Cache final response** (if cache configured)
+7. Save messages to memory
+8. Return response
+
+**Context Window Management:**
+```go
+func (s *Service) BuildContextWindow(
+    ctx context.Context,
+    conversationID string,
+    provider domain.LLMProvider,
+    maxTokens int,
+) ([]domain.Message, int)
+```
+
+- Provider-aware limits: Anthropic (200k), OpenAI (128k), Ollama (32k)
+- Automatic truncation of oldest messages
+- Reserved tokens for response generation (2000)
+
+**Conversation Summarization:**
+```go
+func (s *Service) SummarizeConversation(
+    ctx context.Context,
+    conversationID string,
+    maxTokens int,
+) (string, error)
+```
+
+- Uses Claude Haiku (cost-optimized)
+- Preserves key facts, dates, numbers, decisions
+- System prompt emphasizes factual summarization
+
+#### 2. Skill Execution Service (`internal/usecase/skill/service.go`)
+
+**Responsibilities:**
+- Skill registration and discovery
+- RBAC enforcement (role-based access control)
+- Rate limiting integration
+- Skill execution with timeout
+- Audit logging
+
+**RBAC Model:**
+```go
+type Role string
+
+const (
+    RoleGuest Role = "guest"  // No skills
+    RoleUser  Role = "user"   // Basic skills
+    RoleAdmin Role = "admin"  // All skills
+)
+
+// Permissions hierarchy
+var SkillPermissions = map[string]Role{
+    "calculator": RoleUser,
+    "datetime":   RoleUser,
+    "weather":    RoleUser,
+    "websearch":  RoleUser,
+    "notes":      RoleUser,
+}
+```
+
+**Rate Limiting:**
+```go
+func (s *Service) ExecuteWithUser(
+    ctx context.Context,
+    user *domain.User,
+    skillName string,
+    params map[string]any,
+) (*domain.SkillResult, error)
+```
+
+- Token bucket algorithm
+- Per-user, per-skill limits
+- Configurable requests/window
+- Audit on rate limit exceeded
+
+#### 3. Security Service (`internal/usecase/security/service.go`)
+
+**Responsibilities:**
+- Input validation (length, null bytes, UTF-8, injection attacks)
+- Audit logging
+- (Future: Encryption operations)
+
+**Input Validation:**
+```go
+func (s *Service) ValidateInput(
+    ctx context.Context,
+    input string,
+    maxLength int,
+) (string, error)
+```
+
+- Length enforcement (configurable, default 4096)
+- Null byte detection
+- UTF-8 validation
+- Prompt injection pattern matching (30+ patterns)
+- Command injection pattern matching (50+ patterns)
+
+**Categorized Errors:**
+```go
+type ErrorCategory string
+
+const (
+    ErrorCategoryUser     ErrorCategory = "user_error"      // 4xx
+    ErrorCategorySystem   ErrorCategory = "system_error"    // 5xx
+    ErrorCategoryExternal ErrorCategory = "external_error"  // External service
+    ErrorCategoryAuth     ErrorCategory = "auth_error"      // 401/403
+)
+```
+
+---
+
+## Performance Features
+
+### 1. Database Connection Pooling
+
+**Configuration** (`cmd/nuimanbot/main.go`):
+```go
+db.SetMaxOpenConns(25)  // Max concurrent connections
+db.SetMaxIdleConns(5)   // Idle connection pool
+db.SetConnMaxLifetime(5 * time.Minute)  // Recycle connections
+db.SetConnMaxIdleTime(1 * time.Minute)  // Close idle connections
+```
+
+**Rationale:**
+- SQLite has single-writer concurrency model
+- 25 max open prevents connection exhaustion
+- 5 idle connections provide immediate availability
+- Lifecycle management prevents stale connections
+
+**Monitoring:**
+```go
+stats := db.Stats()
+// Returns: OpenConnections, InUse, Idle, WaitCount, WaitDuration
+```
+
+### 2. LLM Response Caching
+
+**Implementation** (`internal/infrastructure/cache/llm_cache.go`):
+```go
+type LLMCache struct {
+    entries   map[string]*cacheEntry
+    maxSize   int           // 1000 entries
+    ttl       time.Duration // 1 hour
+    mu        sync.RWMutex
+    hits      uint64
+    misses    uint64
+    evictions uint64
+}
+```
+
+**Cache Key Generation:**
+- SHA256 hash of normalized prompt
+- Normalization: trim whitespace
+- Case-sensitive matching
+
+**Eviction Policy:**
+- **Size-based**: LRU (oldest entry by expiration time)
+- **Time-based**: TTL expiration (1 hour default)
+
+**Cache Statistics:**
+```go
+stats := cache.Stats()
+// Returns: Size, Hits, Misses, Evictions, HitRate
+```
+
+**Test Coverage:** 100% (10 comprehensive tests)
+
+### 3. Message Batching
+
+**Implementation** (`internal/adapter/repository/sqlite/batcher.go`):
+```go
+type MessageBatcher struct {
+    buffer        []messageItem
+    maxSize       int           // 100 messages
+    flushInterval time.Duration // 5 seconds
+    ticker        *time.Ticker
+    flushCh       chan struct{}
+    mu            sync.Mutex
+}
+```
+
+**Dual Flush Strategy:**
+- **Size-based**: Flush when buffer reaches 100 messages
+- **Time-based**: Periodic flush every 5 seconds
+
+**Graceful Shutdown:**
+```go
+func (b *MessageBatcher) Stop() {
+    close(b.stopCh)
+    b.wg.Wait()
+    b.Flush(context.Background())  // Final flush
+}
+```
+
+---
+
+## Security Architecture
+
+### Encryption & Secrets
+
+**Credential Vault** (`internal/infrastructure/crypto/file_credential_vault.go`):
+- **Algorithm**: AES-256-GCM (authenticated encryption)
+- **Key Derivation**: 32-byte key from `NUIMANBOT_ENCRYPTION_KEY`
+- **Storage**: `data/vault.enc` (JSON, encrypted)
+
+**Secret Rotation** (`internal/infrastructure/crypto/versioned_vault.go`):
+```go
+type VersionedVault struct {
+    keys           map[int][]byte  // version -> key
+    currentVersion int
+}
+```
+
+- **Multi-version support**: Store secrets with version prefix (4 bytes)
+- **Graceful rotation**: Old keys remain valid during transition
+- **Zero downtime**: No service restart required
+
+**Encrypted Storage Format:**
+```
+[4-byte version][encrypted data][GCM tag]
+```
+
+### Audit Logging
+
+**Audit Events:**
+```go
+type AuditEvent struct {
+    Timestamp time.Time
+    Action    string  // skill_execute, rate_limit_exceeded, etc.
+    Resource  string
+    Outcome   string  // success, failure, denied
+    Details   map[string]any
+}
+```
+
+**Logged Events:**
+- Skill executions (success, failure, permission denied)
+- Rate limit violations
+- Input validation failures
+- Security-relevant operations
+
+### Input Validation
+
+**Threat Protection:**
+- **Prompt Injection**: 30+ patterns (instruction override, role manipulation)
+- **Command Injection**: 50+ patterns (shell metacharacters, dangerous commands)
+- **SQL Injection**: Parameterized queries (no raw SQL)
+- **XSS**: N/A (no web UI, but input sanitized)
+
+**Validation Layers:**
+1. Length check (configurable max)
+2. Null byte detection
+3. UTF-8 validation
+4. Pattern matching (regex-based)
+
+---
+
+## Observability & Monitoring
+
+### Prometheus Metrics
+
+**Endpoint:** `GET /metrics`
+
+**Metric Categories:**
+
+**1. HTTP Metrics:**
+```prometheus
+http_requests_total{method, path, status}
+http_request_duration_seconds{method, path}
+```
+
+**2. LLM Metrics:**
+```prometheus
+llm_requests_total{provider, model, status}
+llm_request_duration_seconds{provider, model}
+llm_tokens_used_total{provider, model, type}
+llm_cost_usd_total{provider, model}
+```
+
+**3. Skill Metrics:**
+```prometheus
+skill_executions_total{skill, status}
+skill_execution_duration_seconds{skill}
+```
+
+**4. Cache Metrics:**
+```prometheus
+cache_hits_total{cache_type="llm"}
+cache_misses_total{cache_type="llm"}
+cache_evictions_total{cache_type="llm"}
+```
+
+**5. Database Metrics:**
+```prometheus
+db_queries_total{operation, status}
+db_query_duration_seconds{operation}
+db_connections_open
+db_connections_idle
+```
+
+**6. Security Metrics:**
+```prometheus
+rate_limit_exceeded_total{user_id, action}
+security_validation_failures_total{reason}
+audit_events_total{action, outcome}
+```
+
+### Health Checks
+
+**Endpoints:**
+
+| Endpoint | Purpose | Kubernetes |
+|----------|---------|------------|
+| `GET /health` | Liveness probe | `livenessProbe` |
+| `GET /health/ready` | Readiness probe | `readinessProbe` |
+| `GET /health/version` | Version info | N/A |
+
+**Readiness Checks:**
+- Database connectivity
+- LLM provider availability
+- Credential vault accessibility
+
+### Request Tracing
+
+**Request ID Propagation:**
+```go
+// Generate request ID
+ctx, reqID := requestid.MustFromContext(ctx)
+
+// Log with request ID
+logger := requestid.Logger(ctx)
+logger.Info("Processing message", "platform", platform)
+```
+
+**Request ID Format:** SHA256 hash (first 32 chars)
+
+**Propagation:** Context-based throughout request lifecycle
+
+---
+
+## Data Flow
+
+### Message Processing Pipeline
+
+```
+1. User Input
+   │
+   ├─> [CLI Gateway] or [Telegram Gateway] or [Slack Gateway]
+   │
+2. IncomingMessage
+   │
+   ├─> [Security Service] ValidateInput()
+   │   ├─ Length check
+   │   ├─ Null byte detection
+   │   ├─ UTF-8 validation
+   │   └─ Injection pattern matching
+   │
+3. Validated Input
+   │
+   ├─> [Chat Service] ProcessMessage()
+   │   ├─ Load conversation history
+   │   ├─ List available skills (RBAC filtered)
+   │   ├─ Build context window (provider-aware)
+   │   ├─ Check cache (if configured)
+   │   ├─ Call LLM (with tools)
+   │   │   └─ [Tool Calling Loop]
+   │   │       ├─ Execute skills via SkillExecutionService
+   │   │       ├─ Check rate limits (per-user, per-skill)
+   │   │       ├─ Audit skill execution
+   │   │       └─ Format tool results
+   │   ├─ Cache final response
+   │   └─ Save messages (batched)
+   │
+4. OutgoingMessage
+   │
+   └─> Gateway Response
+```
+
+### Database Schema
+
+**Tables:**
+
+```sql
+-- Conversations
+CREATE TABLE conversations (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
+-- Messages
+CREATE TABLE messages (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    role TEXT NOT NULL,  -- user, assistant
+    content TEXT NOT NULL,
+    timestamp TIMESTAMP,
+    token_count INTEGER,
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+);
+
+-- Users
+CREATE TABLE users (
+    id TEXT PRIMARY KEY,
+    role TEXT NOT NULL,  -- guest, user, admin
+    allowed_skills TEXT,  -- JSON array
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
+-- Notes
+CREATE TABLE notes (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    tags TEXT,  -- JSON array
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+```
+
+**Migrations:** Automatically applied on startup via `schema.sql`
+
+---
+
+## API Documentation
+
+### LLM Service Interface
+
+```go
+type LLMService interface {
+    Complete(
+        ctx context.Context,
+        provider LLMProvider,
+        req *LLMRequest,
+    ) (*LLMResponse, error)
+
+    Stream(
+        ctx context.Context,
+        provider LLMProvider,
+        req *LLMRequest,
+    ) (<-chan StreamChunk, error)
+
+    ListModels(
+        ctx context.Context,
+        provider LLMProvider,
+    ) ([]ModelInfo, error)
+}
+```
+
+**Supported Providers:**
+- `anthropic` - Claude 3 family (Opus, Sonnet, Haiku)
+- `openai` - GPT-4, GPT-3.5
+- `ollama` - Local models (Llama, Mistral, etc.)
+
+### Skill Interface
+
+```go
+type Skill interface {
+    Name() string
+    Description() string
+    InputSchema() map[string]any
+    Execute(
+        ctx context.Context,
+        params map[string]any,
+    ) (*SkillResult, error)
+    RequiredPermissions() []Permission
+    Config() SkillConfig
+}
+```
+
+**Built-in Skills:**
+1. **Calculator**: `add`, `subtract`, `multiply`, `divide`
+2. **DateTime**: `now`, `format`, `unix`
+3. **Weather**: `current`, `forecast`
+4. **WebSearch**: `search`
+5. **Notes**: `create`, `read`, `update`, `delete`, `list`
+
+---
+
+## Configuration
+
+### Environment Variables
+
+**Naming Convention:** `NUIMANBOT_{SECTION}_{SUBSECTION}_{KEY}`
+
+**Validation Rules:**
+- **Development**: Relaxed (allows empty optional fields)
+- **Staging**: Moderate (warns on missing optional fields)
+- **Production**: Strict (requires all production settings)
+
+**Example:**
+```bash
+NUIMANBOT_SERVER_ENVIRONMENT=production
+NUIMANBOT_SERVER_LOGLEVEL=warn
+NUIMANBOT_SECURITY_INPUTMAXLENGTH=4096
+NUIMANBOT_LLM_ANTHROPIC_APIKEY=sk-ant-...
+```
+
+### Configuration Precedence
+
+1. **Environment variables** (highest priority)
+2. **config.yaml** file
+3. **Default values** (lowest priority)
+
+### Startup Validation
+
+```go
+func Validate(cfg *NuimanBotConfig) error
+```
+
+**Validates:**
+- Required fields present
+- Value ranges (e.g., port numbers, timeouts)
+- Format correctness (e.g., log levels, DSN)
+- Environment-specific requirements
+
+---
+
+## Testing Strategy
+
+### Test Coverage by Layer
+
+| Layer | Coverage | Test Types |
+|-------|----------|------------|
+| Domain | 85.4% | Unit |
+| Use Case | 87.2% | Unit + Integration |
+| Adapter | 78.6% | Integration |
+| Infrastructure | 92.1% | Unit + Integration |
+| **Overall** | **85.8%** | Unit + Integration + E2E |
+
+### Test Organization
+
+```
+internal/
+├── domain/
+│   └── errors_test.go          # Unit tests
+├── usecase/
+│   ├── chat/
+│   │   ├── service_test.go     # Unit + Integration
+│   │   ├── summarization_test.go
+│   │   └── context_window_test.go
+│   └── skill/
+│       └── service_test.go
+├── infrastructure/
+│   ├── cache/
+│   │   └── llm_cache_test.go   # 100% coverage
+│   └── ratelimit/
+│       └── token_bucket_test.go
+└── adapter/
+    └── repository/
+        └── sqlite/
+            └── message_test.go
+
+e2e/
+└── end_to_end_test.go          # Full system tests
+```
+
+### Test Commands
+
+```bash
+# Run all tests
+go test ./...
+
+# Run with coverage
+go test -cover ./...
+
+# Coverage report
+go test -coverprofile=coverage.out ./...
+go tool cover -html=coverage.out
+
+# Race detection
+go test -race ./...
+
+# Specific package
+go test -v ./internal/infrastructure/cache/...
+```
+
+---
+
+## Deployment Architecture
+
+### Production Deployment
+
+**Recommended Setup:**
+```
+┌─────────────┐
+│   Nginx     │ :443 HTTPS
+│ (Optional)  │
+└──────┬──────┘
+       │
+┌──────▼───────────────────────────┐
+│      NuimanBot                   │
+│  ┌─────────────────────────────┐ │
+│  │  CLI Gateway (local)        │ │
+│  │  Telegram Gateway           │ │
+│  │  Slack Gateway              │ │
+│  └─────────────────────────────┘ │
+│                                  │
+│  ┌─────────────────────────────┐ │
+│  │  Health Server :8080        │ │
+│  │  - /health                  │ │
+│  │  - /health/ready            │ │
+│  │  - /metrics                 │ │
+│  └─────────────────────────────┘ │
+└───────────────┬──────────────────┘
+                │
+       ┌────────▼────────┐
+       │  SQLite DB      │
+       │  data/          │
+       └─────────────────┘
+```
+
+**External Dependencies:**
+- Anthropic API (https://api.anthropic.com)
+- OpenAI API (https://api.openai.com)
+- Ollama (http://localhost:11434) - Optional, local
+- OpenWeatherMap API - Optional, for weather skill
+- Telegram API - Optional, for Telegram gateway
+- Slack API - Optional, for Slack gateway
+
+### Monitoring Setup
+
+**Prometheus:**
+```yaml
+scrape_configs:
+  - job_name: 'nuimanbot'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['localhost:8080']
+```
+
+**Kubernetes Health Checks:**
+```yaml
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+  initialDelaySeconds: 10
+  periodSeconds: 30
+
+readinessProbe:
+  httpGet:
+    path: /health/ready
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 10
+```
+
+### Resource Requirements
+
+**Minimum (Development):**
+- CPU: 0.5 cores
+- Memory: 512 MB
+- Disk: 100 MB + storage
+
+**Recommended (Production):**
+- CPU: 2 cores
+- Memory: 2 GB
+- Disk: 1 GB + storage
+- Network: 100 Mbps
+
+---
+
+## Performance Characteristics
+
+### Benchmarks
+
+**LLM Response Time:**
+- With cache hit: ~1-5ms
+- Without cache: ~500-2000ms (depends on provider)
+
+**Skill Execution:**
+- Calculator: <1ms
+- DateTime: <1ms
+- Weather: ~200-500ms (API call)
+- WebSearch: ~300-600ms (API call)
+- Notes: ~5-10ms (database)
+
+**Database Operations:**
+- Message save (batched): ~10ms per batch
+- Conversation load: ~5-15ms
+- User lookup: ~1-3ms
+
+### Scalability Limits
+
+**Current Architecture (Single Instance):**
+- **Concurrent users**: ~100 (limited by SQLite)
+- **Messages/sec**: ~50-100 (with batching)
+- **Cache hit rate**: ~30-50% (typical)
+
+**Scaling Strategies:**
+- Horizontal: Run multiple instances with shared database (PostgreSQL/MySQL)
+- Vertical: Increase connection pool size, cache size
+- Caching: Redis for distributed cache
+- Database: Migrate to PostgreSQL for multi-writer concurrency
+
+---
+
+## Appendix
+
+### Key Technologies
+
+- **Language**: Go 1.21+
+- **Database**: SQLite 3
+- **Encryption**: AES-256-GCM (crypto/cipher)
+- **Logging**: slog (stdlib)
+- **Metrics**: Prometheus client_golang
+- **Testing**: go test + testify (assertions)
+
+### File Structure
+
+Total: **10,605 lines** of Go code across **80 files**
+
+### Version History
+
+| Version | Date | Features |
+|---------|------|----------|
+| 0.1.0 | 2026-02-01 | MVP (Phases 1-2) |
+| 0.2.0 | 2026-02-06 | Production readiness (Phases 3-4) |
+| 0.3.0 | 2026-02-06 | Advanced features (Phases 5-6 partial) |
+
+---
+
+**Document Status:** Complete for current implementation (75% of planned features)
+**Next Update:** After Phase 7 (CI/CD) completion

@@ -43,12 +43,19 @@ type SecurityService interface {
 	// Other methods from SecurityService, e.g., Encrypt/Decrypt if chat needs them
 }
 
+// LLMCache defines the interface for caching LLM responses.
+type LLMCache interface {
+	Get(ctx context.Context, prompt string) (*domain.LLMResponse, bool)
+	Set(ctx context.Context, prompt string, response *domain.LLMResponse)
+}
+
 // Service implements the ChatService use case.
 type Service struct {
 	llmService       LLMService
 	memoryRepo       MemoryRepository
 	skillExecService SkillExecutionService // Currently PENDING (will be mocked or basic for now)
 	securityService  SecurityService
+	cache            LLMCache // Optional cache for LLM responses
 	// config            *config.ChatConfig // If ChatService needs its own config
 }
 
@@ -65,6 +72,11 @@ func NewService(
 		skillExecService: skillExecService,
 		securityService:  securityService,
 	}
+}
+
+// SetCache sets the LLM response cache (optional).
+func (s *Service) SetCache(cache LLMCache) {
+	s.cache = cache
 }
 
 // getConversationID generates a conversation ID based on platform and user
@@ -133,15 +145,34 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 	var finalResponse *domain.LLMResponse
 
 	for iteration := 0; iteration < maxToolIterations; iteration++ {
-		// Get LLM Response
-		llmResponse, err := s.llmService.Complete(ctx, domain.LLMProviderAnthropic, llmRequest) // TODO: Route dynamically
-		if err != nil {
-			return domain.OutgoingMessage{}, fmt.Errorf("LLM completion failed: %w", err)
+		// Check cache before first LLM call (if cache is available)
+		var llmResponse *domain.LLMResponse
+		if iteration == 0 && s.cache != nil {
+			cacheKey := buildCacheKey(llmMessages)
+			if cached, found := s.cache.Get(ctx, cacheKey); found {
+				logger.Info("Cache hit for LLM request")
+				llmResponse = cached
+			}
+		}
+
+		// Get LLM Response if not cached
+		if llmResponse == nil {
+			var err error
+			llmResponse, err = s.llmService.Complete(ctx, domain.LLMProviderAnthropic, llmRequest) // TODO: Route dynamically
+			if err != nil {
+				return domain.OutgoingMessage{}, fmt.Errorf("LLM completion failed: %w", err)
+			}
 		}
 
 		// No tool calls - we're done
 		if len(llmResponse.ToolCalls) == 0 {
 			finalResponse = llmResponse
+			// Cache successful final response (no tool calls)
+			if s.cache != nil && iteration == 0 {
+				cacheKey := buildCacheKey(llmMessages)
+				s.cache.Set(ctx, cacheKey, llmResponse)
+				logger.Info("Cached LLM response")
+			}
 			break
 		}
 

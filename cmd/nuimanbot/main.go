@@ -20,6 +20,7 @@ import (
 	"nuimanbot/internal/config"
 	"nuimanbot/internal/domain"
 	"nuimanbot/internal/infrastructure/audit"
+	"nuimanbot/internal/infrastructure/cache"
 	"nuimanbot/internal/infrastructure/crypto"
 	"nuimanbot/internal/infrastructure/health"
 	anthropic "nuimanbot/internal/infrastructure/llm/anthropic"
@@ -172,6 +173,14 @@ func main() {
 
 	// 10. Initialize Chat Service
 	chatService := chat.NewService(llmService, memoryRepo, skillExecutionService, securityService)
+
+	// Configure LLM response cache (optional)
+	llmCache := cache.NewLLMCache(1000, 1*time.Hour) // Cache up to 1000 responses for 1 hour
+	chatService.SetCache(llmCache)
+	slog.Info("LLM response cache configured",
+		"max_size", 1000,
+		"ttl", "1h",
+	)
 
 	// 11. Create Application
 	app := &application{

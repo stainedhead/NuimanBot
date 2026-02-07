@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	"nuimanbot/internal/domain"
 )
 
@@ -118,11 +120,12 @@ func (s *Server) Version(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// RegisterRoutes registers health check routes on the provided mux.
+// RegisterRoutes registers health check and metrics routes on the provided mux.
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/health", s.Liveness)
 	mux.HandleFunc("/health/ready", s.Readiness)
 	mux.HandleFunc("/health/version", s.Version)
+	mux.Handle("/metrics", promhttp.Handler()) // Prometheus metrics endpoint
 }
 
 // Start starts the health check HTTP server on the specified port.

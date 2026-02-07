@@ -8,6 +8,7 @@ import (
 
 	"nuimanbot/internal/config"
 	"nuimanbot/internal/domain"
+	"nuimanbot/internal/infrastructure/ratelimit"
 )
 
 // Service implements the SkillExecutionService.
@@ -15,6 +16,7 @@ type Service struct {
 	cfg         *config.SkillsSystemConfig
 	registry    SkillRegistry
 	securitySvc domain.SecurityService // Use domain.SecurityService
+	rateLimiter *ratelimit.RateLimiter // Optional rate limiter
 	// timeout      time.Duration // Default timeout for skill execution
 }
 
@@ -80,7 +82,13 @@ func (s *Service) Execute(ctx context.Context, skillName string, params map[stri
 	return result, nil
 }
 
-// ExecuteWithUser runs a registered skill with given parameters after checking permissions.
+// SetRateLimiter sets the rate limiter for skill execution.
+// This is optional - if not set, no rate limiting is applied.
+func (s *Service) SetRateLimiter(limiter *ratelimit.RateLimiter) {
+	s.rateLimiter = limiter
+}
+
+// ExecuteWithUser runs a registered skill with given parameters after checking permissions and rate limits.
 // This method enforces RBAC based on the user's role and AllowedSkills whitelist.
 func (s *Service) ExecuteWithUser(ctx context.Context, user *domain.User, skillName string, params map[string]any) (*domain.SkillResult, error) {
 	// Check permissions first
@@ -90,7 +98,25 @@ func (s *Service) ExecuteWithUser(ctx context.Context, user *domain.User, skillN
 		return nil, err
 	}
 
-	// Permission check passed, execute the skill
+	// Check rate limit if limiter is configured
+	if s.rateLimiter != nil && !s.rateLimiter.Allow(user.ID, skillName) {
+		// Audit rate limit exceeded
+		if auditErr := s.securitySvc.Audit(ctx, &domain.AuditEvent{
+			Timestamp: time.Now(),
+			Action:    "skill_rate_limit_exceeded",
+			Resource:  skillName,
+			Outcome:   "denied",
+			Details: map[string]any{
+				"user_id":    user.ID,
+				"skill_name": skillName,
+			},
+		}); auditErr != nil {
+			slog.Error("Error auditing rate limit denial", "error", auditErr)
+		}
+		return nil, domain.ErrRateLimitExceeded
+	}
+
+	// Permission check and rate limit passed, execute the skill
 	return s.Execute(ctx, skillName, params)
 }
 

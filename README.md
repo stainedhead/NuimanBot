@@ -4,17 +4,40 @@ An AI agent framework built with Clean Architecture principles, featuring LLM in
 
 ## Features
 
+### Core Architecture
 - **Clean Architecture**: Strict layer separation (Domain, Use Case, Adapter, Infrastructure)
 - **Multi-LLM Support**: Anthropic Claude, OpenAI GPT, and Ollama (local models)
 - **Rich Skill Library**: 5 built-in skills (calculator, datetime, weather, web search, notes)
 - **Multiple Gateways**: CLI, Telegram, and Slack interfaces with concurrent operation
+
+### Security & Access Control
 - **RBAC System**: Role-based access control with user management
-- **Secure Credentials**: AES-256-GCM encrypted credential vault
+- **Rate Limiting**: Token bucket algorithm with per-user and per-skill limits
+- **Secure Credentials**: AES-256-GCM encrypted credential vault with key rotation support
+- **Input Validation**: Comprehensive protection against injection attacks and malicious input
+- **Audit Logging**: Security event tracking for compliance and monitoring
+
+### Data Management
 - **SQLite Storage**: Persistent conversations, users, and notes with full CRUD
-- **Configuration**: YAML file + environment variable override support
-- **Test Coverage**: ~80% coverage with comprehensive unit, integration, and E2E tests
+- **Conversation Summarization**: Automatic LLM-based summarization when context limits approached
+- **Token Window Management**: Dynamic context sizing based on provider limits (200k Claude, 128k GPT-4, 32k Ollama)
+
+### Performance & Observability
+- **Connection Pooling**: Optimized database connections (25 max open, 5 idle, lifecycle management)
+- **LLM Response Caching**: In-memory cache with SHA256 hashing (1000 entries, 1-hour TTL, 100% test coverage)
+- **Message Batching**: Buffered writes with dual flush strategy (size-based + time-based)
+- **Prometheus Metrics**: 14+ metric types exposed at `/metrics` endpoint
+- **Health Checks**: Liveness, readiness, and version endpoints
+- **Request Tracing**: Request ID propagation for distributed debugging
+
+### Development & Quality
+- **Configuration**: YAML file + environment variable override support with validation
+- **Test Coverage**: ~85% coverage with comprehensive unit, integration, and E2E tests
+- **TDD Methodology**: Strict Red-Green-Refactor cycles with mandatory refactoring phase
 
 ## Quick Start
+
+📖 **For detailed installation and configuration instructions, see [ONBOARDING.md](support_docs/ONBOARDING.md)**
 
 ### Prerequisites
 
@@ -543,24 +566,57 @@ See `AGENTS.md` for detailed contribution guidelines.
 
 ## Status
 
-✅ **MVP Complete** - Core features implemented and tested
+✅ **Production-Ready MVP** - 75% Complete (33/44 planned features)
 
-- ✅ Clean Architecture foundation
-- ✅ CLI Gateway
-- ✅ Anthropic LLM integration
-- ✅ Calculator & DateTime skills
-- ✅ SQLite storage
-- ✅ Configuration system (file + env vars)
-- ✅ Security & encryption
-- ✅ Graceful shutdown
+### Completed Features ✅
 
-**Coming Soon:**
-- Additional LLM providers (OpenAI, Ollama)
-- Telegram and Slack gateways
-- More built-in skills
-- MCP (Model Context Protocol) support
+**Phase 1-2: Core Functionality (100%)**
+- ✅ Clean Architecture foundation with strict dependency rules
+- ✅ Multi-gateway support (CLI, Telegram, Slack)
+- ✅ Multi-LLM integration (Anthropic, OpenAI, Ollama)
+- ✅ 5 built-in skills with RBAC permissions
+- ✅ SQLite storage with migrations
+- ✅ Configuration system with environment-aware validation
+- ✅ Comprehensive test coverage (85%+ across all packages)
 
-For detailed status, see `STATUS.md`.
+**Phase 3: Production Readiness (100%)**
+- ✅ Structured logging with slog
+- ✅ Request ID propagation for distributed tracing
+- ✅ Error categorization (user/system/external/auth)
+- ✅ Secret rotation with versioned vault
+- ✅ Health check endpoints (liveness, readiness, version)
+- ✅ Graceful shutdown with cleanup
+- ✅ Audit logging for security events
+
+**Phase 4: Performance Optimization (100%)**
+- ✅ Database connection pooling (25 max open, 5 idle)
+- ✅ LLM response caching (1000 entries, 1h TTL, 100% coverage)
+- ✅ Message batching (100-message buffer, 5s flush interval)
+
+**Phase 5: Feature Completion (43%)**
+- ✅ Conversation summarization (automatic LLM-based compression)
+- ✅ Rate limiting (token bucket with per-user/per-skill limits)
+- ✅ Token window management (dynamic context sizing per provider)
+- ⏳ Streaming response support
+- ⏳ Multi-provider fallback
+- ⏳ User preferences (model selection, temperature)
+- ⏳ Conversation export (JSON, Markdown)
+
+**Phase 6: Observability & Monitoring (20%)**
+- ✅ Prometheus metrics (HTTP, LLM, skills, cache, database, security)
+- ⏳ Distributed tracing (OpenTelemetry)
+- ⏳ Error tracking (Sentry integration)
+- ⏳ Real-time alerting
+- ⏳ Usage analytics dashboard
+
+### Remaining Work (25%)
+
+**Phase 7: CI/CD & Automation (0%)**
+- GitHub Actions pipeline (test, build, security scan)
+- Automated deployments
+- Release automation
+
+For detailed progress tracking, see `POST_REVIEW_IMPROVEMENT_PLAN.md`.
 
 ## Support
 

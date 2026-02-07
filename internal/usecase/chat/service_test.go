@@ -608,3 +608,263 @@ func TestProcessMessage_LLMCompletionError(t *testing.T) {
 		t.Errorf("Unexpected error message: %v", err)
 	}
 }
+
+// Mock LLM cache for testing
+
+type mockLLMCache struct {
+	entries map[string]*domain.LLMResponse
+	getFunc func(ctx context.Context, prompt string) (*domain.LLMResponse, bool)
+	setFunc func(ctx context.Context, prompt string, response *domain.LLMResponse)
+}
+
+func (m *mockLLMCache) Get(ctx context.Context, prompt string) (*domain.LLMResponse, bool) {
+	if m.getFunc != nil {
+		return m.getFunc(ctx, prompt)
+	}
+	if m.entries == nil {
+		m.entries = make(map[string]*domain.LLMResponse)
+	}
+	resp, found := m.entries[prompt]
+	return resp, found
+}
+
+func (m *mockLLMCache) Set(ctx context.Context, prompt string, response *domain.LLMResponse) {
+	if m.setFunc != nil {
+		m.setFunc(ctx, prompt, response)
+		return
+	}
+	if m.entries == nil {
+		m.entries = make(map[string]*domain.LLMResponse)
+	}
+	m.entries[prompt] = response
+}
+
+// TestProcessMessage_CacheHit tests that cached responses are used
+func TestProcessMessage_CacheHit(t *testing.T) {
+	llmCallCount := 0
+
+	llmService := &mockLLMService{
+		completeFunc: func(ctx context.Context, provider domain.LLMProvider, req *domain.LLMRequest) (*domain.LLMResponse, error) {
+			llmCallCount++
+			return &domain.LLMResponse{
+				Content:      "Hello! How can I help you?",
+				ToolCalls:    []domain.ToolCall{},
+				FinishReason: "end_turn",
+				Usage: domain.TokenUsage{
+					PromptTokens:     10,
+					CompletionTokens: 20,
+					TotalTokens:      30,
+				},
+			}, nil
+		},
+	}
+
+	memoryRepo := &mockMemoryRepository{
+		getRecentMessagesFunc: func(ctx context.Context, convID string, maxTokens int) ([]domain.StoredMessage, error) {
+			return []domain.StoredMessage{}, nil
+		},
+	}
+
+	skillExecService := &mockSkillExecutionService{
+		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Skill, error) {
+			return []domain.Skill{}, nil
+		},
+	}
+
+	securityService := &mockSecurityService{}
+
+	service := createTestService(llmService, memoryRepo, skillExecService, securityService)
+
+	// Set up cache
+	cache := &mockLLMCache{entries: make(map[string]*domain.LLMResponse)}
+	service.SetCache(cache)
+
+	incomingMsg := &domain.IncomingMessage{
+		ID:          "test-msg-cache-1",
+		Platform:    domain.PlatformCLI,
+		PlatformUID: "platform-user-1",
+		Text:        "Hello",
+		Timestamp:   time.Now(),
+	}
+
+	// First call - should call LLM and cache result
+	_, err := service.ProcessMessage(context.Background(), incomingMsg)
+	if err != nil {
+		t.Fatalf("First ProcessMessage failed: %v", err)
+	}
+
+	if llmCallCount != 1 {
+		t.Errorf("Expected 1 LLM call after first message, got %d", llmCallCount)
+	}
+
+	// Second call with same message - should use cache
+	_, err = service.ProcessMessage(context.Background(), incomingMsg)
+	if err != nil {
+		t.Fatalf("Second ProcessMessage failed: %v", err)
+	}
+
+	// LLM should still only be called once (second call from cache)
+	if llmCallCount != 1 {
+		t.Errorf("Expected 1 LLM call after cache hit, got %d", llmCallCount)
+	}
+}
+
+// TestProcessMessage_CacheMiss tests that different requests don't hit cache
+func TestProcessMessage_CacheMiss(t *testing.T) {
+	llmCallCount := 0
+
+	llmService := &mockLLMService{
+		completeFunc: func(ctx context.Context, provider domain.LLMProvider, req *domain.LLMRequest) (*domain.LLMResponse, error) {
+			llmCallCount++
+			return &domain.LLMResponse{
+				Content:      "Response " + string(rune('0'+llmCallCount)),
+				ToolCalls:    []domain.ToolCall{},
+				FinishReason: "end_turn",
+				Usage: domain.TokenUsage{
+					PromptTokens:     10,
+					CompletionTokens: 20,
+					TotalTokens:      30,
+				},
+			}, nil
+		},
+	}
+
+	memoryRepo := &mockMemoryRepository{
+		getRecentMessagesFunc: func(ctx context.Context, convID string, maxTokens int) ([]domain.StoredMessage, error) {
+			return []domain.StoredMessage{}, nil
+		},
+	}
+
+	skillExecService := &mockSkillExecutionService{
+		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Skill, error) {
+			return []domain.Skill{}, nil
+		},
+	}
+
+	securityService := &mockSecurityService{}
+
+	service := createTestService(llmService, memoryRepo, skillExecService, securityService)
+
+	// Set up cache
+	cache := &mockLLMCache{entries: make(map[string]*domain.LLMResponse)}
+	service.SetCache(cache)
+
+	// First message
+	msg1 := &domain.IncomingMessage{
+		ID:          "test-msg-cache-2a",
+		Platform:    domain.PlatformCLI,
+		PlatformUID: "platform-user-1",
+		Text:        "Hello",
+		Timestamp:   time.Now(),
+	}
+
+	_, err := service.ProcessMessage(context.Background(), msg1)
+	if err != nil {
+		t.Fatalf("First ProcessMessage failed: %v", err)
+	}
+
+	// Second message with different text - should miss cache
+	msg2 := &domain.IncomingMessage{
+		ID:          "test-msg-cache-2b",
+		Platform:    domain.PlatformCLI,
+		PlatformUID: "platform-user-1",
+		Text:        "Goodbye",
+		Timestamp:   time.Now(),
+	}
+
+	_, err = service.ProcessMessage(context.Background(), msg2)
+	if err != nil {
+		t.Fatalf("Second ProcessMessage failed: %v", err)
+	}
+
+	// LLM should be called twice (different prompts)
+	if llmCallCount != 2 {
+		t.Errorf("Expected 2 LLM calls for different messages, got %d", llmCallCount)
+	}
+}
+
+// TestProcessMessage_NoCacheForToolCalls tests that responses with tool calls are not cached
+func TestProcessMessage_NoCacheForToolCalls(t *testing.T) {
+	llmCallCount := 0
+
+	llmService := &mockLLMService{
+		completeFunc: func(ctx context.Context, provider domain.LLMProvider, req *domain.LLMRequest) (*domain.LLMResponse, error) {
+			llmCallCount++
+			if llmCallCount == 1 || llmCallCount == 3 {
+				// First and third calls - tool use (not cached)
+				return &domain.LLMResponse{
+					Content: "Using tool...",
+					ToolCalls: []domain.ToolCall{
+						{ToolName: "calculator", Arguments: map[string]any{}},
+					},
+					FinishReason: "tool_use",
+					Usage:        domain.TokenUsage{PromptTokens: 10, CompletionTokens: 10, TotalTokens: 20},
+				}, nil
+			}
+			// Second and fourth calls - final response
+			return &domain.LLMResponse{
+				Content:      "Result",
+				ToolCalls:    []domain.ToolCall{},
+				FinishReason: "end_turn",
+				Usage:        domain.TokenUsage{PromptTokens: 20, CompletionTokens: 5, TotalTokens: 25},
+			}, nil
+		},
+	}
+
+	memoryRepo := &mockMemoryRepository{
+		getRecentMessagesFunc: func(ctx context.Context, convID string, maxTokens int) ([]domain.StoredMessage, error) {
+			return []domain.StoredMessage{}, nil
+		},
+	}
+
+	skillExecService := &mockSkillExecutionService{
+		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Skill, error) {
+			return []domain.Skill{
+				&mockSkill{name: "calculator", description: "Calculator", inputSchema: map[string]any{}},
+			}, nil
+		},
+		executeFunc: func(ctx context.Context, skillName string, params map[string]any) (*domain.SkillResult, error) {
+			return &domain.SkillResult{Output: "result"}, nil
+		},
+	}
+
+	securityService := &mockSecurityService{}
+
+	service := createTestService(llmService, memoryRepo, skillExecService, securityService)
+
+	// Set up cache
+	cache := &mockLLMCache{entries: make(map[string]*domain.LLMResponse)}
+	service.SetCache(cache)
+
+	incomingMsg := &domain.IncomingMessage{
+		ID:          "test-msg-cache-3",
+		Platform:    domain.PlatformCLI,
+		PlatformUID: "platform-user-1",
+		Text:        "Calculate 5 + 3",
+		Timestamp:   time.Now(),
+	}
+
+	// First call - LLM uses tool, then responds
+	_, err := service.ProcessMessage(context.Background(), incomingMsg)
+	if err != nil {
+		t.Fatalf("First ProcessMessage failed: %v", err)
+	}
+
+	// Should have made 2 LLM calls (tool use + final response)
+	if llmCallCount != 2 {
+		t.Errorf("Expected 2 LLM calls after first message, got %d", llmCallCount)
+	}
+
+	// Second call with same message
+	// Since the first iteration used a tool, it shouldn't cache the tool-use response
+	// So the second call should call the LLM again
+	_, err = service.ProcessMessage(context.Background(), incomingMsg)
+	if err != nil {
+		t.Fatalf("Second ProcessMessage failed: %v", err)
+	}
+
+	// Should have made 4 LLM calls total (no caching for first iteration with tools)
+	if llmCallCount != 4 {
+		t.Errorf("Expected 4 LLM calls (no cache for tool use), got %d", llmCallCount)
+	}
+}

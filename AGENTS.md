@@ -253,6 +253,21 @@ Maintain these documentation files with every change cycle:
 | `PRODUCT_REQUIREMENT_DOC.md` | High-level product description, goals, feature specifications, and user workflows |
 | `documentation/technical-details.md` | Architecture decisions, API docs, data flows (if applicable, otherwise can be removed) |
 
+### Product Documentation (documents/)
+
+Maintain these files in the `documents/` directory. These are collectively called **product docs** (or **product documentation**) and must be kept current for architecturally significant changes and any updates that materially improve human/agent understanding.
+
+| File | Purpose |
+|------|---------|
+| `documents/product-summary.md` | Executive overview of the product and its objectives |
+| `documents/product-details.md` | Detailed product requirements, workflows, and constraints |
+| `documents/technical-details.md` | Architecture, system design, and technical decisions |
+
+**Rules:**
+- Treat product docs as a key delivery artifact for changes.
+- Keep content professional, concise, and up to date.
+- Agents must use these docs to inform their understanding.
+
 ### Documentation Standards
 
 - **Concise**: No filler words. Every sentence adds value.

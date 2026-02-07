@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"strings"
 
 	"nuimanbot/internal/domain"
 )
@@ -71,4 +72,19 @@ func formatToolResults(results []domain.ToolResult) string {
 	}
 
 	return formatted
+}
+
+// buildCacheKey creates a stable cache key from conversation messages.
+// The key is a concatenation of all message roles and content.
+func buildCacheKey(messages []domain.Message) string {
+	var builder strings.Builder
+	for i, msg := range messages {
+		if i > 0 {
+			builder.WriteString("\n---\n")
+		}
+		builder.WriteString(msg.Role)
+		builder.WriteString(": ")
+		builder.WriteString(msg.Content)
+	}
+	return builder.String()
 }
