@@ -77,11 +77,9 @@ func main() {
 	slog.Info("Configuration validated successfully")
 
 	// 2. Initialize Structured Logging
-	logFormat := "text"
+	logFormat := "json" // Production default
 	if cfg.Server.Debug {
 		logFormat = "text" // Human-readable for development
-	} else {
-		logFormat = "json" // JSON for production
 	}
 	logger.Initialize(logger.Config{
 		Level:  logger.LogLevel(cfg.Server.LogLevel),
@@ -512,7 +510,7 @@ func (app *application) Run(ctx context.Context) error {
 			slog.Warn("Failed to create Slack gateway", "error", err)
 		} else {
 			app.connectGateway(slackGateway)
-			gateways = append(gateways, slackGateway)
+			gateways = append(gateways, slackGateway) //nolint:staticcheck // Reserved for future shutdown handling
 
 			// Start Slack gateway in background
 			go func() {
