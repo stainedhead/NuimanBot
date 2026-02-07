@@ -9,7 +9,7 @@
 
 ## Executive Overview
 
-NuimanBot is a **security-hardened personal AI agent** built in Go, designed as a secure alternative to existing AI agent frameworks. The project addresses critical security vulnerabilities found in similar platforms (26% of community skills contain security issues including credential leakage, prompt injection enabling RCE, and supply chain attacks) while providing enterprise-grade functionality.
+NuimanBot is a **security-hardened personal AI agent** built in Go, designed as a secure alternative to existing AI agent frameworks. The project addresses critical security vulnerabilities found in similar platforms (26% of community tools contain security issues including credential leakage, prompt injection enabling RCE, and supply chain attacks) while providing enterprise-grade functionality.
 
 ### Current Status
 
@@ -31,13 +31,13 @@ NuimanBot is a **security-hardened personal AI agent** built in Go, designed as 
 
 **Problem:** Research shows existing AI agent frameworks have critical vulnerabilities:
 - Plaintext API key storage
-- External skill imports with unvetted code
+- External tool imports with unvetted code
 - Prompt injection vectors leading to RCE
 - Supply chain compromise risks
 
 **NuimanBot Solution:**
 - ✅ **Zero credential leakage**: AES-256-GCM encryption at rest
-- ✅ **100% skill security**: Custom skills only, no external imports
+- ✅ **100% tool security**: Custom tools only, no external imports
 - ✅ **Input sanitization**: 80+ attack pattern detection rules
 - ✅ **Comprehensive audit logging**: All security events tracked
 - ✅ **RBAC enforcement**: Role-based access control throughout
@@ -94,8 +94,8 @@ Infrastructure → Adapter → Use Case → Domain
  Services                  Logic
 ```
 
-- **Domain Layer**: Pure entities (User, Message, Skill) with zero external dependencies
-- **Use Case Layer**: Business logic orchestration (Chat, Skill Execution, Security)
+- **Domain Layer**: Pure entities (User, Message, Tool) with zero external dependencies
+- **Use Case Layer**: Business logic orchestration (Chat, Tool Execution, Security)
 - **Adapter Layer**: Gateway implementations (CLI, Telegram, Slack) and repositories (SQLite)
 - **Infrastructure Layer**: External service clients (LLM providers, encryption, APIs)
 
@@ -114,19 +114,19 @@ Infrastructure → Adapter → Use Case → Domain
 
 - Multi-platform access (desktop CLI, mobile Telegram, team Slack)
 - Context-aware conversations with long-term memory
-- Built-in skills: calculator, datetime, weather, web search, notes
+- Built-in tools: calculator, datetime, weather, web search, notes
 - Secure credential storage for API integrations
 
 ### Team Automation
 
 - Role-based access control (Admin, User roles)
-- Skill allowlists per user
+- Tool allowlists per user
 - Audit logging for compliance
-- Rate limiting (per-user, per-skill)
+- Rate limiting (per-user, per-tool)
 
 ### Developer Productivity
 
-**Skills:**
+**Tools:**
 - GitHub operations (issues, PRs, workflows via `gh` CLI)
 - Codebase search (ripgrep integration with regex support)
 - Document summarization (LLM-powered, files and URLs)
@@ -137,15 +137,15 @@ Infrastructure → Adapter → Use Case → Domain
 - CLI-first design for automation scripts
 - OpenAI-compatible API endpoint
 - RESTful management API
-- Extensible skill system with comprehensive testing (85%+ coverage)
+- Extensible tool system with comprehensive testing (85%+ coverage)
 
 ---
 
-## Built-in Skills
+## Built-in Tools
 
-### Core Skills (5)
+### Core Tools (5)
 
-| Skill | Description | Permissions | Status |
+| Tool | Description | Permissions | Status |
 |-------|-------------|-------------|--------|
 | **calculator** | Basic arithmetic operations | None | ✅ |
 | **datetime** | Current time, formatting, timezones | None | ✅ |
@@ -153,9 +153,9 @@ Infrastructure → Adapter → Use Case → Domain
 | **websearch** | DuckDuckGo web search | Network | ✅ |
 | **notes** | CRUD operations for personal notes | Write | ✅ |
 
-### Developer Productivity Skills (5)
+### Developer Productivity Tools (5)
 
-| Skill | Description | Permissions | Coverage | Status |
+| Tool | Description | Permissions | Coverage | Status |
 |-------|-------------|-------------|----------|--------|
 | **github** | GitHub operations via `gh` CLI (issues, PRs, workflows) | Network, Shell | 95.0% | ✅ |
 | **repo_search** | Fast codebase search using ripgrep | Read | 82.5% | ✅ |
@@ -163,10 +163,10 @@ Infrastructure → Adapter → Use Case → Domain
 | **summarize** | Web page and YouTube video summarization | Network | 76.3% | ✅ |
 | **coding_agent** | Orchestrate external coding CLIs (admin-only) | Shell | 85.4% | ✅ |
 
-**Security Controls (All Skills):**
+**Security Controls (All Tools):**
 - Custom-built (no external imports)
 - RBAC enforcement (permission-gated)
-- Per-skill rate limiting
+- Per-tool rate limiting
 - Timeout enforcement (configurable)
 - Output sanitization (secret redaction)
 - Path traversal prevention
@@ -221,7 +221,7 @@ Infrastructure → Adapter → Use Case → Domain
 | **Credential leakage** | AES-256-GCM encryption at rest; no plaintext secrets |
 | **Prompt injection** | 30+ pattern detection; input sanitization |
 | **Command injection** | 50+ pattern detection; output sandboxing |
-| **Malicious skills** | Custom skills only; no external imports |
+| **Malicious tools** | Custom tools only; no external imports |
 | **Session hijacking** | Token rotation; secure credential vault |
 | **Privilege escalation** | Strict RBAC enforcement |
 | **Supply chain attacks** | Minimal dependencies; audit logging |

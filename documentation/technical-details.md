@@ -50,7 +50,7 @@ NuimanBot follows **Clean Architecture** with strict dependency inversion:
 ┌────────────▼────────────────────────────────────┐
 │  Use Case Layer                                 │
 │  • Chat Service (orchestration)                 │
-│  • Skill Execution Service (RBAC)               │
+│  • Tool Execution Service (RBAC)               │
 │  • Security Service (validation, audit)         │
 │  • User Management                              │
 │  • Memory Service (summarization)               │
@@ -100,7 +100,7 @@ type Service struct {
 **Message Processing Flow:**
 1. Input validation (security service)
 2. Load conversation history (memory repository)
-3. List available skills (skill service)
+3. List available tools (tool service)
 4. Prepare LLM request with tools
 5. **Tool calling loop** (max 5 iterations):
    - Call LLM
@@ -137,13 +137,13 @@ func (s *Service) SummarizeConversation(
 - Preserves key facts, dates, numbers, decisions
 - System prompt emphasizes factual summarization
 
-#### 2. Skill Execution Service (`internal/usecase/skill/service.go`)
+#### 2. Tool Execution Service (`internal/usecase/tool/service.go`)
 
 **Responsibilities:**
-- Skill registration and discovery
+- Tool registration and discovery
 - RBAC enforcement (role-based access control)
 - Rate limiting integration
-- Skill execution with timeout
+- Tool execution with timeout
 - Audit logging
 
 **RBAC Model:**
@@ -151,9 +151,9 @@ func (s *Service) SummarizeConversation(
 type Role string
 
 const (
-    RoleGuest Role = "guest"  // No skills
-    RoleUser  Role = "user"   // Basic skills
-    RoleAdmin Role = "admin"  // All skills
+    RoleGuest Role = "guest"  // No tools
+    RoleUser  Role = "user"   // Basic tools
+    RoleAdmin Role = "admin"  // All tools
 )
 
 // Permissions hierarchy
@@ -177,7 +177,7 @@ func (s *Service) ExecuteWithUser(
 ```
 
 - Token bucket algorithm
-- Per-user, per-skill limits
+- Per-user, per-tool limits
 - Configurable requests/window
 - Audit on rate limit exceeded
 
@@ -342,7 +342,7 @@ type AuditEvent struct {
 ```
 
 **Logged Events:**
-- Skill executions (success, failure, permission denied)
+- Tool executions (success, failure, permission denied)
 - Rate limit violations
 - Input validation failures
 - Security-relevant operations
@@ -385,10 +385,10 @@ llm_tokens_used_total{provider, model, type}
 llm_cost_usd_total{provider, model}
 ```
 
-**3. Skill Metrics:**
+**3. Tool Metrics:**
 ```prometheus
-skill_executions_total{skill, status}
-skill_execution_duration_seconds{skill}
+skill_executions_total{tool, status}
+skill_execution_duration_seconds{tool}
 ```
 
 **4. Cache Metrics:**
@@ -467,14 +467,14 @@ logger.Info("Processing message", "platform", platform)
    │
    ├─> [Chat Service] ProcessMessage()
    │   ├─ Load conversation history
-   │   ├─ List available skills (RBAC filtered)
+   │   ├─ List available tools (RBAC filtered)
    │   ├─ Build context window (provider-aware)
    │   ├─ Check cache (if configured)
    │   ├─ Call LLM (with tools)
    │   │   └─ [Tool Calling Loop]
-   │   │       ├─ Execute skills via SkillExecutionService
-   │   │       ├─ Check rate limits (per-user, per-skill)
-   │   │       ├─ Audit skill execution
+   │   │       ├─ Execute tools via SkillExecutionService
+   │   │       ├─ Check rate limits (per-user, per-tool)
+   │   │       ├─ Audit tool execution
    │   │       └─ Format tool results
    │   ├─ Cache final response
    │   └─ Save messages (batched)
@@ -565,10 +565,10 @@ type LLMService interface {
 - `openai` - GPT-4, GPT-3.5
 - `ollama` - Local models (Llama, Mistral, etc.)
 
-### Skill Interface
+### Tool Interface
 
 ```go
-type Skill interface {
+type Tool interface {
     Name() string
     Description() string
     InputSchema() map[string]any
@@ -581,16 +581,16 @@ type Skill interface {
 }
 ```
 
-**Built-in Skills:**
+**Built-in Tools:**
 
-**Core Skills:**
+**Core Tools:**
 1. **Calculator**: `add`, `subtract`, `multiply`, `divide`
 2. **DateTime**: `now`, `format`, `unix`
 3. **Weather**: `current`, `forecast`
 4. **WebSearch**: `search`
 5. **Notes**: `create`, `read`, `update`, `delete`, `list`
 
-**Developer Productivity Skills:**
+**Developer Productivity Tools:**
 6. **GitHub**: GitHub operations via `gh` CLI (`issue_create`, `issue_list`, `pr_create`, `pr_list`, `pr_review`, `pr_merge`, `repo_view`, `release_create`, `gist_create`, `workflow_run`, `workflow_list`, `repo_clone`)
 7. **RepoSearch**: Fast codebase search using `ripgrep` with regex support, context lines, and file filtering
 8. **DocSummarize**: LLM-powered document summarization with configurable detail levels
@@ -661,7 +661,7 @@ internal/
 │   │   ├── service_test.go     # Unit + Integration
 │   │   ├── summarization_test.go
 │   │   └── context_window_test.go
-│   └── skill/
+│   └── tool/
 │       └── service_test.go
 ├── infrastructure/
 │   ├── cache/
@@ -862,7 +862,7 @@ GitHub Environments:
 - Anthropic API (https://api.anthropic.com)
 - OpenAI API (https://api.openai.com)
 - Ollama (http://localhost:11434) - Optional, local
-- OpenWeatherMap API - Optional, for weather skill
+- OpenWeatherMap API - Optional, for weather tool
 - Telegram API - Optional, for Telegram gateway
 - Slack API - Optional, for Slack gateway
 
@@ -917,7 +917,7 @@ readinessProbe:
 - With cache hit: ~1-5ms
 - Without cache: ~500-2000ms (depends on provider)
 
-**Skill Execution:**
+**Tool Execution:**
 - Calculator: <1ms
 - DateTime: <1ms
 - Weather: ~200-500ms (API call)

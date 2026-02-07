@@ -39,8 +39,8 @@
 - **Description:** Two-tier permission system with Admin and User roles
 - **Acceptance Criteria:**
   - Admin role can manage users, configure LLM providers, access audit logs
-  - User role has restricted access to allowed skills only
-  - Per-user skill allowlists configurable by admins
+  - User role has restricted access to allowed tools only
+  - Per-user tool allowlists configurable by admins
   - Permission checks enforced at all layers
 
 #### FR-003: Multi-Platform Gateway Support
@@ -66,20 +66,20 @@
   - Streaming support for real-time responses
   - Provider-aware token limit management (200k Claude, 128k GPT-4)
 
-#### FR-005: Custom Skills System
+#### FR-005: Custom Tools System
 - **Priority:** P0 (Critical)
-- **Status:** ✅ Complete (10/10 skills - 5 core + 5 developer productivity)
-- **Description:** Built-in skills only, no external skill imports
+- **Status:** ✅ Complete (10/10 tools - 5 core + 5 developer productivity)
+- **Description:** Built-in tools only, no external tool imports
 - **Acceptance Criteria:**
-  - ✅ Five core skills: calculator, datetime, weather, websearch, notes
-  - ✅ Five developer productivity skills: github, repo_search, doc_summarize, summarize, coding_agent
+  - ✅ Five core tools: calculator, datetime, weather, websearch, notes
+  - ✅ Five developer productivity tools: github, repo_search, doc_summarize, summarize, coding_agent
   - ✅ Permission-gated execution (RBAC enforcement)
-  - ✅ Rate limiting per user and per skill (token bucket algorithm)
+  - ✅ Rate limiting per user and per tool (token bucket algorithm)
   - ✅ Timeout enforcement (configurable, 30s default)
   - ✅ Output sanitization (secret redaction, prompt injection prevention)
   - ✅ Path traversal prevention (workspace restrictions)
   - ✅ Comprehensive test coverage (85%+ average)
-  - ✅ No external skill marketplace (security requirement)
+  - ✅ No external tool marketplace (security requirement)
 
 #### FR-006: Conversation Management
 - **Priority:** P0 (Critical)
@@ -196,11 +196,11 @@
 
 **Steps:**
 1. Admin creates user account via CLI: `nuimanbot user create <username> --role user`
-2. Admin sets user's allowed skills: `nuimanbot user update <username> --skills calculator,datetime,weather`
+2. Admin sets user's allowed tools: `nuimanbot user update <username> --tools calculator,datetime,weather`
 3. Admin maps user's platform IDs: `nuimanbot user add-platform <username> telegram <telegram-id>`
 4. User sends first message via Telegram/Slack
 5. NuimanBot validates user identity and permissions
-6. NuimanBot responds with greeting and available skills
+6. NuimanBot responds with greeting and available tools
 7. Conversation context is created and persisted
 
 **Postconditions:**
@@ -217,7 +217,7 @@
 
 **Steps:**
 1. User sends message "What's the weather in London?" via Telegram
-2. NuimanBot invokes weather skill with appropriate permissions
+2. NuimanBot invokes weather tool with appropriate permissions
 3. NuimanBot responds with current weather via Telegram
 4. User switches to Slack and sends "What was my last question?"
 5. NuimanBot retrieves conversation history (platform-agnostic)
@@ -228,28 +228,28 @@
 - Conversation history is available across all platforms
 - User can seamlessly switch between Telegram, Slack, and CLI
 
-### Workflow 3: Skill Execution with Permission Gating
+### Workflow 3: Tool Execution with Permission Gating
 
 **Actors:** User, Admin
 
 **Preconditions:**
-- User has `calculator` and `datetime` skills allowed
-- User does NOT have `websearch` skill allowed
+- User has `calculator` and `datetime` tools allowed
+- User does NOT have `websearch` tool allowed
 
 **Steps:**
 1. User sends "Calculate 2 + 2"
-2. NuimanBot validates user has `calculator` skill permission
-3. NuimanBot executes calculator skill
+2. NuimanBot validates user has `calculator` tool permission
+3. NuimanBot executes calculator tool
 4. NuimanBot responds with result: "4"
 5. User sends "Search the web for Go tutorials"
-6. NuimanBot validates user lacks `websearch` skill permission
-7. NuimanBot responds with error: "You don't have permission to use the websearch skill"
+6. NuimanBot validates user lacks `websearch` tool permission
+7. NuimanBot responds with error: "You don't have permission to use the websearch tool"
 8. NuimanBot logs permission denial in audit log
 
 **Postconditions:**
-- Permitted skills execute successfully
-- Unpermitted skills are blocked with clear error message
-- All skill execution attempts are audited
+- Permitted tools execute successfully
+- Unpermitted tools are blocked with clear error message
+- All tool execution attempts are audited
 
 ### Workflow 4: LLM Provider Failover
 
@@ -345,10 +345,10 @@
 - **Rationale:** Production readiness, regression prevention
 - **Impact:** All new code must include tests before merge
 
-#### TC-005: No External Skill Imports
-- **Constraint:** Custom skills only, no external skill marketplace
+#### TC-005: No External Tool Imports
+- **Constraint:** Custom tools only, no external tool marketplace
 - **Rationale:** Security posture, zero supply chain attack surface
-- **Impact:** All skills must be developed in-house
+- **Impact:** All tools must be developed in-house
 
 ### Security Constraints
 
@@ -365,7 +365,7 @@
 #### SC-003: Audit Logging
 - **Constraint:** All security-relevant events must be logged
 - **Rationale:** Compliance, incident response, forensics
-- **Impact:** Permission checks, skill execution, auth events logged
+- **Impact:** Permission checks, tool execution, auth events logged
 
 #### SC-004: RBAC Enforcement
 - **Constraint:** Role-based access control at all layers
@@ -606,8 +606,8 @@ jobs:
 |--------|--------|------------|--------|
 | Credential leakage | API keys exposed in logs/config | AES-256-GCM encryption, secure vault | ✅ Complete |
 | Prompt injection | RCE via crafted input | 30+ pattern detection, input sanitization | ✅ Complete |
-| Command injection | Shell execution via skills | 50+ pattern detection, output sandboxing | ✅ Complete |
-| Malicious skills | Data exfiltration, backdoors | Custom skills only, no external imports | ✅ Complete |
+| Command injection | Shell execution via tools | 50+ pattern detection, output sandboxing | ✅ Complete |
+| Malicious tools | Data exfiltration, backdoors | Custom tools only, no external imports | ✅ Complete |
 | Session hijacking | Token leakage, impersonation | Token rotation, secure credential vault | ✅ Complete |
 | Privilege escalation | Unauthorized admin access | Strict RBAC enforcement at all layers | ✅ Complete |
 | Supply chain attacks | Compromised dependencies | Minimal deps, security scanning, audit logging | ✅ Complete |
@@ -618,7 +618,7 @@ jobs:
 - User authentication via platform-specific IDs (Telegram ID, Slack User ID)
 - Session tokens with automatic rotation (24h default)
 - Role-based access control with two roles: Admin, User
-- Per-user skill allowlists enforced at execution time
+- Per-user tool allowlists enforced at execution time
 - Audit logging for all authentication/authorization events
 
 **Implementation:**
@@ -672,7 +672,7 @@ jobs:
 | LLM completion (cache hit) | <50ms | <100ms | ~10ms ✅ |
 | LLM completion (cache miss) | <2s* | <5s* | ~500ms ✅ |
 | Database query (single) | <10ms | <50ms | ~5ms ✅ |
-| Skill execution (calculator) | <100ms | <500ms | ~50ms ✅ |
+| Tool execution (calculator) | <100ms | <500ms | ~50ms ✅ |
 | Health check | <1s | <5s | ~200ms ✅ |
 
 *Excluding LLM API latency (provider-dependent)
@@ -737,15 +737,15 @@ jobs:
 - Rate limits: Tier-based (1 msg/sec basic, 100+ msg/sec enterprise)
 - Socket Mode requirements: App token, bot token
 
-### IR-003: External APIs (Skills)
+### IR-003: External APIs (Tools)
 
-**Weather Skill:**
+**Weather Tool:**
 - API: OpenWeatherMap or WeatherAPI.com
 - Endpoint: `/current.json?q={location}`
 - Rate limits: 60 req/min free tier
 - Response format: JSON with current conditions
 
-**Web Search Skill:**
+**Web Search Tool:**
 - API: DuckDuckGo Instant Answer API (no auth required)
 - Endpoint: `/?q={query}&format=json`
 - Rate limits: None documented (rate limit by IP)
@@ -755,14 +755,14 @@ jobs:
 
 ## Future Roadmap
 
-### Post-MVP Phase 5: Developer Productivity Skills
+### Post-MVP Phase 5: Developer Productivity Tools
 
 **Planned Features:**
-- `github` skill: GitHub operations via `gh` CLI (issues, PRs, repos)
-- `repo_search` skill: Ripgrep-based codebase search
-- `doc_summarize` skill: Summaries for internal docs and links
-- `summarize` skill: External URL/file/YouTube summarization
-- `coding_agent` skill: Orchestrate Codex/Claude Code/OpenCode CLI runs
+- `github` tool: GitHub operations via `gh` CLI (issues, PRs, repos)
+- `repo_search` tool: Ripgrep-based codebase search
+- `doc_summarize` tool: Summaries for internal docs and links
+- `summarize` tool: External URL/file/YouTube summarization
+- `coding_agent` tool: Orchestrate Codex/Claude Code/OpenCode CLI runs
 
 **Priority:** P2 (Medium)
 **Status:** ⏸️ On Hold
@@ -770,8 +770,8 @@ jobs:
 ### Post-MVP Phase 6: Scheduling + Voice
 
 **Planned Features:**
-- `cron` skill: Scheduled reminders and recurring tasks
-- `sag` skill: ElevenLabs TTS responses for voice output
+- `cron` tool: Scheduled reminders and recurring tasks
+- `sag` tool: ElevenLabs TTS responses for voice output
 
 **Priority:** P2 (Medium)
 **Status:** ⏸️ On Hold
@@ -789,9 +789,9 @@ jobs:
 ### Post-MVP Phase 8: RAG + Automation
 
 **Planned Features:**
-- `doc_index/search/retrieve` skills: Index and query docs (local, Git, S3)
+- `doc_index/search/retrieve` tools: Index and query docs (local, Git, S3)
 - Browser automation: Selenium + Playwright for QA/research tasks
-- `goog` skill: Google Workspace workflows (Gmail, Calendar, Drive)
+- `goog` tool: Google Workspace workflows (Gmail, Calendar, Drive)
 
 **Priority:** P3 (Low)
 **Status:** ⏸️ On Hold
