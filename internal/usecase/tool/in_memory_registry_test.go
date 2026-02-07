@@ -1,4 +1,4 @@
-package skill
+package tool
 
 import (
 	"context"
@@ -7,22 +7,22 @@ import (
 	"nuimanbot/internal/domain"
 )
 
-// mockSkill implements domain.Skill for testing
-type mockSkill struct {
+// mockTool implements domain.Tool for testing
+type mockTool struct {
 	name        string
 	description string
 	permissions []domain.Permission
 }
 
-func (m *mockSkill) Name() string {
+func (m *mockTool) Name() string {
 	return m.name
 }
 
-func (m *mockSkill) Description() string {
+func (m *mockTool) Description() string {
 	return m.description
 }
 
-func (m *mockSkill) InputSchema() map[string]any {
+func (m *mockTool) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -31,18 +31,18 @@ func (m *mockSkill) InputSchema() map[string]any {
 	}
 }
 
-func (m *mockSkill) RequiredPermissions() []domain.Permission {
+func (m *mockTool) RequiredPermissions() []domain.Permission {
 	return m.permissions
 }
 
-func (m *mockSkill) Config() domain.SkillConfig {
-	return domain.SkillConfig{
+func (m *mockTool) Config() domain.ToolConfig {
+	return domain.ToolConfig{
 		Enabled: true,
 	}
 }
 
-func (m *mockSkill) Execute(ctx context.Context, params map[string]any) (*domain.SkillResult, error) {
-	return &domain.SkillResult{
+func (m *mockTool) Execute(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) {
+	return &domain.ExecutionResult{
 		Output: "mock output",
 	}, nil
 }
@@ -59,7 +59,7 @@ func TestNewInMemoryRegistry(t *testing.T) {
 func TestRegister(t *testing.T) {
 	registry := NewInMemoryRegistry()
 
-	skill := &mockSkill{
+	skill := &mockTool{
 		name:        "test_skill",
 		description: "Test skill",
 		permissions: []domain.Permission{},
@@ -84,8 +84,8 @@ func TestRegister(t *testing.T) {
 func TestRegister_DuplicateName(t *testing.T) {
 	registry := NewInMemoryRegistry()
 
-	skill1 := &mockSkill{name: "duplicate", description: "First"}
-	skill2 := &mockSkill{name: "duplicate", description: "Second"}
+	skill1 := &mockTool{name: "duplicate", description: "First"}
+	skill2 := &mockTool{name: "duplicate", description: "Second"}
 
 	err := registry.Register(skill1)
 	if err != nil {
@@ -112,7 +112,7 @@ func TestRegister_NilSkill(t *testing.T) {
 func TestGet(t *testing.T) {
 	registry := NewInMemoryRegistry()
 
-	skill := &mockSkill{name: "test_skill", description: "Test"}
+	skill := &mockTool{name: "test_skill", description: "Test"}
 	registry.Register(skill)
 
 	// Test successful retrieval
@@ -134,7 +134,7 @@ func TestGet_NotFound(t *testing.T) {
 		t.Error("Get() should error for non-existent skill")
 	}
 
-	expectedMsg := "skill not found: nonexistent"
+	expectedMsg := "tool not found: nonexistent"
 	if err.Error() != expectedMsg {
 		t.Errorf("Get() error = %v, want %v", err.Error(), expectedMsg)
 	}
@@ -145,7 +145,7 @@ func TestList(t *testing.T) {
 	registry := NewInMemoryRegistry()
 
 	// Register multiple skills
-	skills := []*mockSkill{
+	skills := []*mockTool{
 		{name: "skill1", description: "First skill"},
 		{name: "skill2", description: "Second skill"},
 		{name: "skill3", description: "Third skill"},
@@ -190,8 +190,8 @@ func TestListForUser(t *testing.T) {
 	ctx := context.Background()
 
 	// Register multiple skills
-	skill1 := &mockSkill{name: "skill1", description: "First"}
-	skill2 := &mockSkill{name: "skill2", description: "Second"}
+	skill1 := &mockTool{name: "skill1", description: "First"}
+	skill2 := &mockTool{name: "skill2", description: "Second"}
 
 	registry.Register(skill1)
 	registry.Register(skill2)
@@ -229,7 +229,7 @@ func TestRegisterMultipleSkills(t *testing.T) {
 	skills := []string{"calculator", "weather", "search", "notes", "datetime"}
 
 	for _, name := range skills {
-		skill := &mockSkill{name: name, description: name + " skill"}
+		skill := &mockTool{name: name, description: name + " skill"}
 		err := registry.Register(skill)
 		if err != nil {
 			t.Fatalf("Failed to register skill %s: %v", name, err)
