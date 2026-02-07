@@ -47,12 +47,10 @@ issues:
 
   # Exclude specific patterns that are acceptable
   exclude-rules:
-    # Allow unchecked errors in test cleanup (defer Close, Shutdown, etc.)
+    # Allow unchecked errors in test files (focus on production code quality)
     - path: _test\.go
       linters:
         - errcheck
-      text: "Error return value.*is not checked"
-      source: "defer.*Close\\(\\)|defer.*Shutdown\\("
 
     # Allow context.WithValue with string keys in tests (matches implementation)
     - path: _test\.go
