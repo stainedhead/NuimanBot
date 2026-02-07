@@ -84,11 +84,6 @@ func LoadConfig(configPaths ...string) (*NuimanBotConfig, error) {
 		return nil, fmt.Errorf("failed to decode viper settings into config struct: %w", err)
 	}
 
-	// Backward compatibility: migrate "skills" to "tools" if needed
-	if err := migrateSkillsToTools(&cfg, v); err != nil {
-		return nil, fmt.Errorf("failed to migrate skills to tools: %w", err)
-	}
-
 	// Apply environment variable overrides (env vars take precedence over file)
 	applyEnvOverrides(&cfg)
 
@@ -298,24 +293,4 @@ func loadToolsFromEnv(cfg *NuimanBotConfig) {
 	}
 
 	// Add more tools as needed
-}
-
-// migrateSkillsToTools provides backward compatibility by migrating "skills" config to "tools".
-func migrateSkillsToTools(cfg *NuimanBotConfig, v *viper.Viper) error {
-	// Check if old "skills" key exists in the config file
-	if v.IsSet("skills") && !v.IsSet("tools") {
-		fmt.Println("⚠️  DEPRECATION WARNING: Config key 'skills' is deprecated. Please update your config.yaml to use 'tools' instead.")
-		fmt.Println("    Support for 'skills' will be removed in a future version.")
-
-		// If skills is set but tools is not, copy skills to tools
-		// The structure is already identical (SkillsSystemConfig was renamed to ToolsSystemConfig)
-		// Viper will have loaded it into cfg.Tools because the struct field is now Tools
-		// So we don't need to do anything - the YAML tag handles it automatically
-	}
-
-	if v.IsSet("skills") && v.IsSet("tools") {
-		fmt.Println("⚠️  WARNING: Both 'skills' and 'tools' config keys present. Using 'tools' and ignoring 'skills'.")
-	}
-
-	return nil
 }
