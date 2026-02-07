@@ -23,6 +23,7 @@ type ExtendedUserRepository interface {
 type Service struct {
 	userRepo    ExtendedUserRepository
 	securitySvc domain.SecurityService
+	prefsRepo   domain.PreferencesRepository // Optional preferences storage
 }
 
 // NewService creates a new user management service.

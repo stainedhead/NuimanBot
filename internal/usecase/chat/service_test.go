@@ -13,6 +13,7 @@ import (
 
 type mockLLMService struct {
 	completeFunc func(ctx context.Context, provider domain.LLMProvider, req *domain.LLMRequest) (*domain.LLMResponse, error)
+	streamFunc   func(ctx context.Context, provider domain.LLMProvider, req *domain.LLMRequest) (<-chan domain.StreamChunk, error)
 }
 
 func (m *mockLLMService) Complete(ctx context.Context, provider domain.LLMProvider, req *domain.LLMRequest) (*domain.LLMResponse, error) {
@@ -23,7 +24,12 @@ func (m *mockLLMService) Complete(ctx context.Context, provider domain.LLMProvid
 }
 
 func (m *mockLLMService) Stream(ctx context.Context, provider domain.LLMProvider, req *domain.LLMRequest) (<-chan domain.StreamChunk, error) {
-	return nil, errors.New("not implemented")
+	if m.streamFunc != nil {
+		return m.streamFunc(ctx, provider, req)
+	}
+	ch := make(chan domain.StreamChunk)
+	close(ch)
+	return ch, nil
 }
 
 func (m *mockLLMService) ListModels(ctx context.Context, provider domain.LLMProvider) ([]domain.ModelInfo, error) {
