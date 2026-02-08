@@ -15,6 +15,7 @@ type BotService interface {
 	CreateSlackBot(ctx context.Context, bot *domain.SlackBotConfig) error
 	GetSlackBot(ctx context.Context, botID string) (*domain.SlackBotConfig, error)
 	ListSlackBots(ctx context.Context) ([]*domain.SlackBotConfig, error)
+	ListSlackBotsByOwner(ctx context.Context, ownerUserID string) ([]*domain.SlackBotConfig, error)
 	UpdateSlackBot(ctx context.Context, bot *domain.SlackBotConfig) error
 	DeleteSlackBot(ctx context.Context, botID string) error
 	EnableSlackBot(ctx context.Context, botID string) error
@@ -24,6 +25,7 @@ type BotService interface {
 	CreateTelegramBot(ctx context.Context, bot *domain.TelegramBotConfig) error
 	GetTelegramBot(ctx context.Context, botID string) (*domain.TelegramBotConfig, error)
 	ListTelegramBots(ctx context.Context) ([]*domain.TelegramBotConfig, error)
+	ListTelegramBotsByOwner(ctx context.Context, ownerUserID string) ([]*domain.TelegramBotConfig, error)
 	UpdateTelegramBot(ctx context.Context, bot *domain.TelegramBotConfig) error
 	DeleteTelegramBot(ctx context.Context, botID string) error
 	EnableTelegramBot(ctx context.Context, botID string) error
@@ -44,7 +46,7 @@ func NewBotHandler(service BotService) *BotHandler {
 
 // RegisterRoutes registers all bot routes
 func (h *BotHandler) RegisterRoutes(router *mux.Router) {
-	// Slack bot routes
+	// Admin Slack bot routes
 	router.HandleFunc("/api/v1/admin/bots/slack", h.ListSlackBots).Methods("GET")
 	router.HandleFunc("/api/v1/admin/bots/slack/{id}", h.GetSlackBot).Methods("GET")
 	router.HandleFunc("/api/v1/admin/bots/slack", h.CreateSlackBot).Methods("POST")
@@ -53,7 +55,7 @@ func (h *BotHandler) RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/v1/admin/bots/slack/{id}/enable", h.EnableSlackBot).Methods("POST")
 	router.HandleFunc("/api/v1/admin/bots/slack/{id}/disable", h.DisableSlackBot).Methods("POST")
 
-	// Telegram bot routes
+	// Admin Telegram bot routes
 	router.HandleFunc("/api/v1/admin/bots/telegram", h.ListTelegramBots).Methods("GET")
 	router.HandleFunc("/api/v1/admin/bots/telegram/{id}", h.GetTelegramBot).Methods("GET")
 	router.HandleFunc("/api/v1/admin/bots/telegram", h.CreateTelegramBot).Methods("POST")
@@ -61,6 +63,12 @@ func (h *BotHandler) RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/v1/admin/bots/telegram/{id}", h.DeleteTelegramBot).Methods("DELETE")
 	router.HandleFunc("/api/v1/admin/bots/telegram/{id}/enable", h.EnableTelegramBot).Methods("POST")
 	router.HandleFunc("/api/v1/admin/bots/telegram/{id}/disable", h.DisableTelegramBot).Methods("POST")
+
+	// User self-service bot routes (non-admin)
+	router.HandleFunc("/api/v1/bots/slack", h.ListOwnSlackBots).Methods("GET")
+	router.HandleFunc("/api/v1/bots/slack/{id}", h.GetOwnSlackBot).Methods("GET")
+	router.HandleFunc("/api/v1/bots/telegram", h.ListOwnTelegramBots).Methods("GET")
+	router.HandleFunc("/api/v1/bots/telegram/{id}", h.GetOwnTelegramBot).Methods("GET")
 }
 
 // Slack Bot Handlers
@@ -331,4 +339,126 @@ func maskToken(token string) string {
 		return "****"
 	}
 	return token[:4] + "..." + token[len(token)-4:]
+}
+
+// User Self-Service Bot Handlers
+
+// ListOwnSlackBots handles GET /api/v1/bots/slack (non-admin)
+func (h *BotHandler) ListOwnSlackBots(w http.ResponseWriter, r *http.Request) {
+	// Extract user ID from context (set by auth middleware)
+	userID, ok := r.Context().Value("userID").(string)
+	if !ok || userID == "" {
+		http.Error(w, "User ID not found in request context", http.StatusUnauthorized)
+		return
+	}
+
+	bots, err := h.service.ListSlackBotsByOwner(r.Context(), userID)
+	if err != nil {
+		http.Error(w, "Failed to list Slack bots", http.StatusInternalServerError)
+		return
+	}
+
+	// Mask tokens before returning
+	for _, bot := range bots {
+		bot.SlackBotToken = maskToken(bot.SlackBotToken)
+		bot.SlackAppToken = maskToken(bot.SlackAppToken)
+		bot.SlackSigningSecret = maskToken(bot.SlackSigningSecret)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"bots":  bots,
+		"total": len(bots),
+	})
+}
+
+// GetOwnSlackBot handles GET /api/v1/bots/slack/{id} (non-admin)
+func (h *BotHandler) GetOwnSlackBot(w http.ResponseWriter, r *http.Request) {
+	// Extract user ID from context (set by auth middleware)
+	userID, ok := r.Context().Value("userID").(string)
+	if !ok || userID == "" {
+		http.Error(w, "User ID not found in request context", http.StatusUnauthorized)
+		return
+	}
+
+	vars := mux.Vars(r)
+	botID := vars["id"]
+
+	bot, err := h.service.GetSlackBot(r.Context(), botID)
+	if err != nil {
+		http.Error(w, "Bot not found", http.StatusNotFound)
+		return
+	}
+
+	// Verify ownership
+	if bot.OwnerUserID != userID {
+		http.Error(w, "Access denied: you do not own this bot", http.StatusForbidden)
+		return
+	}
+
+	// Mask tokens before returning
+	bot.SlackBotToken = maskToken(bot.SlackBotToken)
+	bot.SlackAppToken = maskToken(bot.SlackAppToken)
+	bot.SlackSigningSecret = maskToken(bot.SlackSigningSecret)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(bot)
+}
+
+// ListOwnTelegramBots handles GET /api/v1/bots/telegram (non-admin)
+func (h *BotHandler) ListOwnTelegramBots(w http.ResponseWriter, r *http.Request) {
+	// Extract user ID from context (set by auth middleware)
+	userID, ok := r.Context().Value("userID").(string)
+	if !ok || userID == "" {
+		http.Error(w, "User ID not found in request context", http.StatusUnauthorized)
+		return
+	}
+
+	bots, err := h.service.ListTelegramBotsByOwner(r.Context(), userID)
+	if err != nil {
+		http.Error(w, "Failed to list Telegram bots", http.StatusInternalServerError)
+		return
+	}
+
+	// Mask tokens before returning
+	for _, bot := range bots {
+		bot.TelegramBotToken = maskToken(bot.TelegramBotToken)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"bots":  bots,
+		"total": len(bots),
+	})
+}
+
+// GetOwnTelegramBot handles GET /api/v1/bots/telegram/{id} (non-admin)
+func (h *BotHandler) GetOwnTelegramBot(w http.ResponseWriter, r *http.Request) {
+	// Extract user ID from context (set by auth middleware)
+	userID, ok := r.Context().Value("userID").(string)
+	if !ok || userID == "" {
+		http.Error(w, "User ID not found in request context", http.StatusUnauthorized)
+		return
+	}
+
+	vars := mux.Vars(r)
+	botID := vars["id"]
+
+	bot, err := h.service.GetTelegramBot(r.Context(), botID)
+	if err != nil {
+		http.Error(w, "Bot not found", http.StatusNotFound)
+		return
+	}
+
+	// Verify ownership
+	if bot.OwnerUserID != userID {
+		http.Error(w, "Access denied: you do not own this bot", http.StatusForbidden)
+		return
+	}
+
+	// Mask tokens before returning
+	bot.TelegramBotToken = maskToken(bot.TelegramBotToken)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(bot)
 }

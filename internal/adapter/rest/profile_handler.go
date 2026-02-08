@@ -3,8 +3,10 @@ package rest
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gorilla/mux"
 	"nuimanbot/internal/domain"
@@ -35,11 +37,27 @@ func NewProfileHandler(service ProfileService) *ProfileHandler {
 
 // RegisterRoutes registers all profile routes
 func (h *ProfileHandler) RegisterRoutes(router *mux.Router) {
+	// Bulk operations (must be before {id} route to avoid conflict)
+	router.HandleFunc("/api/v1/admin/profiles/import", h.Import).Methods("POST")
+	router.HandleFunc("/api/v1/admin/profiles/export", h.Export).Methods("GET")
+	router.HandleFunc("/api/v1/admin/profiles/search", h.Search).Methods("GET")
+
+	// CRUD operations
 	router.HandleFunc("/api/v1/admin/profiles", h.List).Methods("GET")
-	router.HandleFunc("/api/v1/admin/profiles/{id}", h.Get).Methods("GET")
 	router.HandleFunc("/api/v1/admin/profiles", h.Create).Methods("POST")
+	router.HandleFunc("/api/v1/admin/profiles/{id}", h.Get).Methods("GET")
 	router.HandleFunc("/api/v1/admin/profiles/{id}", h.Update).Methods("PUT")
 	router.HandleFunc("/api/v1/admin/profiles/{id}", h.Delete).Methods("DELETE")
+
+	// Platform integration (more specific routes after CRUD)
+	router.HandleFunc("/api/v1/admin/profiles/{id}/integrations/slack", h.LinkSlack).Methods("PUT")
+	router.HandleFunc("/api/v1/admin/profiles/{id}/integrations/slack", h.UnlinkSlack).Methods("DELETE")
+	router.HandleFunc("/api/v1/admin/profiles/{id}/integrations/telegram", h.LinkTelegram).Methods("PUT")
+	router.HandleFunc("/api/v1/admin/profiles/{id}/integrations/telegram", h.UnlinkTelegram).Methods("DELETE")
+
+	// User self-service (non-admin)
+	router.HandleFunc("/api/v1/profile", h.GetOwnProfile).Methods("GET")
+	router.HandleFunc("/api/v1/profile", h.UpdateOwnProfile).Methods("PUT")
 }
 
 // ListProfilesResponse is the response for list profiles endpoint
@@ -321,4 +339,353 @@ func (h *ProfileHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// LinkSlackRequest is the request body for linking Slack ID
+type LinkSlackRequest struct {
+	SlackID string `json:"slackID"`
+}
+
+// LinkSlack handles PUT /api/v1/admin/profiles/{id}/integrations/slack
+func (h *ProfileHandler) LinkSlack(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	userID := vars["id"]
+
+	var req LinkSlackRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.SlackID == "" {
+		http.Error(w, "slackID is required", http.StatusBadRequest)
+		return
+	}
+
+	updates := map[string]interface{}{
+		"platformIDs.slack": req.SlackID,
+	}
+
+	if err := h.service.UpdateProfile(r.Context(), userID, updates); err != nil {
+		http.Error(w, "Failed to link Slack ID: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	profile, err := h.service.GetProfile(r.Context(), userID)
+	if err != nil {
+		http.Error(w, "Failed to retrieve updated profile", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(profile)
+}
+
+// UnlinkSlack handles DELETE /api/v1/admin/profiles/{id}/integrations/slack
+func (h *ProfileHandler) UnlinkSlack(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	userID := vars["id"]
+
+	updates := map[string]interface{}{
+		"platformIDs.slack": "",
+	}
+
+	if err := h.service.UpdateProfile(r.Context(), userID, updates); err != nil {
+		http.Error(w, "Failed to unlink Slack ID: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// LinkTelegramRequest is the request body for linking Telegram ID
+type LinkTelegramRequest struct {
+	TelegramID string `json:"telegramID"`
+}
+
+// LinkTelegram handles PUT /api/v1/admin/profiles/{id}/integrations/telegram
+func (h *ProfileHandler) LinkTelegram(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	userID := vars["id"]
+
+	var req LinkTelegramRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.TelegramID == "" {
+		http.Error(w, "telegramID is required", http.StatusBadRequest)
+		return
+	}
+
+	updates := map[string]interface{}{
+		"platformIDs.telegram": req.TelegramID,
+	}
+
+	if err := h.service.UpdateProfile(r.Context(), userID, updates); err != nil {
+		http.Error(w, "Failed to link Telegram ID: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	profile, err := h.service.GetProfile(r.Context(), userID)
+	if err != nil {
+		http.Error(w, "Failed to retrieve updated profile", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(profile)
+}
+
+// UnlinkTelegram handles DELETE /api/v1/admin/profiles/{id}/integrations/telegram
+func (h *ProfileHandler) UnlinkTelegram(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	userID := vars["id"]
+
+	updates := map[string]interface{}{
+		"platformIDs.telegram": "",
+	}
+
+	if err := h.service.UpdateProfile(r.Context(), userID, updates); err != nil {
+		http.Error(w, "Failed to unlink Telegram ID: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// SearchProfilesResponse is the response for search profiles endpoint
+type SearchProfilesResponse struct {
+	Profiles []*domain.UserProfile `json:"profiles"`
+	Query    string                `json:"query"`
+	Fields   []string              `json:"fields"`
+	Total    int                   `json:"total"`
+}
+
+// Search handles GET /api/v1/admin/profiles/search
+func (h *ProfileHandler) Search(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query().Get("q")
+	if query == "" {
+		http.Error(w, "query parameter 'q' is required", http.StatusBadRequest)
+		return
+	}
+
+	fieldsStr := r.URL.Query().Get("fields")
+	var fields []string
+	if fieldsStr != "" {
+		fields = strings.Split(fieldsStr, ",")
+	}
+
+	// TODO: Implement search in service layer
+	// For now, return empty results
+	response := SearchProfilesResponse{
+		Profiles: []*domain.UserProfile{},
+		Query:    query,
+		Fields:   fields,
+		Total:    0,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// ImportRequest is the request body for bulk import
+type ImportRequest struct {
+	Profiles []*domain.UserProfile `json:"profiles"`
+}
+
+// ImportResponse is the response for bulk import
+type ImportResponse struct {
+	Imported int      `json:"imported"`
+	Failed   int      `json:"failed"`
+	Errors   []string `json:"errors,omitempty"`
+}
+
+// Import handles POST /api/v1/admin/profiles/import
+func (h *ProfileHandler) Import(w http.ResponseWriter, r *http.Request) {
+	var req ImportRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	imported := 0
+	failed := 0
+	errors := []string{}
+
+	for _, profile := range req.Profiles {
+		if err := h.service.CreateProfile(r.Context(), profile); err != nil {
+			failed++
+			errors = append(errors, fmt.Sprintf("Failed to import %s: %v", profile.UserID, err))
+		} else {
+			imported++
+		}
+	}
+
+	response := ImportResponse{
+		Imported: imported,
+		Failed:   failed,
+		Errors:   errors,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if failed > 0 {
+		w.WriteHeader(http.StatusPartialContent)
+	} else {
+		w.WriteHeader(http.StatusOK)
+	}
+	json.NewEncoder(w).Encode(response)
+}
+
+// Export handles GET /api/v1/admin/profiles/export
+func (h *ProfileHandler) Export(w http.ResponseWriter, r *http.Request) {
+	format := r.URL.Query().Get("format")
+	if format == "" {
+		format = "json"
+	}
+
+	// Get all profiles
+	profiles, err := h.service.ListProfiles(r.Context(), 0, 10000)
+	if err != nil {
+		http.Error(w, "Failed to export profiles", http.StatusInternalServerError)
+		return
+	}
+
+	switch format {
+	case "json":
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Disposition", "attachment; filename=profiles.json")
+		json.NewEncoder(w).Encode(profiles)
+	case "csv":
+		w.Header().Set("Content-Type", "text/csv")
+		w.Header().Set("Content-Disposition", "attachment; filename=profiles.csv")
+
+		// Write CSV header
+		fmt.Fprintf(w, "userID,moniker,firstName,lastName,primaryEmail,role,userType,enabled\n")
+
+		// Write CSV rows
+		for _, p := range profiles {
+			fmt.Fprintf(w, "%s,%s,%s,%s,%s,%s,%s,%v\n",
+				p.UserID, p.Moniker, p.FirstName, p.LastName,
+				p.PrimaryEmail, p.Role, p.UserType, p.Enabled)
+		}
+	default:
+		http.Error(w, "Invalid format. Supported: json, csv", http.StatusBadRequest)
+	}
+}
+
+// GetOwnProfile handles GET /api/v1/profile (user self-service)
+func (h *ProfileHandler) GetOwnProfile(w http.ResponseWriter, r *http.Request) {
+	// Extract user ID from context (set by auth middleware)
+	userID, ok := r.Context().Value("userID").(string)
+	if !ok || userID == "" {
+		http.Error(w, "User ID not found in request context", http.StatusUnauthorized)
+		return
+	}
+
+	profile, err := h.service.GetProfile(r.Context(), userID)
+	if err != nil {
+		http.Error(w, "Profile not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(profile)
+}
+
+// UpdateOwnProfile handles PUT /api/v1/profile (user self-service)
+func (h *ProfileHandler) UpdateOwnProfile(w http.ResponseWriter, r *http.Request) {
+	// Extract user ID from context (set by auth middleware)
+	userID, ok := r.Context().Value("userID").(string)
+	if !ok || userID == "" {
+		http.Error(w, "User ID not found in request context", http.StatusUnauthorized)
+		return
+	}
+
+	var req UpdateProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Users cannot change their own role or userType (admin-only fields)
+	if req.Role != nil || req.UserType != nil {
+		http.Error(w, "Cannot update role or userType via self-service endpoint", http.StatusForbidden)
+		return
+	}
+
+	// Build updates map (reuse logic from Update handler)
+	updates := make(map[string]interface{})
+	updatedFields := []string{}
+
+	if req.Moniker != nil {
+		updates["moniker"] = *req.Moniker
+		updatedFields = append(updatedFields, "moniker")
+	}
+	if req.FirstName != nil {
+		updates["firstName"] = *req.FirstName
+		updatedFields = append(updatedFields, "firstName")
+	}
+	if req.LastName != nil {
+		updates["lastName"] = *req.LastName
+		updatedFields = append(updatedFields, "lastName")
+	}
+	if req.NickName != nil {
+		updates["nickName"] = *req.NickName
+		updatedFields = append(updatedFields, "nickName")
+	}
+	if req.BackupEmail != nil {
+		updates["backupEmail"] = *req.BackupEmail
+		updatedFields = append(updatedFields, "backupEmail")
+	}
+	if req.MobilePhone != nil {
+		updates["mobilePhone"] = *req.MobilePhone
+		updatedFields = append(updatedFields, "mobilePhone")
+	}
+	if req.PrimaryLanguage != nil {
+		updates["primaryLanguage"] = *req.PrimaryLanguage
+		updatedFields = append(updatedFields, "primaryLanguage")
+	}
+	if req.SecondaryLanguage != nil {
+		updates["secondaryLanguage"] = *req.SecondaryLanguage
+		updatedFields = append(updatedFields, "secondaryLanguage")
+	}
+	if req.Timezone != nil {
+		updates["timezone"] = *req.Timezone
+		updatedFields = append(updatedFields, "timezone")
+	}
+	if req.PrimaryLocation != nil {
+		updates["primaryLocation"] = *req.PrimaryLocation
+		updatedFields = append(updatedFields, "primaryLocation")
+	}
+	if req.JobRole != nil {
+		updates["jobRole"] = *req.JobRole
+		updatedFields = append(updatedFields, "jobRole")
+	}
+	if req.ProfileInfo != nil {
+		updates["profileInfo"] = *req.ProfileInfo
+		updatedFields = append(updatedFields, "profileInfo")
+	}
+
+	// Update profile
+	if err := h.service.UpdateProfile(r.Context(), userID, updates); err != nil {
+		http.Error(w, "Failed to update profile: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Get updated profile
+	profile, err := h.service.GetProfile(r.Context(), userID)
+	if err != nil {
+		http.Error(w, "Failed to retrieve updated profile", http.StatusInternalServerError)
+		return
+	}
+
+	response := UpdateProfileResponse{
+		Profile:       profile,
+		UpdatedFields: updatedFields,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }

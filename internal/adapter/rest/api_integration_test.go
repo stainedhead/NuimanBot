@@ -676,20 +676,22 @@ func TestE2E_ServerStatusAndMetrics(t *testing.T) {
 // Mock services for integration testing
 
 type MockBotService struct {
-	CreateSlackBotFunc     func(ctx context.Context, bot *domain.SlackBotConfig) error
-	GetSlackBotFunc        func(ctx context.Context, botID string) (*domain.SlackBotConfig, error)
-	ListSlackBotsFunc      func(ctx context.Context) ([]*domain.SlackBotConfig, error)
-	UpdateSlackBotFunc     func(ctx context.Context, bot *domain.SlackBotConfig) error
-	DeleteSlackBotFunc     func(ctx context.Context, botID string) error
-	EnableSlackBotFunc     func(ctx context.Context, botID string) error
-	DisableSlackBotFunc    func(ctx context.Context, botID string) error
-	CreateTelegramBotFunc  func(ctx context.Context, bot *domain.TelegramBotConfig) error
-	GetTelegramBotFunc     func(ctx context.Context, botID string) (*domain.TelegramBotConfig, error)
-	ListTelegramBotsFunc   func(ctx context.Context) ([]*domain.TelegramBotConfig, error)
-	UpdateTelegramBotFunc  func(ctx context.Context, bot *domain.TelegramBotConfig) error
-	DeleteTelegramBotFunc  func(ctx context.Context, botID string) error
-	EnableTelegramBotFunc  func(ctx context.Context, botID string) error
-	DisableTelegramBotFunc func(ctx context.Context, botID string) error
+	CreateSlackBotFunc          func(ctx context.Context, bot *domain.SlackBotConfig) error
+	GetSlackBotFunc             func(ctx context.Context, botID string) (*domain.SlackBotConfig, error)
+	ListSlackBotsFunc           func(ctx context.Context) ([]*domain.SlackBotConfig, error)
+	ListSlackBotsByOwnerFunc    func(ctx context.Context, ownerUserID string) ([]*domain.SlackBotConfig, error)
+	UpdateSlackBotFunc          func(ctx context.Context, bot *domain.SlackBotConfig) error
+	DeleteSlackBotFunc          func(ctx context.Context, botID string) error
+	EnableSlackBotFunc          func(ctx context.Context, botID string) error
+	DisableSlackBotFunc         func(ctx context.Context, botID string) error
+	CreateTelegramBotFunc       func(ctx context.Context, bot *domain.TelegramBotConfig) error
+	GetTelegramBotFunc          func(ctx context.Context, botID string) (*domain.TelegramBotConfig, error)
+	ListTelegramBotsFunc        func(ctx context.Context) ([]*domain.TelegramBotConfig, error)
+	ListTelegramBotsByOwnerFunc func(ctx context.Context, ownerUserID string) ([]*domain.TelegramBotConfig, error)
+	UpdateTelegramBotFunc       func(ctx context.Context, bot *domain.TelegramBotConfig) error
+	DeleteTelegramBotFunc       func(ctx context.Context, botID string) error
+	EnableTelegramBotFunc       func(ctx context.Context, botID string) error
+	DisableTelegramBotFunc      func(ctx context.Context, botID string) error
 }
 
 func (m *MockBotService) CreateSlackBot(ctx context.Context, bot *domain.SlackBotConfig) error {
@@ -709,6 +711,13 @@ func (m *MockBotService) GetSlackBot(ctx context.Context, botID string) (*domain
 func (m *MockBotService) ListSlackBots(ctx context.Context) ([]*domain.SlackBotConfig, error) {
 	if m.ListSlackBotsFunc != nil {
 		return m.ListSlackBotsFunc(ctx)
+	}
+	return []*domain.SlackBotConfig{}, nil
+}
+
+func (m *MockBotService) ListSlackBotsByOwner(ctx context.Context, ownerUserID string) ([]*domain.SlackBotConfig, error) {
+	if m.ListSlackBotsByOwnerFunc != nil {
+		return m.ListSlackBotsByOwnerFunc(ctx, ownerUserID)
 	}
 	return []*domain.SlackBotConfig{}, nil
 }
@@ -758,6 +767,13 @@ func (m *MockBotService) GetTelegramBot(ctx context.Context, botID string) (*dom
 func (m *MockBotService) ListTelegramBots(ctx context.Context) ([]*domain.TelegramBotConfig, error) {
 	if m.ListTelegramBotsFunc != nil {
 		return m.ListTelegramBotsFunc(ctx)
+	}
+	return []*domain.TelegramBotConfig{}, nil
+}
+
+func (m *MockBotService) ListTelegramBotsByOwner(ctx context.Context, ownerUserID string) ([]*domain.TelegramBotConfig, error) {
+	if m.ListTelegramBotsByOwnerFunc != nil {
+		return m.ListTelegramBotsByOwnerFunc(ctx, ownerUserID)
 	}
 	return []*domain.TelegramBotConfig{}, nil
 }
