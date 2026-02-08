@@ -56,6 +56,10 @@ func (m *mockSecurityService) Audit(ctx context.Context, event *domain.AuditEven
 	return nil
 }
 
+func (m *mockSecurityService) GenerateAPIKey(ctx context.Context) (string, error) {
+	return "mock-api-key-12345678", nil
+}
+
 // mockConfigReloadListener is a mock implementation of domain.ConfigReloadListener
 type mockConfigReloadListener struct {
 	onReloadFunc func(context.Context, *config.NuimanBotConfig) error

@@ -51,6 +51,15 @@ func (s *Service) CreateProfile(ctx context.Context, profile *domain.UserProfile
 		return err
 	}
 
+	// Generate API key if not already set
+	if profile.APIKey == "" {
+		apiKey, err := s.securitySvc.GenerateAPIKey(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to generate API key: %w", err)
+		}
+		profile.APIKey = apiKey
+	}
+
 	// Set timestamps
 	now := time.Now()
 	profile.CreatedAt = now
@@ -86,6 +95,12 @@ func (s *Service) GetProfileByEmail(ctx context.Context, email string) (*domain.
 // GetProfileByPlatformID retrieves a user profile by platform-specific ID.
 func (s *Service) GetProfileByPlatformID(ctx context.Context, platform domain.Platform, platformID string) (*domain.UserProfile, error) {
 	return s.repo.GetProfileByPlatformID(ctx, platform, platformID)
+}
+
+// GetByAPIKey retrieves a user profile by API key.
+// Used for REST API authentication.
+func (s *Service) GetByAPIKey(ctx context.Context, apiKey string) (*domain.UserProfile, error) {
+	return s.repo.GetProfileByAPIKey(ctx, apiKey)
 }
 
 // UpdateProfile updates a user profile with partial updates.

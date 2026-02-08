@@ -107,6 +107,10 @@ func (m *MockSecurityService) Audit(ctx context.Context, event *domain.AuditEven
 	return nil
 }
 
+func (m *MockSecurityService) GenerateAPIKey(ctx context.Context) (string, error) {
+	return "mock-api-key-12345678", nil
+}
+
 func TestCreateUser(t *testing.T) {
 	mockRepo := NewMockUserRepository()
 	mockSecurity := &MockSecurityService{}

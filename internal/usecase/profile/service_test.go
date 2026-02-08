@@ -110,6 +110,15 @@ func (m *MockUserProfileRepository) DeleteProfile(ctx context.Context, userID st
 	return nil
 }
 
+func (m *MockUserProfileRepository) GetProfileByAPIKey(ctx context.Context, apiKey string) (*domain.UserProfile, error) {
+	for _, p := range m.profiles {
+		if p.APIKey == apiKey {
+			return p, nil
+		}
+	}
+	return nil, errors.New("profile not found")
+}
+
 // MockSecurityService implements domain.SecurityService for testing
 type MockSecurityService struct {
 	AuditFunc func(ctx context.Context, event *domain.AuditEvent) error
@@ -135,6 +144,10 @@ func (m *MockSecurityService) Audit(ctx context.Context, event *domain.AuditEven
 		return m.AuditFunc(ctx, event)
 	}
 	return nil
+}
+
+func (m *MockSecurityService) GenerateAPIKey(ctx context.Context) (string, error) {
+	return "mock-api-key-12345678", nil
 }
 
 // Test CreateProfile - success case
