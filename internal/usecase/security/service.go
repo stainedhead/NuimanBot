@@ -2,7 +2,10 @@ package security
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"log/slog" // Structured logging
 	"time"
 
@@ -72,6 +75,21 @@ func (s *Service) Audit(ctx context.Context, event *domain.AuditEvent) error {
 		return errors.New("auditor not configured for security service")
 	}
 	return s.auditor.Audit(ctx, event)
+}
+
+// GenerateAPIKey generates a secure random API key.
+// Returns a base64-encoded 32-byte random key suitable for API authentication.
+func (s *Service) GenerateAPIKey(ctx context.Context) (string, error) {
+	// Generate 32 bytes of random data
+	keyBytes := make([]byte, 32)
+	if _, err := rand.Read(keyBytes); err != nil {
+		return "", fmt.Errorf("failed to generate random key: %w", err)
+	}
+
+	// Encode to base64 for safe storage and transmission
+	apiKey := base64.URLEncoding.EncodeToString(keyBytes)
+
+	return apiKey, nil
 }
 
 // StoreCredential uses the vault to securely store a credential.

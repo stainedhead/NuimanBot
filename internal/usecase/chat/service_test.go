@@ -109,6 +109,18 @@ func (m *mockSecurityService) Audit(ctx context.Context, event *domain.AuditEven
 	return nil
 }
 
+func (m *mockSecurityService) Encrypt(ctx context.Context, userID string, plaintext []byte) ([]byte, error) {
+	return plaintext, nil
+}
+
+func (m *mockSecurityService) Decrypt(ctx context.Context, userID string, ciphertext []byte) ([]byte, error) {
+	return ciphertext, nil
+}
+
+func (m *mockSecurityService) GenerateAPIKey(ctx context.Context) (string, error) {
+	return "mock-api-key-12345678", nil
+}
+
 type mockSkill struct {
 	name        string
 	description string

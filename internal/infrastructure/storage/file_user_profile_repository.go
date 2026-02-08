@@ -22,6 +22,7 @@ type UserProfilesFile struct {
 type UserProfileIndexes struct {
 	ByUsername map[string]string          `json:"byUsername"` // username -> userID
 	ByEmail    map[string]string          `json:"byEmail"`    // email -> userID
+	ByAPIKey   map[string]string          `json:"byAPIKey"`   // apiKey -> userID
 	ByPlatform UserProfilePlatformIndexes `json:"byPlatform"` // platform-specific indexes
 }
 
@@ -60,6 +61,7 @@ func (r *FileUserProfileRepository) load() (*UserProfilesFile, error) {
 			Indexes: UserProfileIndexes{
 				ByUsername: make(map[string]string),
 				ByEmail:    make(map[string]string),
+				ByAPIKey:   make(map[string]string),
 				ByPlatform: UserProfilePlatformIndexes{
 					Slack:    make(map[string]string),
 					Telegram: make(map[string]string),
@@ -87,6 +89,9 @@ func (r *FileUserProfileRepository) load() (*UserProfilesFile, error) {
 	}
 	if file.Indexes.ByEmail == nil {
 		file.Indexes.ByEmail = make(map[string]string)
+	}
+	if file.Indexes.ByAPIKey == nil {
+		file.Indexes.ByAPIKey = make(map[string]string)
 	}
 	if file.Indexes.ByPlatform.Slack == nil {
 		file.Indexes.ByPlatform.Slack = make(map[string]string)
@@ -124,6 +129,7 @@ func (r *FileUserProfileRepository) save(file *UserProfilesFile) error {
 func (r *FileUserProfileRepository) rebuildIndexes(file *UserProfilesFile) {
 	file.Indexes.ByUsername = make(map[string]string)
 	file.Indexes.ByEmail = make(map[string]string)
+	file.Indexes.ByAPIKey = make(map[string]string)
 	file.Indexes.ByPlatform.Slack = make(map[string]string)
 	file.Indexes.ByPlatform.Telegram = make(map[string]string)
 	file.Indexes.ByPlatform.CLI = make(map[string]string)
@@ -137,6 +143,11 @@ func (r *FileUserProfileRepository) rebuildIndexes(file *UserProfilesFile) {
 		// Index by moniker (username)
 		if user.Moniker != "" {
 			file.Indexes.ByUsername[user.Moniker] = user.UserID
+		}
+
+		// Index by API key
+		if user.APIKey != "" {
+			file.Indexes.ByAPIKey[user.APIKey] = user.UserID
 		}
 
 		// Index by platform IDs
@@ -261,6 +272,32 @@ func (r *FileUserProfileRepository) GetProfileByPlatformID(ctx context.Context, 
 		return nil, fmt.Errorf("unsupported platform: %s", platform)
 	}
 
+	if !found {
+		return nil, errors.New("profile not found")
+	}
+
+	// Find user by ID
+	for _, user := range file.Users {
+		if user.UserID == userID {
+			return user, nil
+		}
+	}
+
+	return nil, errors.New("profile not found (index stale)")
+}
+
+// GetProfileByAPIKey retrieves a profile by API key
+func (r *FileUserProfileRepository) GetProfileByAPIKey(ctx context.Context, apiKey string) (*domain.UserProfile, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	file, err := r.load()
+	if err != nil {
+		return nil, err
+	}
+
+	// Use index for fast lookup
+	userID, found := file.Indexes.ByAPIKey[apiKey]
 	if !found {
 		return nil, errors.New("profile not found")
 	}

@@ -60,6 +60,9 @@ type SecurityService interface {
 	// ValidateInput sanitizes and validates user input.
 	ValidateInput(ctx context.Context, input string, maxLength int) (string, error)
 
+	// GenerateAPIKey generates a secure random API key
+	GenerateAPIKey(ctx context.Context) (string, error)
+
 	// Audit logs a security-relevant event.
 	Audit(ctx context.Context, event *AuditEvent) error
 }

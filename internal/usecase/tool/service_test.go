@@ -81,6 +81,10 @@ func (m *MockSecurityService) Audit(ctx context.Context, event *domain.AuditEven
 	return nil
 }
 
+func (m *MockSecurityService) GenerateAPIKey(ctx context.Context) (string, error) {
+	return "mock-api-key-12345678", nil
+}
+
 func TestNewService(t *testing.T) {
 	mockCfg := &config.ToolsSystemConfig{}
 	mockRegistry := &MockToolRegistry{}

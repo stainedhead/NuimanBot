@@ -70,6 +70,10 @@ func (m *mockSecurityService) Audit(ctx context.Context, event *domain.AuditEven
 	return nil
 }
 
+func (m *mockSecurityService) GenerateAPIKey(ctx context.Context) (string, error) {
+	return "mock-api-key-12345678", nil
+}
+
 // mockPreferencesRepository is a mock implementation of PreferencesRepository.
 type mockPreferencesRepository struct {
 	getFunc    func(ctx context.Context, userID string) (domain.UserPreferences, error)
