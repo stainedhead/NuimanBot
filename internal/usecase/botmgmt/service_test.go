@@ -55,6 +55,19 @@ func (m *mockBotConfigRepository) ListSlackBots(ctx context.Context) ([]*domain.
 	return bots, nil
 }
 
+func (m *mockBotConfigRepository) ListSlackBotsByOwner(ctx context.Context, ownerUserID string) ([]*domain.SlackBotConfig, error) {
+	if m.getError != nil {
+		return nil, m.getError
+	}
+	bots := make([]*domain.SlackBotConfig, 0)
+	for _, bot := range m.slackBots {
+		if bot.OwnerUserID == ownerUserID {
+			bots = append(bots, bot)
+		}
+	}
+	return bots, nil
+}
+
 func (m *mockBotConfigRepository) DeleteSlackBot(ctx context.Context, botID string) error {
 	if m.deleteError != nil {
 		return m.deleteError
@@ -89,6 +102,19 @@ func (m *mockBotConfigRepository) ListTelegramBots(ctx context.Context) ([]*doma
 	bots := make([]*domain.TelegramBotConfig, 0, len(m.telegramBots))
 	for _, bot := range m.telegramBots {
 		bots = append(bots, bot)
+	}
+	return bots, nil
+}
+
+func (m *mockBotConfigRepository) ListTelegramBotsByOwner(ctx context.Context, ownerUserID string) ([]*domain.TelegramBotConfig, error) {
+	if m.getError != nil {
+		return nil, m.getError
+	}
+	bots := make([]*domain.TelegramBotConfig, 0)
+	for _, bot := range m.telegramBots {
+		if bot.OwnerUserID == ownerUserID {
+			bots = append(bots, bot)
+		}
 	}
 	return bots, nil
 }
