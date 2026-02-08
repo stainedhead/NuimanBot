@@ -272,3 +272,335 @@ func TestProfileHandler_ListWithPagination(t *testing.T) {
 func stringPtr(s string) *string {
 	return &s
 }
+
+// TestProfileHandler_LinkSlack tests linking Slack ID
+func TestProfileHandler_LinkSlack(t *testing.T) {
+	mockService := &MockProfileService{
+		UpdateProfileFunc: func(ctx context.Context, userID string, updates map[string]interface{}) error {
+			assert.Equal(t, "user-123", userID)
+			assert.Equal(t, "U12345678", updates["platformIDs.slack"])
+			return nil
+		},
+		GetProfileFunc: func(ctx context.Context, userID string) (*domain.UserProfile, error) {
+			return &domain.UserProfile{
+				UserID: userID,
+				PlatformIDs: domain.PlatformIdentifiers{
+					Slack: "U12345678",
+				},
+			}, nil
+		},
+	}
+
+	handler := NewProfileHandler(mockService)
+	router := mux.NewRouter()
+	handler.RegisterRoutes(router)
+
+	body := `{"slackID": "U12345678"}`
+	req := httptest.NewRequest("PUT", "/api/v1/admin/profiles/user-123/integrations/slack", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var profile domain.UserProfile
+	err := json.NewDecoder(rec.Body).Decode(&profile)
+	require.NoError(t, err)
+	assert.Equal(t, "U12345678", profile.PlatformIDs.Slack)
+}
+
+// TestProfileHandler_UnlinkSlack tests unlinking Slack ID
+func TestProfileHandler_UnlinkSlack(t *testing.T) {
+	mockService := &MockProfileService{
+		UpdateProfileFunc: func(ctx context.Context, userID string, updates map[string]interface{}) error {
+			assert.Equal(t, "user-123", userID)
+			assert.Equal(t, "", updates["platformIDs.slack"])
+			return nil
+		},
+	}
+
+	handler := NewProfileHandler(mockService)
+	router := mux.NewRouter()
+	handler.RegisterRoutes(router)
+
+	req := httptest.NewRequest("DELETE", "/api/v1/admin/profiles/user-123/integrations/slack", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNoContent, rec.Code)
+}
+
+// TestProfileHandler_LinkTelegram tests linking Telegram ID
+func TestProfileHandler_LinkTelegram(t *testing.T) {
+	mockService := &MockProfileService{
+		UpdateProfileFunc: func(ctx context.Context, userID string, updates map[string]interface{}) error {
+			assert.Equal(t, "user-123", userID)
+			assert.Equal(t, "123456789", updates["platformIDs.telegram"])
+			return nil
+		},
+		GetProfileFunc: func(ctx context.Context, userID string) (*domain.UserProfile, error) {
+			return &domain.UserProfile{
+				UserID: userID,
+				PlatformIDs: domain.PlatformIdentifiers{
+					Telegram: "123456789",
+				},
+			}, nil
+		},
+	}
+
+	handler := NewProfileHandler(mockService)
+	router := mux.NewRouter()
+	handler.RegisterRoutes(router)
+
+	body := `{"telegramID": "123456789"}`
+	req := httptest.NewRequest("PUT", "/api/v1/admin/profiles/user-123/integrations/telegram", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var profile domain.UserProfile
+	err := json.NewDecoder(rec.Body).Decode(&profile)
+	require.NoError(t, err)
+	assert.Equal(t, "123456789", profile.PlatformIDs.Telegram)
+}
+
+// TestProfileHandler_UnlinkTelegram tests unlinking Telegram ID
+func TestProfileHandler_UnlinkTelegram(t *testing.T) {
+	mockService := &MockProfileService{
+		UpdateProfileFunc: func(ctx context.Context, userID string, updates map[string]interface{}) error {
+			assert.Equal(t, "user-123", userID)
+			assert.Equal(t, "", updates["platformIDs.telegram"])
+			return nil
+		},
+	}
+
+	handler := NewProfileHandler(mockService)
+	router := mux.NewRouter()
+	handler.RegisterRoutes(router)
+
+	req := httptest.NewRequest("DELETE", "/api/v1/admin/profiles/user-123/integrations/telegram", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNoContent, rec.Code)
+}
+
+// TestProfileHandler_Search tests searching profiles
+func TestProfileHandler_Search(t *testing.T) {
+	handler := NewProfileHandler(&MockProfileService{})
+	router := mux.NewRouter()
+	handler.RegisterRoutes(router)
+
+	req := httptest.NewRequest("GET", "/api/v1/admin/profiles/search?q=engineer&fields=jobRole,profileInfo", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var response SearchProfilesResponse
+	err := json.NewDecoder(rec.Body).Decode(&response)
+	require.NoError(t, err)
+	assert.Equal(t, "engineer", response.Query)
+	assert.Equal(t, []string{"jobRole", "profileInfo"}, response.Fields)
+}
+
+// TestProfileHandler_Import tests bulk import
+func TestProfileHandler_Import(t *testing.T) {
+	importedCount := 0
+	mockService := &MockProfileService{
+		CreateProfileFunc: func(ctx context.Context, profile *domain.UserProfile) error {
+			importedCount++
+			if profile.UserID == "user-fail" {
+				return errors.New("import failed")
+			}
+			return nil
+		},
+	}
+
+	handler := NewProfileHandler(mockService)
+	router := mux.NewRouter()
+	handler.RegisterRoutes(router)
+
+	body := `{
+		"profiles": [
+			{"userID": "user-1", "primaryEmail": "user1@example.com"},
+			{"userID": "user-fail", "primaryEmail": "fail@example.com"},
+			{"userID": "user-2", "primaryEmail": "user2@example.com"}
+		]
+	}`
+	req := httptest.NewRequest("POST", "/api/v1/admin/profiles/import", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusPartialContent, rec.Code)
+
+	var response ImportResponse
+	err := json.NewDecoder(rec.Body).Decode(&response)
+	require.NoError(t, err)
+	assert.Equal(t, 2, response.Imported)
+	assert.Equal(t, 1, response.Failed)
+	assert.Equal(t, 1, len(response.Errors))
+}
+
+// TestProfileHandler_ExportJSON tests export as JSON
+func TestProfileHandler_ExportJSON(t *testing.T) {
+	profiles := []*domain.UserProfile{
+		{UserID: "user-1", PrimaryEmail: "user1@example.com"},
+		{UserID: "user-2", PrimaryEmail: "user2@example.com"},
+	}
+
+	mockService := &MockProfileService{
+		ListProfilesFunc: func(ctx context.Context, offset, limit int) ([]*domain.UserProfile, error) {
+			return profiles, nil
+		},
+	}
+
+	handler := NewProfileHandler(mockService)
+	router := mux.NewRouter()
+	handler.RegisterRoutes(router)
+
+	req := httptest.NewRequest("GET", "/api/v1/admin/profiles/export?format=json", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+	assert.Contains(t, rec.Header().Get("Content-Disposition"), "profiles.json")
+
+	var exported []*domain.UserProfile
+	err := json.NewDecoder(rec.Body).Decode(&exported)
+	require.NoError(t, err)
+	assert.Equal(t, 2, len(exported))
+}
+
+// TestProfileHandler_ExportCSV tests export as CSV
+func TestProfileHandler_ExportCSV(t *testing.T) {
+	profiles := []*domain.UserProfile{
+		{UserID: "user-1", Moniker: "john", FirstName: "John", LastName: "Doe",
+			PrimaryEmail: "john@example.com", Role: domain.RoleUser, UserType: domain.UserTypeIndividual, Enabled: true},
+	}
+
+	mockService := &MockProfileService{
+		ListProfilesFunc: func(ctx context.Context, offset, limit int) ([]*domain.UserProfile, error) {
+			return profiles, nil
+		},
+	}
+
+	handler := NewProfileHandler(mockService)
+	router := mux.NewRouter()
+	handler.RegisterRoutes(router)
+
+	req := httptest.NewRequest("GET", "/api/v1/admin/profiles/export?format=csv", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "text/csv", rec.Header().Get("Content-Type"))
+	assert.Contains(t, rec.Header().Get("Content-Disposition"), "profiles.csv")
+
+	csv := rec.Body.String()
+	assert.Contains(t, csv, "userID,moniker,firstName")
+	assert.Contains(t, csv, "user-1,john,John,Doe")
+}
+
+// TestProfileHandler_GetOwnProfile tests user getting their own profile
+func TestProfileHandler_GetOwnProfile(t *testing.T) {
+	profile := &domain.UserProfile{
+		UserID:       "user-123",
+		PrimaryEmail: "test@example.com",
+		Role:         domain.RoleUser,
+	}
+
+	mockService := &MockProfileService{
+		GetProfileFunc: func(ctx context.Context, userID string) (*domain.UserProfile, error) {
+			assert.Equal(t, "user-123", userID)
+			return profile, nil
+		},
+	}
+
+	handler := NewProfileHandler(mockService)
+	router := mux.NewRouter()
+	handler.RegisterRoutes(router)
+
+	req := httptest.NewRequest("GET", "/api/v1/profile", nil)
+	req = req.WithContext(context.WithValue(req.Context(), "userID", "user-123"))
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var response domain.UserProfile
+	err := json.NewDecoder(rec.Body).Decode(&response)
+	require.NoError(t, err)
+	assert.Equal(t, "user-123", response.UserID)
+}
+
+// TestProfileHandler_UpdateOwnProfile tests user updating their own profile
+func TestProfileHandler_UpdateOwnProfile(t *testing.T) {
+	mockService := &MockProfileService{
+		UpdateProfileFunc: func(ctx context.Context, userID string, updates map[string]interface{}) error {
+			assert.Equal(t, "user-123", userID)
+			assert.Equal(t, "Jane", updates["firstName"])
+			// Ensure role and userType are not in updates
+			_, hasRole := updates["role"]
+			_, hasUserType := updates["userType"]
+			assert.False(t, hasRole)
+			assert.False(t, hasUserType)
+			return nil
+		},
+		GetProfileFunc: func(ctx context.Context, userID string) (*domain.UserProfile, error) {
+			return &domain.UserProfile{
+				UserID:    userID,
+				FirstName: "Jane",
+			}, nil
+		},
+	}
+
+	handler := NewProfileHandler(mockService)
+	router := mux.NewRouter()
+	handler.RegisterRoutes(router)
+
+	body := `{"firstName": "Jane"}`
+	req := httptest.NewRequest("PUT", "/api/v1/profile", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(context.WithValue(req.Context(), "userID", "user-123"))
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var response UpdateProfileResponse
+	err := json.NewDecoder(rec.Body).Decode(&response)
+	require.NoError(t, err)
+	assert.Equal(t, "Jane", response.Profile.FirstName)
+}
+
+// TestProfileHandler_UpdateOwnProfile_ForbiddenFields tests that users cannot update admin-only fields
+func TestProfileHandler_UpdateOwnProfile_ForbiddenFields(t *testing.T) {
+	handler := NewProfileHandler(&MockProfileService{})
+	router := mux.NewRouter()
+	handler.RegisterRoutes(router)
+
+	body := `{"firstName": "Jane", "role": "admin"}`
+	req := httptest.NewRequest("PUT", "/api/v1/profile", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(context.WithValue(req.Context(), "userID", "user-123"))
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+}
