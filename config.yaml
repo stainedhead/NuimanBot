@@ -20,8 +20,19 @@ llm:
 
 gateways:
   cli:
+    enabled: true
     debug_mode: false
     history_file: ".nuimanbot_history"
+  slack:
+    enabled: false
+    # bot_token: "xoxb-..."
+    # app_token: "xapp-..."
+    # workspace_id: "T..."
+  telegram:
+    enabled: false
+    # token: "bot_token_from_botfather"
+    # webhook_url: "https://yourdomain.com/telegram"
+    # dm_policy: "pairing"
 
 tools:
   entries:
