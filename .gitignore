@@ -44,7 +44,8 @@ dist/
 # vendor/
 
 # Specs directory (local planning artifacts)
-specs/
+specs/archive/
+specs/admin-web-ui/
 
 # Example bots (external projects)
 examples/
