@@ -277,6 +277,7 @@ All feature development uses the `specs/` directory for planning and tracking. E
 specs/
 └── <feature-name>/
     ├── spec.md                  # Feature specification and requirements
+    ├── status.md                # **CRITICAL**: Phase progress tracking (update after each task)
     ├── plan.md                  # Implementation plan and architecture decisions
     ├── tasks.md                 # Task breakdown and progress tracking
     ├── research.md              # Research findings, API docs, examples
@@ -289,19 +290,29 @@ specs/
 Documents are created progressively as the feature develops:
 
 1. **spec.md** - Start here. Define what the feature does, user requirements, acceptance criteria.
-2. **research.md** - Gather API documentation, explore existing code, collect examples.
-3. **data-dictionary.md** - Define domain entities, data structures, types needed.
-4. **plan.md** - Design the implementation approach, identify affected layers, list files to modify.
-5. **tasks.md** - Break down the work into concrete, testable tasks.
-6. **implementation-notes.md** - Record decisions made during implementation, edge cases, lessons learned.
+2. **status.md** - **CRITICAL**: Initialize with phases and update after each task completion. Track overall progress.
+3. **research.md** - Gather API documentation, explore existing code, collect examples.
+4. **data-dictionary.md** - Define domain entities, data structures, types needed.
+5. **plan.md** - Design the implementation approach, identify affected layers, list files to modify.
+6. **tasks.md** - Break down the work into concrete, testable tasks.
+7. **implementation-notes.md** - Record decisions made during implementation, edge cases, lessons learned.
+
+**MANDATORY**: Update `status.md` after completing each task or phase. This file is the single source of truth for progress tracking.
 
 ### Specs Workflow Rules
 
 - **Create feature directory** before starting any new feature work
 - **Update progressively** as understanding evolves - specs are living documents
+- **Update status.md ALWAYS** after completing each task, phase, or milestone - this is MANDATORY
 - **Reference from commits** - link to spec directory in commit messages
 - **Archive completed** - move to `specs/archive/` when feature is fully implemented and stable
 - **Gitignored** - specs are local planning artifacts, not committed to the repository
+
+**Critical Rule**: Every time you complete a task, update `status.md` immediately to reflect:
+- Task completion status
+- Phase progress percentage
+- Any blockers or issues encountered
+- Next steps
 
 ### Example Feature Development Flow
 
@@ -316,16 +327,26 @@ cat > specs/gmail-send-command/spec.md << 'EOF'
 Add `goog mail send` command to send emails via Gmail API...
 EOF
 
-# 3. Research and plan
-# Create research.md, data-dictionary.md, plan.md
+# 3. Initialize status.md - set up phase tracking
+cat > specs/gmail-send-command/status.md << 'EOF'
+# Status: Gmail Send Command
+Phase 1: Research - In Progress (0%)
+...
+EOF
 
-# 4. Break into tasks
+# 4. Research and plan
+# Create research.md, data-dictionary.md, plan.md
+# UPDATE status.md after completing research phase
+
+# 5. Break into tasks
 # Create tasks.md with concrete steps
 
-# 5. Implement following TDD workflow
+# 6. Implement following TDD workflow
 # Update implementation-notes.md as you go
+# **CRITICAL**: Update status.md after EACH task completion
 
-# 6. Archive when complete and stable
+# 7. Archive when complete and stable
+# Ensure status.md shows 100% completion before archiving
 mv specs/gmail-send-command specs/archive/
 ```
 
@@ -350,9 +371,17 @@ When making changes:
 7. **Fix Issues**: Resolve any failures from quality gates
    - If linter suggests improvements, refactor (return to step 5)
 8. **Document**: Update all affected documentation files
-9. **Final Verify**: Re-run quality gates to confirm all pass
+9. **Update Status**: **MANDATORY** - Update `specs/<feature-name>/status.md` with task completion
+   - Mark task as complete
+   - Update phase progress percentage
+   - Note any blockers or issues
+   - Update overall completion status
+10. **Final Verify**: Re-run quality gates to confirm all pass
 
-**IMPORTANT**: Never mark a task complete until all quality gates pass. The executable must build successfully to `bin/goog` and run without errors (`./bin/goog --help`).
+**CRITICAL**: After completing ANY task:
+1. Update `status.md` immediately - this is non-negotiable
+2. Never mark a task complete until all quality gates pass
+3. The executable must build successfully to `bin/nuimanbot` and run without errors (`./bin/nuimanbot --help`)
 
 ## Git Configuration
 
@@ -431,6 +460,7 @@ dist/
 ├── specs/                 # Feature specs (gitignored)
 │   ├── <feature-name>/
 │   │   ├── spec.md
+│   │   ├── status.md              # **Update after each task completion**
 │   │   ├── plan.md
 │   │   ├── tasks.md
 │   │   ├── research.md
