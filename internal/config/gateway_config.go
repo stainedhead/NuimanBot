@@ -30,6 +30,7 @@ type SlackConfig struct {
 
 // CLIConfig configures the CLI Gateway.
 type CLIConfig struct {
+	Enabled     bool   `yaml:"enabled"`
 	HistoryFile string `yaml:"history_file"`
 	DebugMode   bool   `yaml:"debug_mode"`
 }

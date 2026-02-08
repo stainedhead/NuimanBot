@@ -30,14 +30,18 @@ import (
 	ollama "nuimanbot/internal/infrastructure/llm/ollama"
 	openai "nuimanbot/internal/infrastructure/llm/openai"
 	"nuimanbot/internal/infrastructure/logger"
+	infrasecurity "nuimanbot/internal/infrastructure/security"
 	skillinfra "nuimanbot/internal/infrastructure/skill"
+	"nuimanbot/internal/infrastructure/storage"
 	"nuimanbot/internal/tools/calculator"
 	"nuimanbot/internal/tools/datetime"
 	"nuimanbot/internal/tools/notes"
 	"nuimanbot/internal/tools/weather"
 	"nuimanbot/internal/tools/websearch"
+	"nuimanbot/internal/usecase/botmgmt"
 	"nuimanbot/internal/usecase/chat"
 	"nuimanbot/internal/usecase/memory"
+	"nuimanbot/internal/usecase/profile"
 	"nuimanbot/internal/usecase/security"
 	skillusecase "nuimanbot/internal/usecase/skill"
 	"nuimanbot/internal/usecase/tool"
@@ -597,6 +601,28 @@ func (app *application) Run(ctx context.Context) error {
 	// Track active gateways for proper shutdown
 	var gateways []domain.Gateway
 
+	// Initialize File Storage for Admin Features (Phase 2 & 3)
+	dataDir := "./data"
+	usersFilePath := dataDir + "/users.json"
+	botsFilePath := dataDir + "/bots.json"
+
+	// Initialize User Profile Repository and Service (Phase 2)
+	profileRepo := storage.NewFileUserProfileRepository(usersFilePath, app.Config.Security.EncryptionKey)
+	profileService := profile.NewService(profileRepo, app.SecurityService)
+	slog.Info("User profile management initialized", "file", usersFilePath)
+
+	// Initialize Bot Config Repository and Service (Phase 3)
+	// Get encryption key from security config
+	encryptionKey := app.Config.Security.EncryptionKey
+	if len(encryptionKey) != 32 {
+		slog.Warn("Encryption key must be 32 bytes for AES-256, using default (INSECURE)")
+		encryptionKey = "default-32-byte-key-changeme!!"
+	}
+	botEncryption := infrasecurity.NewEncryptionService(encryptionKey)
+	botConfigRepo := storage.NewFileBotConfigRepository(botsFilePath, botEncryption)
+	botMgmtService := botmgmt.NewService(botConfigRepo)
+	slog.Info("Bot management initialized", "file", botsFilePath)
+
 	// Initialize Agent Skills System (Phase 6: Config Integration)
 	skillRepo := skillinfra.NewFilesystemSkillRepository()
 	skillRegistry := skillusecase.NewInMemorySkillRegistry(skillRepo)
@@ -633,6 +659,23 @@ func (app *application) Run(ctx context.Context) error {
 	// Initialize CLI gateway
 	cliGateway := cli.NewGateway(&app.Config.Gateways.CLI)
 	cliGateway.SetSkillHandler(skillHandler) // Enable /skill-name command support
+
+	// Initialize admin command handlers (Phase 2 & 3)
+	profileHandler := cli.NewAdminProfileCommandHandler(profileService)
+	cliGateway.SetProfileHandler(profileHandler)
+	slog.Info("Profile admin commands initialized")
+
+	botHandler := cli.NewAdminBotCommandHandler(botMgmtService)
+	cliGateway.SetBotHandler(botHandler)
+	slog.Info("Bot admin commands initialized")
+
+	// Set current user as admin for CLI (CLI users are trusted)
+	cliGateway.SetCurrentUser(&domain.User{
+		ID:       "cli_admin",
+		Username: "cli_administrator",
+		Role:     domain.RoleAdmin,
+	})
+
 	app.connectGateway(cliGateway)
 
 	// Phase 7: Connect skill handler to chat service through gateway's message handler

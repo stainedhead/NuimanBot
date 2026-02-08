@@ -25,6 +25,8 @@ type Gateway struct {
 	Cfg            *config.CLIConfig
 	messageHandler domain.MessageHandler
 	adminHandler   *AdminCommandHandler
+	profileHandler *AdminProfileCommandHandler
+	botHandler     *AdminBotCommandHandler
 	skillHandler   SkillCommandHandler
 	currentUser    *domain.User // Current CLI user for admin commands
 	// stdin/stdout for testing purposes
@@ -96,7 +98,73 @@ func (g *Gateway) Start(ctx context.Context) error {
 				return nil
 			}
 
-			// Check if this is an admin command
+			// Check if this is a bot admin command
+			if IsBotCommand(input) {
+				if g.botHandler == nil {
+					if _, err := fmt.Fprintln(g.Writer, "Error: Bot admin commands not available."); err != nil {
+						fmt.Fprintf(os.Stderr, "Error writing to CLI output: %v\n", err)
+					}
+					continue
+				}
+
+				// Use current user or default to a non-admin for authorization
+				user := g.currentUser
+				if user == nil {
+					// Default CLI user (non-admin) for security
+					user = &domain.User{
+						ID:   "cli_default",
+						Role: domain.RoleUser,
+					}
+				}
+
+				// Handle bot admin command
+				result, err := g.botHandler.HandleBotCommand(ctx, user, input)
+				if err != nil {
+					if _, writeErr := fmt.Fprintf(g.Writer, "Error: %v\n", err); writeErr != nil {
+						fmt.Fprintf(os.Stderr, "Error writing to CLI output: %v\n", writeErr)
+					}
+				} else {
+					if _, writeErr := fmt.Fprintln(g.Writer, result); writeErr != nil {
+						fmt.Fprintf(os.Stderr, "Error writing to CLI output: %v\n", writeErr)
+					}
+				}
+				continue
+			}
+
+			// Check if this is a profile admin command
+			if IsProfileCommand(input) {
+				if g.profileHandler == nil {
+					if _, err := fmt.Fprintln(g.Writer, "Error: Profile admin commands not available."); err != nil {
+						fmt.Fprintf(os.Stderr, "Error writing to CLI output: %v\n", err)
+					}
+					continue
+				}
+
+				// Use current user or default to a non-admin for authorization
+				user := g.currentUser
+				if user == nil {
+					// Default CLI user (non-admin) for security
+					user = &domain.User{
+						ID:   "cli_default",
+						Role: domain.RoleUser,
+					}
+				}
+
+				// Handle profile admin command
+				result, err := g.profileHandler.HandleProfileCommand(ctx, user, input)
+				if err != nil {
+					if _, writeErr := fmt.Fprintf(g.Writer, "Error: %v\n", err); writeErr != nil {
+						fmt.Fprintf(os.Stderr, "Error writing to CLI output: %v\n", writeErr)
+					}
+				} else {
+					if _, writeErr := fmt.Fprintln(g.Writer, result); writeErr != nil {
+						fmt.Fprintf(os.Stderr, "Error writing to CLI output: %v\n", writeErr)
+					}
+				}
+				continue
+			}
+
+			// Check if this is an admin user command
 			if IsAdminCommand(input) {
 				if g.adminHandler == nil {
 					if _, err := fmt.Fprintln(g.Writer, "Error: Admin commands not available."); err != nil {
@@ -216,6 +284,16 @@ func (g *Gateway) OnMessage(handler domain.MessageHandler) {
 // SetAdminHandler sets the admin command handler for the gateway.
 func (g *Gateway) SetAdminHandler(handler *AdminCommandHandler) {
 	g.adminHandler = handler
+}
+
+// SetProfileHandler sets the admin profile command handler for the gateway.
+func (g *Gateway) SetProfileHandler(handler *AdminProfileCommandHandler) {
+	g.profileHandler = handler
+}
+
+// SetBotHandler sets the admin bot command handler for the gateway.
+func (g *Gateway) SetBotHandler(handler *AdminBotCommandHandler) {
+	g.botHandler = handler
 }
 
 // SetCurrentUser sets the current user for admin command authorization.
