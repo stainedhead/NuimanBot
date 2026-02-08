@@ -35,6 +35,11 @@ dist/
 *.pem
 *.key
 
+# Database files
+*.db
+*.db-shm
+*.db-wal
+
 # Vendor (if not committing)
 # vendor/
 
