@@ -61,7 +61,6 @@ func LoadConfig(configPaths ...string) (*NuimanBotConfig, error) {
 		delete(llmSettings, "anthropic")
 		delete(llmSettings, "openai")
 		delete(llmSettings, "ollama")
-		delete(llmSettings, "bedrock")
 	}
 
 	decoderConfig := &mapstructure.DecoderConfig{
@@ -145,6 +144,24 @@ func LoadConfig(configPaths ...string) (*NuimanBotConfig, error) {
 	if v.IsSet("llm.ollama.default_model") {
 		cfg.LLM.Ollama.DefaultModel = v.GetString("llm.ollama.default_model")
 	}
+
+	// Bedrock
+	if v.IsSet("llm.bedrock.aws_region") {
+		cfg.LLM.Bedrock.AWSRegion = v.GetString("llm.bedrock.aws_region")
+	}
+	if v.IsSet("llm.bedrock.aws_profile") {
+		cfg.LLM.Bedrock.AWSProfile = v.GetString("llm.bedrock.aws_profile")
+	}
+	if v.IsSet("llm.bedrock.default_model") {
+		cfg.LLM.Bedrock.DefaultModel = v.GetString("llm.bedrock.default_model")
+	}
+	if v.IsSet("llm.bedrock.max_retries") {
+		cfg.LLM.Bedrock.MaxRetries = v.GetInt("llm.bedrock.max_retries")
+	}
+	if v.IsSet("llm.bedrock.request_timeout") {
+		cfg.LLM.Bedrock.RequestTimeout = v.GetInt("llm.bedrock.request_timeout")
+	}
+
 	if v.IsSet("gateways.telegram.token") {
 		cfg.Gateways.Telegram.Token = domain.NewSecureStringFromString(v.GetString("gateways.telegram.token"))
 	}
@@ -216,6 +233,27 @@ func applyEnvOverrides(cfg *NuimanBotConfig) {
 	// LLM config
 	if val := os.Getenv("NUIMANBOT_LLM_DEFAULTMODEL_PRIMARY"); val != "" {
 		cfg.LLM.DefaultModel.Primary = val
+	}
+
+	// Bedrock configuration from environment
+	if val := os.Getenv("AWS_REGION"); val != "" {
+		cfg.LLM.Bedrock.AWSRegion = val
+	}
+	if val := os.Getenv("AWS_PROFILE"); val != "" {
+		cfg.LLM.Bedrock.AWSProfile = val
+	}
+	if val := os.Getenv("BEDROCK_DEFAULT_MODEL"); val != "" {
+		cfg.LLM.Bedrock.DefaultModel = val
+	}
+	if val := os.Getenv("BEDROCK_MAX_RETRIES"); val != "" {
+		if i, err := strconv.Atoi(val); err == nil {
+			cfg.LLM.Bedrock.MaxRetries = i
+		}
+	}
+	if val := os.Getenv("BEDROCK_REQUEST_TIMEOUT"); val != "" {
+		if i, err := strconv.Atoi(val); err == nil {
+			cfg.LLM.Bedrock.RequestTimeout = i
+		}
 	}
 
 	// Gateway config

@@ -10,7 +10,7 @@ An AI agent framework built with Clean Architecture principles, featuring LLM in
 
 ### Core Architecture
 - **Clean Architecture**: Strict layer separation (Domain, Use Case, Adapter, Infrastructure)
-- **Multi-LLM Support**: Anthropic Claude, OpenAI GPT, and Ollama (local models)
+- **Multi-LLM Support**: Anthropic Claude, OpenAI GPT, AWS Bedrock, and Ollama (local models)
 - **Multi-Provider Fallback**: Automatic failover across LLM providers for high availability
 - **Streaming Responses**: Real-time token-by-token LLM responses with graceful degradation
 - **Rich Tool Library**: 12 built-in tools (5 core + 7 developer productivity)
@@ -63,9 +63,10 @@ An AI agent framework built with Clean Architecture principles, featuring LLM in
 
 - Go 1.24 or later (toolchain specified in go.mod)
 - SQLite3
-- At least one LLM provider API key:
-  - Anthropic Claude (recommended)
-  - OpenAI GPT
+- At least one LLM provider:
+  - Anthropic Claude (API key required)
+  - OpenAI GPT (API key required)
+  - AWS Bedrock (AWS credentials required)
   - Ollama (for local models, no API key needed)
 - Optional: OpenWeatherMap API key (for weather tool)
 - Optional: Telegram Bot Token (for Telegram gateway)
@@ -111,6 +112,10 @@ llm:
   openai:
     api_key: "sk-your-openai-key"
     base_url: "https://api.openai.com/v1"  # optional
+  bedrock:
+    aws_region: "us-east-1"  # required
+    aws_profile: ""  # optional: uses default AWS credentials if empty
+    default_model: "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
   ollama:
     base_url: "http://localhost:11434"  # for local models
 
@@ -155,6 +160,11 @@ export NUIMANBOT_LLM_ANTHROPIC_APIKEY="sk-ant-your-key"
 export NUIMANBOT_LLM_OPENAI_APIKEY="sk-your-openai-key"
 export NUIMANBOT_LLM_OPENAI_BASEURL="https://api.openai.com/v1"  # optional
 
+# AWS Bedrock
+export AWS_REGION="us-east-1"
+export AWS_PROFILE="your-profile"  # optional
+export BEDROCK_DEFAULT_MODEL="us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+
 # Ollama (local models)
 export NUIMANBOT_LLM_OLLAMA_BASEURL="http://localhost:11434"
 
@@ -188,7 +198,11 @@ export NUIMANBOT_LLM_ANTHROPIC_APIKEY="sk-ant-your-key-here"
 # Option B: OpenAI GPT
 export NUIMANBOT_LLM_OPENAI_APIKEY="sk-your-openai-key"
 
-# Option C: Ollama (local)
+# Option C: AWS Bedrock
+export AWS_REGION="us-east-1"
+# AWS credentials via environment, profile, or IAM role
+
+# Option D: Ollama (local)
 export NUIMANBOT_LLM_OLLAMA_BASEURL="http://localhost:11434"
 
 # Optional: Weather tool

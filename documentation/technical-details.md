@@ -32,7 +32,7 @@ NuimanBot follows **Clean Architecture** with strict dependency inversion:
 ```
 ┌─────────────────────────────────────────────────┐
 │  Infrastructure Layer                           │
-│  • LLM Clients (Anthropic, OpenAI, Ollama)     │
+│  • LLM Clients (Anthropic, OpenAI, Bedrock, Ollama) │
 │  • Encryption (AES-256-GCM)                     │
 │  • Caching (In-memory LRU)                      │
 │  • Metrics (Prometheus)                         │
@@ -120,7 +120,7 @@ func (s *Service) BuildContextWindow(
 ) ([]domain.Message, int)
 ```
 
-- Provider-aware limits: Anthropic (200k), OpenAI (128k), Ollama (32k)
+- Provider-aware limits: Anthropic (200k), OpenAI (128k), Bedrock (200k), Ollama (32k)
 - Automatic truncation of oldest messages
 - Reserved tokens for response generation (2000)
 
@@ -847,8 +847,9 @@ type LLMService interface {
 ```
 
 **Supported Providers:**
-- `anthropic` - Claude 3 family (Opus, Sonnet, Haiku)
-- `openai` - GPT-4, GPT-3.5
+- `anthropic` - Claude 3/3.5 family (Opus, Sonnet, Haiku) via Anthropic API
+- `openai` - GPT-4, GPT-3.5 via OpenAI API
+- `bedrock` - Claude 3/3.5 family via AWS Bedrock (Converse API)
 - `ollama` - Local models (Llama, Mistral, etc.)
 
 ### Tool Interface
@@ -905,7 +906,16 @@ type Tool interface {
 NUIMANBOT_SERVER_ENVIRONMENT=production
 NUIMANBOT_SERVER_LOGLEVEL=warn
 NUIMANBOT_SECURITY_INPUTMAXLENGTH=4096
+
+# LLM Provider Options:
 NUIMANBOT_LLM_ANTHROPIC_APIKEY=sk-ant-...
+# OR
+AWS_REGION=us-east-1
+AWS_PROFILE=your-profile  # optional
+# OR
+NUIMANBOT_LLM_OPENAI_APIKEY=sk-...
+# OR
+NUIMANBOT_LLM_OLLAMA_BASEURL=http://localhost:11434
 ```
 
 ### Configuration Precedence

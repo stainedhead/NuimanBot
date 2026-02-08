@@ -38,6 +38,40 @@ llm:
     #   type: ollama
     #   base_url: "http://localhost:11434"
 
+    # AWS Bedrock (Claude via Bedrock)
+    # - id: bedrock-main
+    #   type: bedrock
+    #   # Uses AWS credential chain (environment, profile, IAM role)
+    #   # Configure via environment variables or bedrock section below
+
+  # Provider-specific configuration
+  # anthropic:
+  #   api_key: "your-api-key"  # Can also be set via env
+
+  # openai:
+  #   api_key: "your-api-key"
+  #   base_url: "https://api.openai.com/v1"
+  #   default_model: "gpt-4"
+  #   organization: "your-org-id"
+
+  # ollama:
+  #   base_url: "http://localhost:11434"
+  #   default_model: "llama2"
+
+  # bedrock:
+  #   aws_region: "us-east-1"           # Required: AWS region
+  #   aws_profile: ""                   # Optional: AWS profile (uses default if empty)
+  #   default_model: "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+  #   max_retries: 3                    # Default: 3
+  #   request_timeout: 120              # Default: 120 seconds
+  #
+  # Environment variables for Bedrock:
+  #   AWS_REGION - AWS region (overrides config)
+  #   AWS_PROFILE - AWS profile name
+  #   BEDROCK_DEFAULT_MODEL - Default Bedrock model ID
+  #   BEDROCK_MAX_RETRIES - Max retry attempts
+  #   BEDROCK_REQUEST_TIMEOUT - Request timeout in seconds
+
 # Gateway Configuration
 gateways:
   cli:

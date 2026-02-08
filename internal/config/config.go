@@ -60,6 +60,15 @@ type OllamaProviderConfig struct {
 	DefaultModel string `yaml:"default_model"`
 }
 
+// BedrockProviderConfig holds AWS Bedrock-specific provider configuration.
+type BedrockProviderConfig struct {
+	AWSRegion      string `yaml:"aws_region"`      // Required: AWS region (e.g., us-east-1)
+	AWSProfile     string `yaml:"aws_profile"`     // Optional: AWS profile name
+	DefaultModel   string `yaml:"default_model"`   // Optional: Default Bedrock model ID
+	MaxRetries     int    `yaml:"max_retries"`     // Default: 3
+	RequestTimeout int    `yaml:"request_timeout"` // Default: 120 seconds
+}
+
 // LLMConfig encapsulates all LLM-related configurations.
 
 type LLMConfig struct {
@@ -72,12 +81,7 @@ type LLMConfig struct {
 	Anthropic AnthropicProviderConfig `yaml:"anthropic"`
 	OpenAI    OpenAIProviderConfig    `yaml:"openai"`
 	Ollama    OllamaProviderConfig    `yaml:"ollama"`
-
-	Bedrock struct {
-		AWSRegion string `yaml:"aws_region"`
-
-		AWSProfile string `yaml:"aws_profile"`
-	} `yaml:"bedrock"`
+	Bedrock   BedrockProviderConfig   `yaml:"bedrock"`
 }
 
 // MCPClientConfig holds MCP client-specific configuration.

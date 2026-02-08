@@ -26,6 +26,7 @@ import (
 	"nuimanbot/internal/infrastructure/crypto"
 	"nuimanbot/internal/infrastructure/health"
 	anthropic "nuimanbot/internal/infrastructure/llm/anthropic"
+	bedrock "nuimanbot/internal/infrastructure/llm/bedrock"
 	ollama "nuimanbot/internal/infrastructure/llm/ollama"
 	openai "nuimanbot/internal/infrastructure/llm/openai"
 	"nuimanbot/internal/infrastructure/logger"
@@ -276,6 +277,12 @@ func initializeLLMService(cfg *config.NuimanBotConfig) (domain.LLMService, error
 		return anthropic.NewClient(providerCfg)
 	}
 
+	// Check Bedrock
+	if cfg.LLM.Bedrock.AWSRegion != "" {
+		slog.Info("Initializing LLM provider", "provider", "bedrock", "region", cfg.LLM.Bedrock.AWSRegion, "source", "legacy_config")
+		return bedrock.NewClient(&cfg.LLM.Bedrock)
+	}
+
 	// Fallback to generic Providers array (old way)
 	if len(cfg.LLM.Providers) > 0 {
 		// For MVP, use the first provider
@@ -304,6 +311,13 @@ func initializeLLMService(cfg *config.NuimanBotConfig) (domain.LLMService, error
 				ollamaCfg.BaseURL = "http://localhost:11434" // Default Ollama URL
 			}
 			return ollama.New(ollamaCfg), nil
+		case domain.LLMProviderBedrock:
+			slog.Info("Initializing LLM provider", "provider", "bedrock", "source", "providers_array")
+			// For Bedrock in providers array, use BaseURL as region
+			bedrockCfg := &config.BedrockProviderConfig{
+				AWSRegion: provider.BaseURL, // Use BaseURL field to store region
+			}
+			return bedrock.NewClient(bedrockCfg)
 		default:
 			return nil, fmt.Errorf("unsupported LLM provider: %s", provider.Type)
 		}
