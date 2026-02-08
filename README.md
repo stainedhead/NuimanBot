@@ -24,6 +24,20 @@ An AI agent framework built with Clean Architecture principles, featuring LLM in
 - **Secure Credentials**: AES-256-GCM encrypted credential vault with key rotation support
 - **Input Validation**: Comprehensive protection against injection attacks and malicious input
 - **Audit Logging**: Security event tracking for compliance and monitoring
+- **API Authentication**: Bearer token authentication with API key management
+- **Token Encryption**: AES-256-GCM encryption for bot tokens at rest
+
+### Administration & Management
+- **REST API**: Complete administrative REST API with full CRUD operations
+- **User Profile Management**: Comprehensive user profiles with multi-platform integration (Slack, Telegram, CLI)
+- **Bot Management**: Database-driven bot configuration with public/private bot support
+- **Configuration Hot Reload**: Update configuration without service restart
+- **Platform Integration**: Link user profiles to Slack/Telegram accounts
+- **Bulk Operations**: Import/Export users and configurations (JSON/CSV)
+- **User Self-Service**: Non-admin users can manage own profiles and bots
+- **CLI Administration**: Full-featured CLI for local administration
+- **Search & Filtering**: Advanced search across user profiles
+- **Agent Personalization**: Per-user agent preferences and customization
 
 ### Data Management
 - **SQLite Storage**: Persistent conversations, users, and notes with full CRUD
@@ -935,6 +949,10 @@ For detailed progress tracking and implementation plans, see `POST_REVIEW_IMPROV
 
 ### Administration
 
+- **[Admin Guide](documentation/admin-guide.md)** - Complete administration guide (REST API, CLI, user/bot management)
+- **[API Reference](documentation/api-reference.md)** - REST API endpoint documentation
+- **[Configuration Reference](documentation/configuration-reference.md)** - Configuration file reference
+- **[Migration Guide](documentation/migration-guide.md)** - Migration from old architecture
 - **[CLI Administration Guide](support_docs/cli-admin-guide.md)** - Managing users, roles, and permissions
 
 ### Skills & Features
