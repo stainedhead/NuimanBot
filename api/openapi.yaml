@@ -1,0 +1,1246 @@
+openapi: 3.0.3
+info:
+  title: NuimanBot Admin API
+  description: |
+    REST API for NuimanBot administration, user profile management, bot configuration, and server monitoring.
+
+    This API requires Bearer token authentication for all endpoints. Admin role is required for all operations.
+
+    ## Authentication
+
+    All API requests must include a valid Bearer token in the Authorization header:
+    ```
+    Authorization: Bearer <your-api-key>
+    ```
+
+    The API key is associated with a user profile and must belong to a user with the `admin` role.
+
+    ## Error Responses
+
+    The API uses standard HTTP status codes:
+    - `200 OK` - Request succeeded
+    - `201 Created` - Resource created successfully
+    - `204 No Content` - Resource deleted successfully
+    - `400 Bad Request` - Invalid request data
+    - `401 Unauthorized` - Missing or invalid authentication
+    - `403 Forbidden` - Insufficient permissions or disabled account
+    - `404 Not Found` - Resource not found
+    - `500 Internal Server Error` - Server error
+
+  version: 1.0.0
+  contact:
+    name: NuimanBot Development
+    email: admin@nuimanbot.example.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+  - url: https://api.nuimanbot.example.com
+    description: Production server
+
+tags:
+  - name: Profiles
+    description: User profile management operations
+  - name: Bots
+    description: Bot configuration and management
+  - name: Config
+    description: Server configuration management
+  - name: Server
+    description: Server status and monitoring
+
+security:
+  - BearerAuth: []
+
+paths:
+  # Profile Management Endpoints
+
+  /api/v1/admin/profiles:
+    get:
+      tags:
+        - Profiles
+      summary: List user profiles
+      description: Retrieve a paginated list of all user profiles
+      operationId: listProfiles
+      parameters:
+        - name: offset
+          in: query
+          description: Number of profiles to skip (for pagination)
+          required: false
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+        - name: limit
+          in: query
+          description: Maximum number of profiles to return
+          required: false
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 500
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    post:
+      tags:
+        - Profiles
+      summary: Create user profile
+      description: Create a new user profile
+      operationId: createProfile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateProfileRequest'
+            examples:
+              basic:
+                summary: Basic user profile
+                value:
+                  userID: "user-123"
+                  primaryEmail: "user@example.com"
+                  firstName: "John"
+                  lastName: "Doe"
+                  role: "user"
+              enterprise:
+                summary: Enterprise user with full details
+                value:
+                  userID: "ent-456"
+                  primaryEmail: "john.doe@company.com"
+                  firstName: "John"
+                  lastName: "Doe"
+                  jobRole: "Software Engineer"
+                  userType: "enterprise"
+                  role: "user"
+                  timezone: "America/New_York"
+                  primaryLanguage: "en"
+      responses:
+        '201':
+          description: Profile created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/v1/admin/profiles/{id}:
+    get:
+      tags:
+        - Profiles
+      summary: Get user profile
+      description: Retrieve a specific user profile by ID
+      operationId: getProfile
+      parameters:
+        - name: id
+          in: path
+          description: User ID
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    put:
+      tags:
+        - Profiles
+      summary: Update user profile
+      description: Update an existing user profile (partial updates supported)
+      operationId: updateProfile
+      parameters:
+        - name: id
+          in: path
+          description: User ID
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProfileRequest'
+            examples:
+              timezone:
+                summary: Update timezone
+                value:
+                  timezone: "Pacific/Auckland"
+              multiple:
+                summary: Update multiple fields
+                value:
+                  firstName: "Jane"
+                  lastName: "Smith"
+                  timezone: "Europe/London"
+                  enabled: true
+      responses:
+        '200':
+          description: Profile updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateProfileResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      tags:
+        - Profiles
+      summary: Delete user profile
+      description: Delete a user profile by ID
+      operationId: deleteProfile
+      parameters:
+        - name: id
+          in: path
+          description: User ID
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Profile deleted successfully
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # Slack Bot Management Endpoints
+
+  /api/v1/admin/bots/slack:
+    get:
+      tags:
+        - Bots
+      summary: List Slack bots
+      description: Retrieve all configured Slack bots (tokens are masked)
+      operationId: listSlackBots
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SlackBotListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+    post:
+      tags:
+        - Bots
+      summary: Create Slack bot
+      description: Create a new Slack bot configuration
+      operationId: createSlackBot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SlackBotConfig'
+            example:
+              botID: "slack-bot-1"
+              botName: "Production Bot"
+              botType: "private"
+              enabled: true
+              slackBotToken: "xoxb-your-bot-token"
+              slackAppToken: "xapp-your-app-token"
+              slackSigningSecret: "your-signing-secret"
+      responses:
+        '201':
+          description: Bot created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SlackBotConfig'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/v1/admin/bots/slack/{id}:
+    get:
+      tags:
+        - Bots
+      summary: Get Slack bot
+      description: Retrieve a specific Slack bot configuration (tokens masked)
+      operationId: getSlackBot
+      parameters:
+        - name: id
+          in: path
+          description: Bot ID
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SlackBotConfig'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    put:
+      tags:
+        - Bots
+      summary: Update Slack bot
+      description: Update an existing Slack bot configuration
+      operationId: updateSlackBot
+      parameters:
+        - name: id
+          in: path
+          description: Bot ID
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SlackBotConfig'
+      responses:
+        '200':
+          description: Bot updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SlackBotConfig'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+    delete:
+      tags:
+        - Bots
+      summary: Delete Slack bot
+      description: Delete a Slack bot configuration
+      operationId: deleteSlackBot
+      parameters:
+        - name: id
+          in: path
+          description: Bot ID
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Bot deleted successfully
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/v1/admin/bots/slack/{id}/enable:
+    post:
+      tags:
+        - Bots
+      summary: Enable Slack bot
+      description: Enable a Slack bot
+      operationId: enableSlackBot
+      parameters:
+        - name: id
+          in: path
+          description: Bot ID
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Bot enabled successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/v1/admin/bots/slack/{id}/disable:
+    post:
+      tags:
+        - Bots
+      summary: Disable Slack bot
+      description: Disable a Slack bot
+      operationId: disableSlackBot
+      parameters:
+        - name: id
+          in: path
+          description: Bot ID
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Bot disabled successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  # Telegram Bot Management Endpoints
+
+  /api/v1/admin/bots/telegram:
+    get:
+      tags:
+        - Bots
+      summary: List Telegram bots
+      description: Retrieve all configured Telegram bots (tokens masked)
+      operationId: listTelegramBots
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TelegramBotListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+    post:
+      tags:
+        - Bots
+      summary: Create Telegram bot
+      description: Create a new Telegram bot configuration
+      operationId: createTelegramBot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TelegramBotConfig'
+      responses:
+        '201':
+          description: Bot created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TelegramBotConfig'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/v1/admin/bots/telegram/{id}:
+    get:
+      tags:
+        - Bots
+      summary: Get Telegram bot
+      description: Retrieve a specific Telegram bot configuration
+      operationId: getTelegramBot
+      parameters:
+        - name: id
+          in: path
+          description: Bot ID
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TelegramBotConfig'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    put:
+      tags:
+        - Bots
+      summary: Update Telegram bot
+      description: Update an existing Telegram bot configuration
+      operationId: updateTelegramBot
+      parameters:
+        - name: id
+          in: path
+          description: Bot ID
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TelegramBotConfig'
+      responses:
+        '200':
+          description: Bot updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TelegramBotConfig'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+    delete:
+      tags:
+        - Bots
+      summary: Delete Telegram bot
+      description: Delete a Telegram bot configuration
+      operationId: deleteTelegramBot
+      parameters:
+        - name: id
+          in: path
+          description: Bot ID
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Bot deleted successfully
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/v1/admin/bots/telegram/{id}/enable:
+    post:
+      tags:
+        - Bots
+      summary: Enable Telegram bot
+      description: Enable a Telegram bot
+      operationId: enableTelegramBot
+      parameters:
+        - name: id
+          in: path
+          description: Bot ID
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Bot enabled successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/v1/admin/bots/telegram/{id}/disable:
+    post:
+      tags:
+        - Bots
+      summary: Disable Telegram bot
+      description: Disable a Telegram bot
+      operationId: disableTelegramBot
+      parameters:
+        - name: id
+          in: path
+          description: Bot ID
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Bot disabled successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  # Configuration Management Endpoints
+
+  /api/v1/admin/config:
+    get:
+      tags:
+        - Config
+      summary: Get configuration
+      description: Retrieve current server configuration
+      operationId: getConfig
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+    put:
+      tags:
+        - Config
+      summary: Update configuration
+      description: Update server configuration
+      operationId: updateConfig
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Configuration updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/v1/admin/config/reload:
+    post:
+      tags:
+        - Config
+      summary: Reload configuration
+      description: Reload configuration from file
+      operationId: reloadConfig
+      responses:
+        '200':
+          description: Configuration reloaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/v1/admin/config/validate:
+    post:
+      tags:
+        - Config
+      summary: Validate configuration
+      description: Validate a configuration without applying it
+      operationId: validateConfig
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Configuration is valid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationResponse'
+        '400':
+          description: Configuration is invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  # Server Monitoring Endpoints
+
+  /api/v1/admin/status:
+    get:
+      tags:
+        - Server
+      summary: Get server status
+      description: Retrieve current server status including uptime, version, and memory usage
+      operationId: getServerStatus
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServerStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/v1/admin/metrics:
+    get:
+      tags:
+        - Server
+      summary: Get server metrics
+      description: Retrieve server performance metrics
+      operationId: getServerMetrics
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServerMetrics'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/v1/admin/logs:
+    get:
+      tags:
+        - Server
+      summary: Get server logs
+      description: Retrieve recent server logs
+      operationId: getServerLogs
+      parameters:
+        - name: level
+          in: query
+          description: Log level filter (all, error, warn, info, debug)
+          required: false
+          schema:
+            type: string
+            enum: [all, error, warn, info, debug]
+            default: all
+        - name: limit
+          in: query
+          description: Maximum number of log entries to return
+          required: false
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 500
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LogsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: API Key
+      description: |
+        Bearer token authentication using API key.
+
+        Example: `Authorization: Bearer your-api-key-here`
+
+  schemas:
+    UserProfile:
+      type: object
+      required:
+        - userID
+        - primaryEmail
+        - role
+      properties:
+        userID:
+          type: string
+          description: Unique user identifier
+          example: "user-123"
+        moniker:
+          type: string
+          description: User's preferred display name
+          example: "jdoe"
+        firstName:
+          type: string
+          example: "John"
+        lastName:
+          type: string
+          example: "Doe"
+        nickName:
+          type: string
+          example: "Johnny"
+        primaryEmail:
+          type: string
+          format: email
+          example: "john.doe@example.com"
+        backupEmail:
+          type: string
+          format: email
+          example: "j.doe@personal.com"
+        mobilePhone:
+          type: string
+          example: "+1-555-123-4567"
+        primaryLanguage:
+          type: string
+          example: "en"
+          default: "en"
+        secondaryLanguage:
+          type: string
+          example: "es"
+        timezone:
+          type: string
+          example: "America/New_York"
+          default: "UTC"
+        primaryLocation:
+          type: string
+          example: "New York, NY"
+        jobRole:
+          type: string
+          example: "Software Engineer"
+        userType:
+          type: string
+          enum: [individual, enterprise, academic]
+          default: individual
+        role:
+          type: string
+          enum: [admin, user, service]
+          default: user
+        profileInfo:
+          type: string
+          description: Additional context about the user
+        enabled:
+          type: boolean
+          default: true
+        platformIDs:
+          $ref: '#/components/schemas/PlatformIdentifiers'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    PlatformIdentifiers:
+      type: object
+      properties:
+        slackID:
+          type: string
+          example: "U12345678"
+        telegramID:
+          type: string
+          example: "123456789"
+        discordID:
+          type: string
+          example: "987654321"
+
+    CreateProfileRequest:
+      type: object
+      required:
+        - userID
+        - primaryEmail
+      properties:
+        userID:
+          type: string
+        moniker:
+          type: string
+        firstName:
+          type: string
+        lastName:
+          type: string
+        nickName:
+          type: string
+        primaryEmail:
+          type: string
+          format: email
+        backupEmail:
+          type: string
+          format: email
+        mobilePhone:
+          type: string
+        primaryLanguage:
+          type: string
+        secondaryLanguage:
+          type: string
+        timezone:
+          type: string
+        primaryLocation:
+          type: string
+        jobRole:
+          type: string
+        userType:
+          type: string
+          enum: [individual, enterprise, academic]
+        role:
+          type: string
+          enum: [admin, user, service]
+        profileInfo:
+          type: string
+        platformIDs:
+          $ref: '#/components/schemas/PlatformIdentifiers'
+
+    UpdateProfileRequest:
+      type: object
+      description: All fields are optional - only provided fields will be updated
+      properties:
+        moniker:
+          type: string
+        firstName:
+          type: string
+        lastName:
+          type: string
+        nickName:
+          type: string
+        backupEmail:
+          type: string
+        mobilePhone:
+          type: string
+        primaryLanguage:
+          type: string
+        secondaryLanguage:
+          type: string
+        timezone:
+          type: string
+        primaryLocation:
+          type: string
+        jobRole:
+          type: string
+        userType:
+          type: string
+          enum: [individual, enterprise, academic]
+        role:
+          type: string
+          enum: [admin, user, service]
+        profileInfo:
+          type: string
+        enabled:
+          type: boolean
+        platformIDs:
+          $ref: '#/components/schemas/PlatformIdentifiers'
+
+    UpdateProfileResponse:
+      type: object
+      properties:
+        profile:
+          $ref: '#/components/schemas/UserProfile'
+        updatedFields:
+          type: array
+          items:
+            type: string
+          example: ["timezone", "firstName"]
+
+    ProfileListResponse:
+      type: object
+      properties:
+        profiles:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserProfile'
+        offset:
+          type: integer
+          example: 0
+        limit:
+          type: integer
+          example: 50
+        total:
+          type: integer
+          example: 2
+
+    SlackBotConfig:
+      type: object
+      required:
+        - botID
+        - botName
+        - botType
+      properties:
+        botID:
+          type: string
+          example: "slack-bot-1"
+        botName:
+          type: string
+          example: "Production Bot"
+        botType:
+          type: string
+          enum: [private, public]
+        enabled:
+          type: boolean
+          default: true
+        slackBotToken:
+          type: string
+          description: Masked in responses (shows first 4 and last 4 chars)
+          example: "xoxb...1234"
+        slackAppToken:
+          type: string
+          description: Masked in responses
+          example: "xapp...5678"
+        slackSigningSecret:
+          type: string
+          description: Masked in responses
+          example: "abcd...xyz"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    SlackBotListResponse:
+      type: object
+      properties:
+        bots:
+          type: array
+          items:
+            $ref: '#/components/schemas/SlackBotConfig'
+        total:
+          type: integer
+
+    TelegramBotConfig:
+      type: object
+      required:
+        - botID
+        - botName
+        - botType
+      properties:
+        botID:
+          type: string
+          example: "telegram-bot-1"
+        botName:
+          type: string
+          example: "Support Bot"
+        botType:
+          type: string
+          enum: [private, public]
+        enabled:
+          type: boolean
+          default: true
+        telegramBotToken:
+          type: string
+          description: Masked in responses
+          example: "1234...5678"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    TelegramBotListResponse:
+      type: object
+      properties:
+        bots:
+          type: array
+          items:
+            $ref: '#/components/schemas/TelegramBotConfig'
+        total:
+          type: integer
+
+    ServerStatus:
+      type: object
+      properties:
+        uptime:
+          type: integer
+          format: int64
+          description: Server uptime in nanoseconds
+          example: 86400000000000
+        version:
+          type: string
+          example: "1.0.0"
+        memoryUsageMB:
+          type: number
+          format: float
+          example: 256.5
+        goVersion:
+          type: string
+          example: "1.21"
+        activeConnections:
+          type: object
+          properties:
+            slack:
+              type: integer
+              example: 3
+            telegram:
+              type: integer
+              example: 2
+            cli:
+              type: integer
+              example: 1
+
+    ServerMetrics:
+      type: object
+      properties:
+        requestsLast24h:
+          type: integer
+          example: 1000
+        errorRate:
+          type: number
+          format: float
+          example: 0.01
+        avgResponseTime:
+          type: number
+          format: float
+          description: Average response time in milliseconds
+          example: 150.5
+        activeUsers:
+          type: integer
+          example: 25
+        activeBots:
+          type: integer
+          example: 5
+
+    LogEntry:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        level:
+          type: string
+          enum: [debug, info, warn, error]
+        message:
+          type: string
+        userID:
+          type: string
+          description: User ID if applicable
+
+    LogsResponse:
+      type: object
+      properties:
+        logs:
+          type: array
+          items:
+            $ref: '#/components/schemas/LogEntry'
+        level:
+          type: string
+          example: "all"
+        limit:
+          type: integer
+          example: 50
+        total:
+          type: integer
+          example: 42
+
+    StatusResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [enabled, disabled]
+
+    SuccessResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "success"
+        message:
+          type: string
+          example: "Configuration updated successfully"
+
+    ValidationResponse:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        message:
+          type: string
+        errors:
+          type: array
+          items:
+            type: string
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid authentication token
+      content:
+        text/plain:
+          schema:
+            type: string
+            example: "Unauthorized"
+
+    Forbidden:
+      description: Insufficient permissions or disabled account
+      content:
+        text/plain:
+          schema:
+            type: string
+            example: "Forbidden"
+
+    NotFound:
+      description: Resource not found
+      content:
+        text/plain:
+          schema:
+            type: string
+            example: "Profile not found"
+
+    BadRequest:
+      description: Invalid request data
+      content:
+        text/plain:
+          schema:
+            type: string
+            example: "Invalid request body"
+
+    InternalError:
+      description: Internal server error
+      content:
+        text/plain:
+          schema:
+            type: string
+            example: "Failed to list profiles"
