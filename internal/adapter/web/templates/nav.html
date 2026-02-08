@@ -1,0 +1,102 @@
+{{define "nav"}}
+<nav class="bg-blue-600 text-white shadow-lg" x-data="{ mobileMenuOpen: false }">
+    <div class="container mx-auto px-4">
+        <div class="flex items-center justify-between h-16">
+            <!-- Logo and Brand -->
+            <div class="flex items-center">
+                <a href="/admin/" class="text-xl font-bold">
+                    NuimanBot Admin
+                </a>
+            </div>
+
+            <!-- Desktop Navigation -->
+            <div class="hidden md:flex items-center space-x-4">
+                {{if .IsAuthenticated}}
+                <a href="/admin/dashboard" class="px-3 py-2 rounded-md {{if eq .ActivePage "dashboard"}}bg-blue-700{{else}}hover:bg-blue-500{{end}}">
+                    Dashboard
+                </a>
+                <a href="/admin/users" class="px-3 py-2 rounded-md {{if eq .ActivePage "users"}}bg-blue-700{{else}}hover:bg-blue-500{{end}}">
+                    Users
+                </a>
+                <a href="/admin/bots" class="px-3 py-2 rounded-md {{if eq .ActivePage "bots"}}bg-blue-700{{else}}hover:bg-blue-500{{end}}">
+                    Bots
+                </a>
+                <a href="/admin/llm" class="px-3 py-2 rounded-md {{if eq .ActivePage "llm"}}bg-blue-700{{else}}hover:bg-blue-500{{end}}">
+                    LLM Config
+                </a>
+                <a href="/admin/config" class="px-3 py-2 rounded-md {{if eq .ActivePage "config"}}bg-blue-700{{else}}hover:bg-blue-500{{end}}">
+                    Server Config
+                </a>
+                <a href="/admin/logs" class="px-3 py-2 rounded-md {{if eq .ActivePage "logs"}}bg-blue-700{{else}}hover:bg-blue-500{{end}}">
+                    Logs
+                </a>
+
+                <!-- User Menu -->
+                <div class="relative ml-4" x-data="{ userMenuOpen: false }">
+                    <button @click="userMenuOpen = !userMenuOpen" class="flex items-center px-3 py-2 rounded-md hover:bg-blue-500">
+                        <span>{{.CurrentUser.Username}}</span>
+                        <svg class="ml-2 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                        </svg>
+                    </button>
+                    <div x-show="userMenuOpen" @click.away="userMenuOpen = false" x-cloak
+                         class="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg py-1 z-10">
+                        <a href="/admin/profile" class="block px-4 py-2 text-gray-700 hover:bg-gray-100">Profile</a>
+                        <a href="/admin/logout" class="block px-4 py-2 text-gray-700 hover:bg-gray-100">Logout</a>
+                    </div>
+                </div>
+                {{else}}
+                <a href="/admin/login" class="px-3 py-2 rounded-md bg-blue-700 hover:bg-blue-800">
+                    Login
+                </a>
+                {{end}}
+            </div>
+
+            <!-- Mobile Menu Button -->
+            <div class="md:hidden">
+                <button @click="mobileMenuOpen = !mobileMenuOpen" class="p-2 rounded-md hover:bg-blue-500">
+                    <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path x-show="!mobileMenuOpen" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
+                        <path x-show="mobileMenuOpen" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- Mobile Menu -->
+        <div x-show="mobileMenuOpen" x-cloak class="md:hidden pb-4">
+            {{if .IsAuthenticated}}
+            <a href="/admin/dashboard" class="block px-3 py-2 rounded-md {{if eq .ActivePage "dashboard"}}bg-blue-700{{else}}hover:bg-blue-500{{end}}">
+                Dashboard
+            </a>
+            <a href="/admin/users" class="block px-3 py-2 rounded-md {{if eq .ActivePage "users"}}bg-blue-700{{else}}hover:bg-blue-500{{end}}">
+                Users
+            </a>
+            <a href="/admin/bots" class="block px-3 py-2 rounded-md {{if eq .ActivePage "bots"}}bg-blue-700{{else}}hover:bg-blue-500{{end}}">
+                Bots
+            </a>
+            <a href="/admin/llm" class="block px-3 py-2 rounded-md {{if eq .ActivePage "llm"}}bg-blue-700{{else}}hover:bg-blue-500{{end}}">
+                LLM Config
+            </a>
+            <a href="/admin/config" class="block px-3 py-2 rounded-md {{if eq .ActivePage "config"}}bg-blue-700{{else}}hover:bg-blue-500{{end}}">
+                Server Config
+            </a>
+            <a href="/admin/logs" class="block px-3 py-2 rounded-md {{if eq .ActivePage "logs"}}bg-blue-700{{else}}hover:bg-blue-500{{end}}">
+                Logs
+            </a>
+            <hr class="my-2 border-blue-500">
+            <a href="/admin/profile" class="block px-3 py-2 rounded-md hover:bg-blue-500">
+                Profile ({{.CurrentUser.Username}})
+            </a>
+            <a href="/admin/logout" class="block px-3 py-2 rounded-md hover:bg-blue-500">
+                Logout
+            </a>
+            {{else}}
+            <a href="/admin/login" class="block px-3 py-2 rounded-md bg-blue-700 hover:bg-blue-800">
+                Login
+            </a>
+            {{end}}
+        </div>
+    </div>
+</nav>
+{{end}}

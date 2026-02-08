@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bots - NuimanBot Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <div class="flex justify-between items-center mb-6">
+                <h1 class="text-3xl font-bold text-gray-900">Bots</h1>
+                <a href="/admin/bots/create" class="btn-primary">
+                    <svg class="h-4 w-4 mr-2 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                    </svg>
+                    Create Bot
+                </a>
+            </div>
+
+            {{if .Bots}}
+            <div class="overflow-x-auto">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Platform</th>
+                            <th>Status</th>
+                            <th>Type</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .Bots}}
+                        <tr>
+                            <td>{{.Name}}</td>
+                            <td>
+                                <span class="badge badge-info">{{.Platform}}</span>
+                            </td>
+                            <td>
+                                {{if .Enabled}}
+                                <span class="badge badge-success">Enabled</span>
+                                {{else}}
+                                <span class="badge badge-gray">Disabled</span>
+                                {{end}}
+                            </td>
+                            <td>
+                                {{if .IsPublic}}
+                                <span class="badge badge-warning">Public</span>
+                                {{else}}
+                                <span class="badge badge-info">Private</span>
+                                {{end}}
+                            </td>
+                            <td>
+                                <a href="/admin/bots/{{.ID}}/edit" class="text-blue-600 hover:text-blue-800 mr-3">Edit</a>
+                                <form action="/admin/bots/{{.ID}}/delete" method="POST" class="inline" onsubmit="return confirm('Are you sure?')">
+                                    <button type="submit" class="text-red-600 hover:text-red-800">Delete</button>
+                                </form>
+                            </td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+            {{else}}
+            <p class="text-center text-gray-500 py-8">No bots found. <a href="/admin/bots/create" class="text-blue-600">Create one</a></p>
+            {{end}}
+        </div>
+    </div>
+</body>
+</html>
