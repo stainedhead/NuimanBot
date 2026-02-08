@@ -190,6 +190,9 @@ type BotConfigRepository interface {
 	// ListSlackBots returns all Slack bots
 	ListSlackBots(ctx context.Context) ([]*SlackBotConfig, error)
 
+	// ListSlackBotsByOwner returns all Slack bots owned by a specific user
+	ListSlackBotsByOwner(ctx context.Context, ownerUserID string) ([]*SlackBotConfig, error)
+
 	// DeleteSlackBot removes a Slack bot by ID
 	DeleteSlackBot(ctx context.Context, botID string) error
 
@@ -201,6 +204,9 @@ type BotConfigRepository interface {
 
 	// ListTelegramBots returns all Telegram bots
 	ListTelegramBots(ctx context.Context) ([]*TelegramBotConfig, error)
+
+	// ListTelegramBotsByOwner returns all Telegram bots owned by a specific user
+	ListTelegramBotsByOwner(ctx context.Context, ownerUserID string) ([]*TelegramBotConfig, error)
 
 	// DeleteTelegramBot removes a Telegram bot by ID
 	DeleteTelegramBot(ctx context.Context, botID string) error

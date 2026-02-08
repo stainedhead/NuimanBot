@@ -61,6 +61,15 @@ func (s *Service) ListSlackBots(ctx context.Context) ([]*domain.SlackBotConfig, 
 	return bots, nil
 }
 
+// ListSlackBotsByOwner returns all Slack bots owned by a specific user
+func (s *Service) ListSlackBotsByOwner(ctx context.Context, ownerUserID string) ([]*domain.SlackBotConfig, error) {
+	bots, err := s.repo.ListSlackBotsByOwner(ctx, ownerUserID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list Slack bots by owner: %w", err)
+	}
+	return bots, nil
+}
+
 // UpdateSlackBot updates an existing Slack bot configuration
 func (s *Service) UpdateSlackBot(ctx context.Context, bot *domain.SlackBotConfig) error {
 	// Validate bot configuration
@@ -166,6 +175,15 @@ func (s *Service) ListTelegramBots(ctx context.Context) ([]*domain.TelegramBotCo
 	bots, err := s.repo.ListTelegramBots(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list Telegram bots: %w", err)
+	}
+	return bots, nil
+}
+
+// ListTelegramBotsByOwner returns all Telegram bots owned by a specific user
+func (s *Service) ListTelegramBotsByOwner(ctx context.Context, ownerUserID string) ([]*domain.TelegramBotConfig, error) {
+	bots, err := s.repo.ListTelegramBotsByOwner(ctx, ownerUserID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list Telegram bots by owner: %w", err)
 	}
 	return bots, nil
 }

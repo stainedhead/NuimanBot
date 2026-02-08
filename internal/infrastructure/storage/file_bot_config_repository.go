@@ -406,6 +406,42 @@ func (r *FileBotConfigRepository) ListSlackBots(ctx context.Context) ([]*domain.
 	return file.SlackBots, nil
 }
 
+// ListSlackBotsByOwner returns all Slack bots owned by a specific user
+func (r *FileBotConfigRepository) ListSlackBotsByOwner(ctx context.Context, ownerUserID string) ([]*domain.SlackBotConfig, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	// Load file
+	file, err := r.load()
+	if err != nil {
+		return nil, err
+	}
+
+	// Get bot IDs from index
+	botIDs, ok := file.Indexes.SlackByOwner[ownerUserID]
+	if !ok || len(botIDs) == 0 {
+		return []*domain.SlackBotConfig{}, nil
+	}
+
+	// Collect bots by ID
+	result := make([]*domain.SlackBotConfig, 0, len(botIDs))
+	for _, bot := range file.SlackBots {
+		for _, botID := range botIDs {
+			if bot.BotID == botID {
+				result = append(result, bot)
+				break
+			}
+		}
+	}
+
+	// Decrypt tokens
+	if err := r.decryptTokens(file); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
 // DeleteSlackBot removes a Slack bot by ID
 func (r *FileBotConfigRepository) DeleteSlackBot(ctx context.Context, botID string) error {
 	r.mu.Lock()
@@ -517,6 +553,42 @@ func (r *FileBotConfigRepository) ListTelegramBots(ctx context.Context) ([]*doma
 	}
 
 	return file.TelegramBots, nil
+}
+
+// ListTelegramBotsByOwner returns all Telegram bots owned by a specific user
+func (r *FileBotConfigRepository) ListTelegramBotsByOwner(ctx context.Context, ownerUserID string) ([]*domain.TelegramBotConfig, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	// Load file
+	file, err := r.load()
+	if err != nil {
+		return nil, err
+	}
+
+	// Get bot IDs from index
+	botIDs, ok := file.Indexes.TelegramByOwner[ownerUserID]
+	if !ok || len(botIDs) == 0 {
+		return []*domain.TelegramBotConfig{}, nil
+	}
+
+	// Collect bots by ID
+	result := make([]*domain.TelegramBotConfig, 0, len(botIDs))
+	for _, bot := range file.TelegramBots {
+		for _, botID := range botIDs {
+			if bot.BotID == botID {
+				result = append(result, bot)
+				break
+			}
+		}
+	}
+
+	// Decrypt tokens
+	if err := r.decryptTokens(file); err != nil {
+		return nil, err
+	}
+
+	return result, nil
 }
 
 // DeleteTelegramBot removes a Telegram bot by ID
