@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}} - NuimanBot Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <div class="bg-white rounded-lg shadow-md p-6 max-w-2xl mx-auto">
+            <h1 class="text-3xl font-bold text-gray-900 mb-6">{{.Title}}</h1>
+
+            <form method="POST" class="space-y-6">
+                <!-- User ID -->
+                <div class="form-group">
+                    <label for="userID" class="form-label">User ID *</label>
+                    <input type="text" id="userID" name="userID" value="{{.User.UserID}}" required
+                           class="form-input" {{if .User.UserID}}readonly{{end}}>
+                </div>
+
+                <!-- Name Fields -->
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="form-group">
+                        <label for="firstName" class="form-label">First Name</label>
+                        <input type="text" id="firstName" name="firstName" value="{{.User.FirstName}}"
+                               class="form-input">
+                    </div>
+                    <div class="form-group">
+                        <label for="lastName" class="form-label">Last Name</label>
+                        <input type="text" id="lastName" name="lastName" value="{{.User.LastName}}"
+                               class="form-input">
+                    </div>
+                </div>
+
+                <!-- Email -->
+                <div class="form-group">
+                    <label for="primaryEmail" class="form-label">Email *</label>
+                    <input type="email" id="primaryEmail" name="primaryEmail" value="{{.User.PrimaryEmail}}" required
+                           class="form-input">
+                </div>
+
+                <!-- Role -->
+                <div class="form-group">
+                    <label for="role" class="form-label">Role</label>
+                    <select id="role" name="role" class="form-select">
+                        <option value="user" {{if eq .User.Role "user"}}selected{{end}}>User</option>
+                        <option value="admin" {{if eq .User.Role "admin"}}selected{{end}}>Admin</option>
+                    </select>
+                </div>
+
+                <!-- Buttons -->
+                <div class="flex justify-end space-x-3">
+                    <a href="/admin/users" class="btn-secondary">Cancel</a>
+                    <button type="submit" class="btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</body>
+</html>
