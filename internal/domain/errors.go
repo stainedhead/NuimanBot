@@ -26,6 +26,9 @@ var ErrInternal = errors.New("internal error")
 // ErrUserNotFound is returned when a user is not found.
 var ErrUserNotFound = errors.New("user not found")
 
+// ErrBotNotFound is returned when a bot is not found.
+var ErrBotNotFound = errors.New("bot not found")
+
 // ErrToolNotFound is returned when a requested tool is not found.
 var ErrToolNotFound = errors.New("tool not found")
 
