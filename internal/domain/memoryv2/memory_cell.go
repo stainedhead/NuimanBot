@@ -11,10 +11,10 @@ import (
 
 // Validation limits for MemoryCell.
 const (
-	MaxContentLength       = 2000
-	MaxConversationIDLen   = 128
-	MinSceneNameLength     = 3
-	MaxSceneNameLength     = 64
+	MaxContentLength     = 2000
+	MaxConversationIDLen = 128
+	MinSceneNameLength   = 3
+	MaxSceneNameLength   = 64
 )
 
 // scenePattern validates scene names: lowercase letters, numbers, and dashes.

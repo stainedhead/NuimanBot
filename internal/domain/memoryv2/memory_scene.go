@@ -7,8 +7,8 @@ import (
 
 // Validation limits for MemoryScene.
 const (
-	MaxSummaryLength  = 10000
-	MaxSummaryTokens  = 2000
+	MaxSummaryLength = 10000
+	MaxSummaryTokens = 2000
 )
 
 // MemoryScene represents a topic with consolidated summary.
