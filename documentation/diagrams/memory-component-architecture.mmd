@@ -1,0 +1,115 @@
+%% Memory v2 Component Architecture - Clean Architecture Layers
+graph TB
+    subgraph CMD["cmd/nuimanbot (Entry Point & DI)"]
+        MAIN[main.go]
+        CUR_ADAPT[memoryCuratorAdapter]
+        REC_ADAPT[memoryRecallerAdapter]
+    end
+
+    subgraph USECASE["Use Case Layer"]
+        subgraph CHAT_UC["usecase/chat"]
+            CHAT_SVC[ChatService]
+            CTX_WIN[BuildContextWindow]
+            MC_IF{{"MemoryCurator\n(interface)"}}
+            MR_IF{{"MemoryRecaller\n(interface)"}}
+        end
+        subgraph MEM_UC["usecase/memoryv2"]
+            CUR_SVC[MemoryCuratorService]
+            REC_SVC[MemoryRecallService]
+            LLM_ADAPT[LLMServiceAdapter]
+            LLM_IF{{"LLMClient\n(interface)"}}
+        end
+    end
+
+    subgraph DOMAIN["Domain Layer"]
+        subgraph MEM_DOMAIN["domain/memoryv2"]
+            CELL[MemoryCell]
+            SCENE[MemoryScene]
+            CELL_TYPE[CellType]
+            FILTER[MemoryCellFilter]
+            CELL_REPO{{"MemoryCellRepository\n(interface)"}}
+            SCENE_REPO{{"MemorySceneRepository\n(interface)"}}
+        end
+    end
+
+    subgraph ADAPTER["Adapter Layer"]
+        subgraph CLI_ADAPT["adapter/cli"]
+            MEM_CMD[MemoryCommand]
+        end
+        subgraph GW_ADAPT["adapter/gateway/cli"]
+            GW[Gateway]
+            MEM_HANDLER[MemoryCommandHandler]
+        end
+        subgraph REPO_ADAPT["adapter/repository/sqlite"]
+            SQLITE_CELL[SQLiteMemoryCellRepository]
+            SQLITE_SCENE[SQLiteMemorySceneRepository]
+        end
+    end
+
+    subgraph INFRA["Infrastructure Layer"]
+        subgraph METRICS_INFRA["infrastructure/metrics"]
+            PROM[Prometheus Metrics]
+        end
+        subgraph TRACE_INFRA["infrastructure/tracing"]
+            TRACE[Tracing Spans]
+        end
+        subgraph DB_INFRA["SQLite + FTS5"]
+            CELLS_TBL[(memory_cells)]
+            SCENES_TBL[(memory_scenes)]
+            FTS_TBL[(memory_cells_fts)]
+        end
+    end
+
+    %% DI Wiring
+    MAIN --> CUR_ADAPT
+    MAIN --> REC_ADAPT
+    MAIN --> CHAT_SVC
+    MAIN --> GW
+
+    %% Chat → Memory interfaces
+    CHAT_SVC --> MC_IF
+    CTX_WIN --> MR_IF
+    CUR_ADAPT -.->|implements| MC_IF
+    REC_ADAPT -.->|implements| MR_IF
+    CUR_ADAPT --> CUR_SVC
+    REC_ADAPT --> REC_SVC
+
+    %% Use case → Domain interfaces
+    CUR_SVC --> CELL_REPO
+    CUR_SVC --> SCENE_REPO
+    CUR_SVC --> LLM_IF
+    REC_SVC --> CELL_REPO
+    REC_SVC --> SCENE_REPO
+    LLM_ADAPT -.->|implements| LLM_IF
+
+    %% Adapter implementations
+    SQLITE_CELL -.->|implements| CELL_REPO
+    SQLITE_SCENE -.->|implements| SCENE_REPO
+
+    %% CLI flow
+    GW --> MEM_HANDLER
+    MEM_HANDLER --> MEM_CMD
+    MEM_CMD --> CELL_REPO
+    MEM_CMD --> SCENE_REPO
+
+    %% Infrastructure
+    SQLITE_CELL --> CELLS_TBL
+    SQLITE_CELL --> FTS_TBL
+    SQLITE_SCENE --> SCENES_TBL
+    CUR_SVC --> PROM
+    CUR_SVC --> TRACE
+    REC_SVC --> PROM
+    REC_SVC --> TRACE
+
+    %% Styling
+    classDef interface fill:#f9f,stroke:#333,stroke-width:2px
+    classDef service fill:#bbf,stroke:#333,stroke-width:2px
+    classDef entity fill:#bfb,stroke:#333,stroke-width:2px
+    classDef db fill:#fdb,stroke:#333,stroke-width:2px
+    classDef adapter fill:#ffd,stroke:#333,stroke-width:2px
+
+    class MC_IF,MR_IF,LLM_IF,CELL_REPO,SCENE_REPO interface
+    class CUR_SVC,REC_SVC,CHAT_SVC,CTX_WIN service
+    class CELL,SCENE,CELL_TYPE,FILTER entity
+    class CELLS_TBL,SCENES_TBL,FTS_TBL db
+    class CUR_ADAPT,REC_ADAPT,LLM_ADAPT,SQLITE_CELL,SQLITE_SCENE,MEM_CMD,MEM_HANDLER adapter

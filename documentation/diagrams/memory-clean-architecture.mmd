@@ -1,0 +1,71 @@
+%% Clean Architecture Layers - Dependency Direction
+graph LR
+    subgraph OUTER["Infrastructure (Outermost)"]
+        direction TB
+        SQLite["SQLite + FTS5"]
+        Prom["Prometheus"]
+        OTel["Tracing"]
+    end
+
+    subgraph ADAPT["Adapter Layer"]
+        direction TB
+        SQLiteCell["SQLiteMemoryCellRepo"]
+        SQLiteScene["SQLiteMemorySceneRepo"]
+        MemCmd["MemoryCommand\n(CLI handler)"]
+        MemHandler["MemoryCommandHandler\n(Gateway)"]
+        CurAdapt["memoryCuratorAdapter"]
+        RecAdapt["memoryRecallerAdapter"]
+        LLMAdapt["LLMServiceAdapter"]
+    end
+
+    subgraph UC["Use Case Layer"]
+        direction TB
+        CurSvc["MemoryCuratorService"]
+        RecSvc["MemoryRecallService"]
+        ChatSvc["ChatService"]
+    end
+
+    subgraph DOM["Domain Layer (Innermost)"]
+        direction TB
+        Cell["MemoryCell"]
+        Scene["MemoryScene"]
+        CellType["CellType"]
+        CellRepo["MemoryCellRepository\n(interface)"]
+        SceneRepo["MemorySceneRepository\n(interface)"]
+    end
+
+    %% Dependencies flow INWARD only
+    SQLiteCell -->|implements| CellRepo
+    SQLiteScene -->|implements| SceneRepo
+    SQLiteCell --> SQLite
+    SQLiteScene --> SQLite
+
+    CurAdapt --> CurSvc
+    RecAdapt --> RecSvc
+    LLMAdapt --> CurSvc
+
+    MemCmd --> CellRepo
+    MemCmd --> SceneRepo
+    MemHandler --> MemCmd
+
+    CurSvc --> CellRepo
+    CurSvc --> SceneRepo
+    CurSvc --> Prom
+    CurSvc --> OTel
+
+    RecSvc --> CellRepo
+    RecSvc --> SceneRepo
+    RecSvc --> Prom
+    RecSvc --> OTel
+
+    ChatSvc --> CurAdapt
+    ChatSvc --> RecAdapt
+
+    CellRepo --> Cell
+    SceneRepo --> Scene
+
+    %% Styling
+    style DOM fill:#e8f5e9,stroke:#2e7d32
+    style UC fill:#e3f2fd,stroke:#1565c0
+    style ADAPT fill:#fff3e0,stroke:#ef6c00
+    style OUTER fill:#fce4ec,stroke:#c62828

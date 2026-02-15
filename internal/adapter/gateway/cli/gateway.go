@@ -27,6 +27,7 @@ type Gateway struct {
 	adminHandler   *AdminCommandHandler
 	profileHandler *AdminProfileCommandHandler
 	botHandler     *AdminBotCommandHandler
+	memoryHandler  *MemoryCommandHandler
 	skillHandler   SkillCommandHandler
 	currentUser    *domain.User // Current CLI user for admin commands
 	// stdin/stdout for testing purposes
@@ -96,6 +97,22 @@ func (g *Gateway) Start(ctx context.Context) error {
 
 			if strings.EqualFold(input, "exit") || strings.EqualFold(input, "quit") {
 				return nil
+			}
+
+			// Check if this is a memory command
+			if IsMemoryCommand(input) {
+				if g.memoryHandler == nil {
+					if _, err := fmt.Fprintln(g.Writer, "Error: Memory commands not available."); err != nil {
+						fmt.Fprintf(os.Stderr, "Error writing to CLI output: %v\n", err)
+					}
+					continue
+				}
+				if err := g.memoryHandler.HandleMemoryCommand(ctx, input); err != nil {
+					if _, writeErr := fmt.Fprintf(g.Writer, "Error: %v\n", err); writeErr != nil {
+						fmt.Fprintf(os.Stderr, "Error writing to CLI output: %v\n", writeErr)
+					}
+				}
+				continue
 			}
 
 			// Check if this is a bot admin command
@@ -299,6 +316,11 @@ func (g *Gateway) SetBotHandler(handler *AdminBotCommandHandler) {
 // SetCurrentUser sets the current user for admin command authorization.
 func (g *Gateway) SetCurrentUser(user *domain.User) {
 	g.currentUser = user
+}
+
+// SetMemoryHandler sets the memory command handler for the gateway.
+func (g *Gateway) SetMemoryHandler(handler *MemoryCommandHandler) {
+	g.memoryHandler = handler
 }
 
 // SetSkillHandler sets the skill command handler for the gateway.

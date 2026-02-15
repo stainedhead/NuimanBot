@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -627,6 +628,48 @@ func TestProcessMessage_LLMCompletionError(t *testing.T) {
 	}
 }
 
+// Mock memory curator for testing
+
+type mockMemoryCurator struct {
+	extractFunc func(ctx context.Context, conversationID, userMessage, assistantReply string, toolOutputs []string) error
+	called      bool
+	callCount   int
+	lastConvID  string
+	lastUserMsg string
+	lastReply   string
+}
+
+func (m *mockMemoryCurator) ExtractMemoryCells(ctx context.Context, conversationID, userMessage, assistantReply string, toolOutputs []string) error {
+	m.called = true
+	m.callCount++
+	m.lastConvID = conversationID
+	m.lastUserMsg = userMessage
+	m.lastReply = assistantReply
+	if m.extractFunc != nil {
+		return m.extractFunc(ctx, conversationID, userMessage, assistantReply, toolOutputs)
+	}
+	return nil
+}
+
+// Mock memory recaller for testing
+
+type mockMemoryRecaller struct {
+	recallFunc func(ctx context.Context, conversationID, query string, maxTokens int) (string, error)
+	called     bool
+	callCount  int
+	lastQuery  string
+}
+
+func (m *mockMemoryRecaller) RecallAndFormat(ctx context.Context, conversationID, query string, maxTokens int) (string, error) {
+	m.called = true
+	m.callCount++
+	m.lastQuery = query
+	if m.recallFunc != nil {
+		return m.recallFunc(ctx, conversationID, query, maxTokens)
+	}
+	return "", nil
+}
+
 // Mock LLM cache for testing
 
 type mockLLMCache struct {
@@ -884,5 +927,485 @@ func TestProcessMessage_NoCacheForToolCalls(t *testing.T) {
 	// Should have made 4 LLM calls total (no caching for first iteration with tools)
 	if llmCallCount != 4 {
 		t.Errorf("Expected 4 LLM calls (no cache for tool use), got %d", llmCallCount)
+	}
+}
+
+// TestProcessMessage_CallsMemoryCurator verifies curator is called after successful LLM response
+func TestProcessMessage_CallsMemoryCurator(t *testing.T) {
+	llmService := &mockLLMService{
+		completeFunc: func(ctx context.Context, provider domain.LLMProvider, req *domain.LLMRequest) (*domain.LLMResponse, error) {
+			return &domain.LLMResponse{
+				Content:      "Hello! I remember you.",
+				ToolCalls:    []domain.ToolCall{},
+				FinishReason: "end_turn",
+				Usage:        domain.TokenUsage{PromptTokens: 10, CompletionTokens: 20, TotalTokens: 30},
+			}, nil
+		},
+	}
+
+	memoryRepo := &mockMemoryRepository{
+		getRecentMessagesFunc: func(ctx context.Context, convID string, maxTokens int) ([]domain.StoredMessage, error) {
+			return []domain.StoredMessage{}, nil
+		},
+	}
+
+	toolExecService := &mockToolExecutionService{
+		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+			return []domain.Tool{}, nil
+		},
+	}
+
+	curator := &mockMemoryCurator{}
+
+	service := createTestService(llmService, memoryRepo, toolExecService, &mockSecurityService{})
+	service.SetMemoryCurator(curator)
+
+	incomingMsg := &domain.IncomingMessage{
+		ID:          "test-curator-1",
+		Platform:    domain.PlatformCLI,
+		PlatformUID: "user-1",
+		Text:        "Remember that I like Go",
+		Timestamp:   time.Now(),
+	}
+
+	outgoingMsg, err := service.ProcessMessage(context.Background(), incomingMsg)
+	if err != nil {
+		t.Fatalf("ProcessMessage failed: %v", err)
+	}
+
+	if outgoingMsg.Content != "Hello! I remember you." {
+		t.Errorf("Expected 'Hello! I remember you.', got %s", outgoingMsg.Content)
+	}
+
+	// Verify curator was called
+	if !curator.called {
+		t.Error("Expected memory curator to be called after successful response")
+	}
+
+	// Verify correct arguments
+	expectedConvID := "cli:user-1"
+	if curator.lastConvID != expectedConvID {
+		t.Errorf("Expected conversationID %q, got %q", expectedConvID, curator.lastConvID)
+	}
+	if curator.lastUserMsg != "Remember that I like Go" {
+		t.Errorf("Expected userMessage 'Remember that I like Go', got %q", curator.lastUserMsg)
+	}
+	if curator.lastReply != "Hello! I remember you." {
+		t.Errorf("Expected assistantReply 'Hello! I remember you.', got %q", curator.lastReply)
+	}
+}
+
+// TestProcessMessage_CuratorErrorDoesNotFailChat verifies graceful degradation
+func TestProcessMessage_CuratorErrorDoesNotFailChat(t *testing.T) {
+	llmService := &mockLLMService{
+		completeFunc: func(ctx context.Context, provider domain.LLMProvider, req *domain.LLMRequest) (*domain.LLMResponse, error) {
+			return &domain.LLMResponse{
+				Content:      "Response despite curator failure",
+				ToolCalls:    []domain.ToolCall{},
+				FinishReason: "end_turn",
+				Usage:        domain.TokenUsage{PromptTokens: 10, CompletionTokens: 20, TotalTokens: 30},
+			}, nil
+		},
+	}
+
+	memoryRepo := &mockMemoryRepository{
+		getRecentMessagesFunc: func(ctx context.Context, convID string, maxTokens int) ([]domain.StoredMessage, error) {
+			return []domain.StoredMessage{}, nil
+		},
+	}
+
+	toolExecService := &mockToolExecutionService{
+		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+			return []domain.Tool{}, nil
+		},
+	}
+
+	curator := &mockMemoryCurator{
+		extractFunc: func(ctx context.Context, conversationID, userMessage, assistantReply string, toolOutputs []string) error {
+			return errors.New("curator database unavailable")
+		},
+	}
+
+	service := createTestService(llmService, memoryRepo, toolExecService, &mockSecurityService{})
+	service.SetMemoryCurator(curator)
+
+	incomingMsg := &domain.IncomingMessage{
+		ID:          "test-curator-2",
+		Platform:    domain.PlatformCLI,
+		PlatformUID: "user-1",
+		Text:        "Test message",
+		Timestamp:   time.Now(),
+	}
+
+	// Chat should succeed even though curator fails
+	outgoingMsg, err := service.ProcessMessage(context.Background(), incomingMsg)
+	if err != nil {
+		t.Fatalf("ProcessMessage should not fail when curator fails: %v", err)
+	}
+
+	if outgoingMsg.Content != "Response despite curator failure" {
+		t.Errorf("Expected correct response content, got %s", outgoingMsg.Content)
+	}
+
+	// Curator was called (and failed, but that's OK)
+	if !curator.called {
+		t.Error("Expected curator to be called even though it fails")
+	}
+}
+
+// TestProcessMessage_NilCuratorWorks verifies chat works without curator configured
+func TestProcessMessage_NilCuratorWorks(t *testing.T) {
+	llmService := &mockLLMService{
+		completeFunc: func(ctx context.Context, provider domain.LLMProvider, req *domain.LLMRequest) (*domain.LLMResponse, error) {
+			return &domain.LLMResponse{
+				Content:      "No curator configured",
+				ToolCalls:    []domain.ToolCall{},
+				FinishReason: "end_turn",
+				Usage:        domain.TokenUsage{PromptTokens: 10, CompletionTokens: 20, TotalTokens: 30},
+			}, nil
+		},
+	}
+
+	memoryRepo := &mockMemoryRepository{
+		getRecentMessagesFunc: func(ctx context.Context, convID string, maxTokens int) ([]domain.StoredMessage, error) {
+			return []domain.StoredMessage{}, nil
+		},
+	}
+
+	toolExecService := &mockToolExecutionService{
+		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+			return []domain.Tool{}, nil
+		},
+	}
+
+	// No curator set - should work fine
+	service := createTestService(llmService, memoryRepo, toolExecService, &mockSecurityService{})
+
+	incomingMsg := &domain.IncomingMessage{
+		ID:          "test-curator-3",
+		Platform:    domain.PlatformCLI,
+		PlatformUID: "user-1",
+		Text:        "Hello",
+		Timestamp:   time.Now(),
+	}
+
+	outgoingMsg, err := service.ProcessMessage(context.Background(), incomingMsg)
+	if err != nil {
+		t.Fatalf("ProcessMessage should work without curator: %v", err)
+	}
+
+	if outgoingMsg.Content != "No curator configured" {
+		t.Errorf("Expected 'No curator configured', got %s", outgoingMsg.Content)
+	}
+}
+
+// TestProcessMessage_RecallsMemories verifies memories are injected into system prompt
+func TestProcessMessage_RecallsMemories(t *testing.T) {
+	var capturedSystemPrompt string
+
+	llmService := &mockLLMService{
+		completeFunc: func(ctx context.Context, provider domain.LLMProvider, req *domain.LLMRequest) (*domain.LLMResponse, error) {
+			capturedSystemPrompt = req.SystemPrompt
+			return &domain.LLMResponse{
+				Content:      "I remember your preferences!",
+				ToolCalls:    []domain.ToolCall{},
+				FinishReason: "end_turn",
+				Usage:        domain.TokenUsage{PromptTokens: 50, CompletionTokens: 20, TotalTokens: 70},
+			}, nil
+		},
+	}
+
+	memoryRepo := &mockMemoryRepository{
+		getRecentMessagesFunc: func(ctx context.Context, convID string, maxTokens int) ([]domain.StoredMessage, error) {
+			return []domain.StoredMessage{}, nil
+		},
+	}
+
+	toolExecService := &mockToolExecutionService{
+		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+			return []domain.Tool{}, nil
+		},
+	}
+
+	recaller := &mockMemoryRecaller{
+		recallFunc: func(ctx context.Context, conversationID, query string, maxTokens int) (string, error) {
+			return "### Relevant Long-Term Memory\n- User prefers Go over Python", nil
+		},
+	}
+
+	service := createTestService(llmService, memoryRepo, toolExecService, &mockSecurityService{})
+	service.SetMemoryRecaller(recaller)
+
+	incomingMsg := &domain.IncomingMessage{
+		ID:          "test-recall-1",
+		Platform:    domain.PlatformCLI,
+		PlatformUID: "user-1",
+		Text:        "What language should I use?",
+		Timestamp:   time.Now(),
+	}
+
+	outgoingMsg, err := service.ProcessMessage(context.Background(), incomingMsg)
+	if err != nil {
+		t.Fatalf("ProcessMessage failed: %v", err)
+	}
+
+	if outgoingMsg.Content != "I remember your preferences!" {
+		t.Errorf("Expected 'I remember your preferences!', got %s", outgoingMsg.Content)
+	}
+
+	// Verify recaller was called
+	if !recaller.called {
+		t.Error("Expected memory recaller to be called")
+	}
+
+	// Verify recalled memories were injected into system prompt
+	if capturedSystemPrompt == "You are a helpful AI assistant." {
+		t.Error("Expected system prompt to include recalled memories")
+	}
+
+	expectedMemoryContent := "### Relevant Long-Term Memory"
+	if !containsSubstring(capturedSystemPrompt, expectedMemoryContent) {
+		t.Errorf("System prompt should contain recalled memories, got: %s", capturedSystemPrompt)
+	}
+}
+
+// TestProcessMessage_RecallErrorDoesNotFailChat verifies recall failures degrade gracefully
+func TestProcessMessage_RecallErrorDoesNotFailChat(t *testing.T) {
+	var capturedSystemPrompt string
+
+	llmService := &mockLLMService{
+		completeFunc: func(ctx context.Context, provider domain.LLMProvider, req *domain.LLMRequest) (*domain.LLMResponse, error) {
+			capturedSystemPrompt = req.SystemPrompt
+			return &domain.LLMResponse{
+				Content:      "Response without memories",
+				ToolCalls:    []domain.ToolCall{},
+				FinishReason: "end_turn",
+				Usage:        domain.TokenUsage{PromptTokens: 10, CompletionTokens: 20, TotalTokens: 30},
+			}, nil
+		},
+	}
+
+	memoryRepo := &mockMemoryRepository{
+		getRecentMessagesFunc: func(ctx context.Context, convID string, maxTokens int) ([]domain.StoredMessage, error) {
+			return []domain.StoredMessage{}, nil
+		},
+	}
+
+	toolExecService := &mockToolExecutionService{
+		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+			return []domain.Tool{}, nil
+		},
+	}
+
+	recaller := &mockMemoryRecaller{
+		recallFunc: func(ctx context.Context, conversationID, query string, maxTokens int) (string, error) {
+			return "", errors.New("memory database unavailable")
+		},
+	}
+
+	service := createTestService(llmService, memoryRepo, toolExecService, &mockSecurityService{})
+	service.SetMemoryRecaller(recaller)
+
+	incomingMsg := &domain.IncomingMessage{
+		ID:          "test-recall-2",
+		Platform:    domain.PlatformCLI,
+		PlatformUID: "user-1",
+		Text:        "Hello",
+		Timestamp:   time.Now(),
+	}
+
+	outgoingMsg, err := service.ProcessMessage(context.Background(), incomingMsg)
+	if err != nil {
+		t.Fatalf("ProcessMessage should not fail when recall fails: %v", err)
+	}
+
+	if outgoingMsg.Content != "Response without memories" {
+		t.Errorf("Expected correct response, got %s", outgoingMsg.Content)
+	}
+
+	// System prompt should be the default (no memory injection)
+	if capturedSystemPrompt != "You are a helpful AI assistant." {
+		t.Errorf("Expected default system prompt on recall failure, got: %s", capturedSystemPrompt)
+	}
+}
+
+// TestProcessMessage_NilRecallerWorks verifies chat works without recaller configured
+func TestProcessMessage_NilRecallerWorks(t *testing.T) {
+	llmService := &mockLLMService{
+		completeFunc: func(ctx context.Context, provider domain.LLMProvider, req *domain.LLMRequest) (*domain.LLMResponse, error) {
+			return &domain.LLMResponse{
+				Content:      "No recaller configured",
+				ToolCalls:    []domain.ToolCall{},
+				FinishReason: "end_turn",
+				Usage:        domain.TokenUsage{PromptTokens: 10, CompletionTokens: 20, TotalTokens: 30},
+			}, nil
+		},
+	}
+
+	memoryRepo := &mockMemoryRepository{
+		getRecentMessagesFunc: func(ctx context.Context, convID string, maxTokens int) ([]domain.StoredMessage, error) {
+			return []domain.StoredMessage{}, nil
+		},
+	}
+
+	toolExecService := &mockToolExecutionService{
+		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+			return []domain.Tool{}, nil
+		},
+	}
+
+	service := createTestService(llmService, memoryRepo, toolExecService, &mockSecurityService{})
+
+	incomingMsg := &domain.IncomingMessage{
+		ID:          "test-recall-3",
+		Platform:    domain.PlatformCLI,
+		PlatformUID: "user-1",
+		Text:        "Hello",
+		Timestamp:   time.Now(),
+	}
+
+	outgoingMsg, err := service.ProcessMessage(context.Background(), incomingMsg)
+	if err != nil {
+		t.Fatalf("ProcessMessage should work without recaller: %v", err)
+	}
+
+	if outgoingMsg.Content != "No recaller configured" {
+		t.Errorf("Expected 'No recaller configured', got %s", outgoingMsg.Content)
+	}
+}
+
+// TestProcessMessage_EmptyRecallDoesNotModifyPrompt verifies empty recall returns don't change prompt
+func TestProcessMessage_EmptyRecallDoesNotModifyPrompt(t *testing.T) {
+	var capturedSystemPrompt string
+
+	llmService := &mockLLMService{
+		completeFunc: func(ctx context.Context, provider domain.LLMProvider, req *domain.LLMRequest) (*domain.LLMResponse, error) {
+			capturedSystemPrompt = req.SystemPrompt
+			return &domain.LLMResponse{
+				Content:      "No memories found",
+				ToolCalls:    []domain.ToolCall{},
+				FinishReason: "end_turn",
+				Usage:        domain.TokenUsage{PromptTokens: 10, CompletionTokens: 20, TotalTokens: 30},
+			}, nil
+		},
+	}
+
+	memoryRepo := &mockMemoryRepository{
+		getRecentMessagesFunc: func(ctx context.Context, convID string, maxTokens int) ([]domain.StoredMessage, error) {
+			return []domain.StoredMessage{}, nil
+		},
+	}
+
+	toolExecService := &mockToolExecutionService{
+		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+			return []domain.Tool{}, nil
+		},
+	}
+
+	recaller := &mockMemoryRecaller{
+		recallFunc: func(ctx context.Context, conversationID, query string, maxTokens int) (string, error) {
+			return "", nil // No memories found
+		},
+	}
+
+	service := createTestService(llmService, memoryRepo, toolExecService, &mockSecurityService{})
+	service.SetMemoryRecaller(recaller)
+
+	incomingMsg := &domain.IncomingMessage{
+		ID:          "test-recall-4",
+		Platform:    domain.PlatformCLI,
+		PlatformUID: "user-1",
+		Text:        "Hello",
+		Timestamp:   time.Now(),
+	}
+
+	_, err := service.ProcessMessage(context.Background(), incomingMsg)
+	if err != nil {
+		t.Fatalf("ProcessMessage failed: %v", err)
+	}
+
+	// Empty recall should not modify system prompt
+	if capturedSystemPrompt != "You are a helpful AI assistant." {
+		t.Errorf("Expected default system prompt when no memories found, got: %s", capturedSystemPrompt)
+	}
+}
+
+// containsSubstring checks if a string contains a substring
+func containsSubstring(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && strings.Contains(s, substr))
+}
+
+// TestProcessMessage_CuratorReceivesToolOutputs verifies curator gets tool outputs
+func TestProcessMessage_CuratorReceivesToolOutputs(t *testing.T) {
+	callCount := 0
+	llmService := &mockLLMService{
+		completeFunc: func(ctx context.Context, provider domain.LLMProvider, req *domain.LLMRequest) (*domain.LLMResponse, error) {
+			callCount++
+			if callCount == 1 {
+				return &domain.LLMResponse{
+					Content: "Using tool...",
+					ToolCalls: []domain.ToolCall{
+						{ToolName: "weather", Arguments: map[string]any{"city": "NYC"}},
+					},
+					FinishReason: "tool_use",
+					Usage:        domain.TokenUsage{PromptTokens: 10, CompletionTokens: 10, TotalTokens: 20},
+				}, nil
+			}
+			return &domain.LLMResponse{
+				Content:      "The weather is sunny.",
+				ToolCalls:    []domain.ToolCall{},
+				FinishReason: "end_turn",
+				Usage:        domain.TokenUsage{PromptTokens: 20, CompletionTokens: 10, TotalTokens: 30},
+			}, nil
+		},
+	}
+
+	memoryRepo := &mockMemoryRepository{
+		getRecentMessagesFunc: func(ctx context.Context, convID string, maxTokens int) ([]domain.StoredMessage, error) {
+			return []domain.StoredMessage{}, nil
+		},
+	}
+
+	toolExecService := &mockToolExecutionService{
+		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+			return []domain.Tool{
+				&mockSkill{name: "weather", description: "Weather", inputSchema: map[string]any{}},
+			}, nil
+		},
+		executeFunc: func(ctx context.Context, toolName string, params map[string]any) (*domain.ExecutionResult, error) {
+			return &domain.ExecutionResult{Output: "Sunny, 72°F"}, nil
+		},
+	}
+
+	var capturedToolOutputs []string
+	curator := &mockMemoryCurator{
+		extractFunc: func(ctx context.Context, conversationID, userMessage, assistantReply string, toolOutputs []string) error {
+			capturedToolOutputs = toolOutputs
+			return nil
+		},
+	}
+
+	service := createTestService(llmService, memoryRepo, toolExecService, &mockSecurityService{})
+	service.SetMemoryCurator(curator)
+
+	incomingMsg := &domain.IncomingMessage{
+		ID:          "test-curator-4",
+		Platform:    domain.PlatformCLI,
+		PlatformUID: "user-1",
+		Text:        "What's the weather?",
+		Timestamp:   time.Now(),
+	}
+
+	_, err := service.ProcessMessage(context.Background(), incomingMsg)
+	if err != nil {
+		t.Fatalf("ProcessMessage failed: %v", err)
+	}
+
+	if !curator.called {
+		t.Fatal("Expected curator to be called")
+	}
+
+	if len(capturedToolOutputs) == 0 {
+		t.Error("Expected tool outputs to be passed to curator")
 	}
 }

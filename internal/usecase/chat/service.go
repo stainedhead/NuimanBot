@@ -49,14 +49,25 @@ type LLMCache interface {
 	Set(ctx context.Context, prompt string, response *domain.LLMResponse)
 }
 
+// MemoryCurator extracts memory cells from chat interactions for long-term storage.
+type MemoryCurator interface {
+	ExtractMemoryCells(ctx context.Context, conversationID, userMessage, assistantReply string, toolOutputs []string) error
+}
+
+// MemoryRecaller retrieves relevant memories for context injection.
+type MemoryRecaller interface {
+	RecallAndFormat(ctx context.Context, conversationID, query string, maxTokens int) (string, error)
+}
+
 // Service implements the ChatService use case.
 type Service struct {
 	llmService      LLMService
 	memoryRepo      MemoryRepository
 	toolExecService ToolExecutionService // Currently PENDING (will be mocked or basic for now)
 	securityService SecurityService
-	cache           LLMCache // Optional cache for LLM responses
-	// config            *config.ChatConfig // If ChatService needs its own config
+	cache           LLMCache       // Optional cache for LLM responses
+	memoryCurator   MemoryCurator  // Optional memory curator for long-term storage
+	memoryRecaller  MemoryRecaller // Optional memory recaller for context injection
 }
 
 // NewService creates a new ChatService instance.
@@ -77,6 +88,16 @@ func NewService(
 // SetCache sets the LLM response cache (optional).
 func (s *Service) SetCache(cache LLMCache) {
 	s.cache = cache
+}
+
+// SetMemoryCurator sets the memory curator for extracting long-term memories (optional).
+func (s *Service) SetMemoryCurator(curator MemoryCurator) {
+	s.memoryCurator = curator
+}
+
+// SetMemoryRecaller sets the memory recaller for context injection (optional).
+func (s *Service) SetMemoryRecaller(recaller MemoryRecaller) {
+	s.memoryRecaller = recaller
 }
 
 // getConversationID generates a conversation ID based on platform and user
@@ -121,9 +142,22 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 	}
 	tools := convertSkillsToTools(skills)
 
-	// 4. Prepare LLM Request with tools
+	// 4. Recall long-term memories for context injection (graceful degradation)
+	systemPrompt := "You are a helpful AI assistant." // TODO: From config
+	if s.memoryRecaller != nil {
+		recalled, recallErr := s.memoryRecaller.RecallAndFormat(ctx, conversationID, incomingMsg.Text, MemoryTokenBudget)
+		if recallErr != nil {
+			logger.Error("Failed to recall memories",
+				"conversation_id", conversationID,
+				"error", recallErr,
+			)
+		} else if recalled != "" {
+			systemPrompt = systemPrompt + "\n\n" + recalled
+		}
+	}
+
+	// 5. Prepare LLM Request with tools
 	llmMessages := []domain.Message{}
-	// Add system prompt if any (TODO: from config)
 	// Add history
 	for i := range recentMessages {
 		llmMessages = append(llmMessages, domain.Message{Role: recentMessages[i].Role, Content: recentMessages[i].Content})
@@ -134,15 +168,16 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 	llmRequest := &domain.LLMRequest{
 		Model:        "claude-3-sonnet-20240229", // TODO: Get from config/user preferences
 		Messages:     llmMessages,
-		MaxTokens:    1024,                              // TODO: From config
-		Temperature:  0.7,                               // TODO: From config
-		Tools:        tools,                             // Skills exposed as tools
-		SystemPrompt: "You are a helpful AI assistant.", // TODO: From config
+		MaxTokens:    1024,  // TODO: From config
+		Temperature:  0.7,   // TODO: From config
+		Tools:        tools, // Skills exposed as tools
+		SystemPrompt: systemPrompt,
 	}
 
-	// 5. Tool calling loop (max 5 iterations)
+	// 6. Tool calling loop (max 5 iterations)
 	const maxToolIterations = 5
 	var finalResponse *domain.LLMResponse
+	var collectedToolOutputs []string
 
 	for iteration := 0; iteration < maxToolIterations; iteration++ {
 		// Check cache before first LLM call (if cache is available)
@@ -176,8 +211,15 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 			break
 		}
 
-		// Execute tool calls
+		// Execute tool calls and collect outputs for memory extraction
 		toolResults := s.executeToolCalls(ctx, llmResponse.ToolCalls)
+		for _, tr := range toolResults {
+			if tr.Error != "" {
+				collectedToolOutputs = append(collectedToolOutputs, fmt.Sprintf("Tool %s error: %s", tr.ToolName, tr.Error))
+			} else {
+				collectedToolOutputs = append(collectedToolOutputs, fmt.Sprintf("Tool %s: %s", tr.ToolName, tr.Output))
+			}
+		}
 
 		// Add assistant message with tool calls to conversation
 		llmMessages = append(llmMessages, domain.Message{
@@ -203,10 +245,20 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 		return domain.OutgoingMessage{}, fmt.Errorf("max tool calling iterations exceeded")
 	}
 
-	// 6. Process final LLM Response
+	// 7. Process final LLM Response
 	responseContent := finalResponse.Content
 
-	// 6. Save new messages to memory (incoming and outgoing)
+	// 8. Extract memory cells from the interaction (non-blocking, graceful degradation)
+	if s.memoryCurator != nil {
+		if curatorErr := s.memoryCurator.ExtractMemoryCells(ctx, conversationID, incomingMsg.Text, responseContent, collectedToolOutputs); curatorErr != nil {
+			logger.Error("Failed to extract memory cells",
+				"conversation_id", conversationID,
+				"error", curatorErr,
+			)
+		}
+	}
+
+	// 9. Save new messages to memory (incoming and outgoing)
 	incomingStoredMsg := domain.StoredMessage{
 		ID:        incomingMsg.ID, // Use incoming message ID
 		Role:      "user",
@@ -235,7 +287,7 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 		)
 	}
 
-	// 7. Return Outgoing Message
+	// 10. Return Outgoing Message
 	outgoingMsg := domain.OutgoingMessage{
 		RecipientID: incomingMsg.PlatformUID, // Send back to the same user
 		Content:     responseContent,

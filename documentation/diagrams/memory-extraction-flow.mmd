@@ -1,0 +1,73 @@
+%% Memory Extraction Flow - From Chat Interaction to Stored Memory
+sequenceDiagram
+    participant User
+    participant ChatSvc as ChatService
+    participant Adapter as memoryCuratorAdapter
+    participant Curator as MemoryCuratorService
+    participant LLM as LLMClient
+    participant CellRepo as MemoryCellRepository
+    participant SceneRepo as MemorySceneRepository
+    participant Metrics as Prometheus
+    participant Tracing as Tracing
+
+    User->>ChatSvc: ProcessMessage(userMessage)
+    ChatSvc->>ChatSvc: Process LLM response + tools
+
+    Note over ChatSvc: After final response generated
+
+    ChatSvc->>Adapter: ExtractMemoryCells(ctx, convID, userMsg, reply, toolOutputs)
+    Adapter->>Curator: ExtractCells(ctx, InteractionContext)
+
+    Curator->>Tracing: StartSpan("memory.extract_cells")
+    Curator->>Metrics: Start extraction timer
+
+    alt Config disabled
+        Curator->>Metrics: MemoryExtractionTotal{skipped}++
+        Curator-->>Adapter: CurationResult{0 cells}
+    else Config enabled
+        Curator->>Curator: Build system + user prompts
+        Curator->>LLM: GenerateJSON(systemPrompt, userPrompt)
+
+        alt LLM error
+            Curator->>Metrics: MemoryExtractionTotal{error}++
+            Curator-->>Adapter: error
+        else LLM success
+            LLM-->>Curator: ExtractionResponse{Cells: [...]}
+            Curator->>Curator: Parse JSON response
+
+            loop For each ExtractedCell
+                Curator->>Curator: convertToMemoryCell()
+                Note over Curator: Parse CellType, generate UUID,<br/>marshal source, validate
+
+                alt Validation passes
+                    Curator->>CellRepo: Create(ctx, cell)
+                    Note over CellRepo: INSERT into memory_cells<br/>Trigger: INSERT into memory_cells_fts
+                    Curator->>Curator: CellsCreated++, track scene
+                else Validation fails
+                    Curator->>Curator: Append to Errors
+                end
+            end
+
+            loop For each touched scene
+                Curator->>Curator: ConsolidateScene(ctx, sceneName)
+                Curator->>Tracing: StartSpan("memory.consolidate_scene")
+                Curator->>CellRepo: GetByScene(ctx, scene, 0)
+                CellRepo-->>Curator: cells for scene
+                Curator->>SceneRepo: Get(ctx, scene)
+                SceneRepo-->>Curator: existing summary (if any)
+                Curator->>LLM: GenerateJSON(consolidation prompt)
+                LLM-->>Curator: SceneConsolidationResponse
+                Curator->>SceneRepo: Upsert(ctx, scene)
+                Curator->>Metrics: MemoryConsolidationTotal{success}++
+                Curator->>Tracing: EndSpan
+            end
+
+            Curator->>Metrics: MemoryExtractionTotal{success}++
+            Curator->>Metrics: MemoryCellsCreatedTotal += N
+            Curator->>Metrics: MemoryExtractionDuration.Observe()
+        end
+    end
+
+    Curator->>Tracing: EndSpan
+    Curator-->>Adapter: CurationResult
+    Adapter-->>ChatSvc: nil (or error, non-blocking)

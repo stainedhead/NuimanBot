@@ -1,0 +1,77 @@
+%% Memory Recall Flow - From Query to Context Injection
+sequenceDiagram
+    participant ChatSvc as ChatService
+    participant Adapter as memoryRecallerAdapter
+    participant Recall as MemoryRecallService
+    participant CellRepo as MemoryCellRepository
+    participant SceneRepo as MemorySceneRepository
+    participant FTS as FTS5 Engine
+    participant Metrics as Prometheus
+    participant Tracing as Tracing
+
+    ChatSvc->>Adapter: RecallAndFormat(ctx, convID, query, maxTokens)
+    Adapter->>Recall: RecallMemory(ctx, RecallRequest)
+
+    Recall->>Tracing: StartSpan("memory.recall")
+    Recall->>Recall: Start recall timer
+
+    Note over Recall: Step 1: Full-Text Search
+
+    Recall->>Tracing: StartSpan("memory.fts_search")
+    Recall->>Recall: Start FTS timer
+    Recall->>CellRepo: SearchFTS(ctx, query, limit=20)
+    CellRepo->>FTS: SELECT ... FROM memory_cells_fts WHERE MATCH query
+    FTS-->>CellRepo: BM25-ranked results
+    CellRepo-->>Recall: cells (FTS matches)
+    Recall->>Metrics: MemoryFTSQueryDuration.Observe()
+    Recall->>Tracing: EndSpan("memory.fts_search")
+
+    alt FTS returns results
+        Note over Recall: queryType = "fts"<br/>fallbackUsed = false
+    else FTS returns empty
+        Note over Recall: Step 2: Fallback to Salience
+
+        Recall->>CellRepo: GetHighSalience(ctx, convID, threshold=0.5, limit=10)
+        Note over CellRepo: SELECT ... WHERE salience >= threshold<br/>ORDER BY salience DESC
+        CellRepo-->>Recall: high-salience cells
+        Note over Recall: queryType = "fallback"<br/>fallbackUsed = true
+    end
+
+    Note over Recall: Step 3: Fetch Scenes
+
+    Recall->>Recall: Deduplicate scene names from cells
+    loop For each unique scene (max 10)
+        Recall->>SceneRepo: Get(ctx, sceneName)
+        SceneRepo-->>Recall: MemoryScene (summary + token count)
+    end
+
+    Note over Recall: Step 4: Apply Token Budget
+
+    Recall->>Recall: totalTokens = sum(scene.TokenCount)
+    loop For each cell (in FTS rank order)
+        Recall->>Recall: cellTokens = len(content) / 4
+        alt totalTokens + cellTokens <= maxTokens
+            Recall->>Recall: Include cell, mark scene as used
+        else Budget exceeded
+            Note over Recall: BREAK - stop adding cells
+        end
+    end
+    Recall->>Recall: Filter to only used scenes
+
+    Recall->>Metrics: MemoryRecallTotal{success, queryType}++
+    Recall->>Metrics: MemoryRecallDuration.Observe()
+    Recall->>Metrics: MemoryRecallCellsTotal += len(cells)
+    Recall->>Tracing: EndSpan("memory.recall")
+
+    Recall-->>Adapter: RecallResponse
+
+    Note over Adapter: Format for Context Injection
+
+    Adapter->>Recall: FormatMemoryForInjection(response)
+    Recall->>Recall: Group cells by scene
+    Recall->>Recall: Build markdown output
+    Note over Recall: "### Relevant Long-Term Memory"<br/>Per scene: summary + key facts<br/>Footer: cell/scene/token counts
+    Recall-->>Adapter: formatted string
+
+    Adapter-->>ChatSvc: formatted memory string
+    Note over ChatSvc: Inject into system prompt

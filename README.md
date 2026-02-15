@@ -46,11 +46,21 @@ An AI agent framework built with Clean Architecture principles, featuring LLM in
 - **Conversation Export**: Export conversations in JSON or Markdown format with full metadata
 - **User Preferences**: Customizable LLM settings (provider, model, temperature, tokens), response formats, and context windows
 
+### Self-Organizing Memory
+- **Automatic Knowledge Extraction**: LLM-based extraction of structured memory cells from every conversation
+- **Scene-Based Organization**: Memory cells grouped into topical "scenes" with consolidated summaries
+- **Full-Text Search Recall**: FTS5-powered retrieval with salience-based fallback (sub-millisecond queries)
+- **Six Cell Types**: fact, decision, task, preference, plan, risk — each with salience scoring (0.0-1.0)
+- **Context Injection**: Relevant memories automatically injected into conversation context with token budgeting
+- **Memory CLI**: Full management commands — list, search, get, delete, prune, scenes, stats, export/import
+- **Graceful Degradation**: Memory failures never block chat — extraction and recall fail silently with logging
+- **Separate Database**: Isolated `nuimanbot-memory.db` with FTS5 index and auto-sync triggers
+
 ### Performance & Observability
 - **Connection Pooling**: Optimized database connections (25 max open, 5 idle, lifecycle management)
 - **LLM Response Caching**: In-memory cache with SHA256 hashing (1000 entries, 1-hour TTL, 100% test coverage)
 - **Message Batching**: Buffered writes with dual flush strategy (size-based + time-based)
-- **Prometheus Metrics**: 14+ metric types exposed at `/metrics` endpoint
+- **Prometheus Metrics**: 23+ metric types exposed at `/metrics` endpoint (including 9 memory-specific metrics)
 - **Distributed Tracing**: OpenTelemetry-style tracing with span tracking and context propagation
 - **Error Tracking**: Structured error capture with user context, tags, breadcrumbs, and custom fingerprints
 - **Real-time Alerting**: Multi-channel alerts (Log, Slack, PagerDuty, Email) with throttling
@@ -578,6 +588,41 @@ memoryAPI.Recall("my-skill", "last-run", domain.MemoryScopeSkill, &lastRun)
 memoryAPI.Forget("my-skill", "last-run", domain.MemoryScopeSkill)
 ```
 
+### Self-Organizing Memory v2
+
+NuimanBot includes an LLM-powered long-term memory system that automatically extracts, organizes, and recalls knowledge across conversations. Unlike Phase 3E's skill-scoped key-value memory, this system operates transparently — extracting structured knowledge from every interaction and recalling relevant context automatically.
+
+#### How It Works
+
+1. **After each conversation turn**, the Memory Curator extracts structured "cells" (facts, decisions, tasks, preferences, plans, risks) via LLM analysis
+2. **Cells are organized into "scenes"** (topic buckets like "project-setup", "authentication") with auto-generated summaries
+3. **Before each response**, the Memory Recall service searches the FTS5 index for relevant memories and injects them into the context window
+
+#### Memory Commands
+
+```bash
+# List memory cells (with optional filters)
+./bin/nuimanbot memory list --scene project-setup --limit 10
+
+# Full-text search across all memories
+./bin/nuimanbot memory search "OAuth2 authentication"
+
+# View memory statistics
+./bin/nuimanbot memory stats
+
+# List scene summaries
+./bin/nuimanbot memory scenes
+
+# Prune expired cells
+./bin/nuimanbot memory prune
+
+# Export/import for backup
+./bin/nuimanbot memory export --conversation conv-123 > backup.json
+./bin/nuimanbot memory import < backup.json
+```
+
+For full administration details, see **[Memory Admin Guide](documentation/admin-guide-memory.md)**.
+
 **Phase 3 Documentation:**
 - [Subagents Guide](support_docs/subagents-guide.md)
 - [Preprocessing Guide](support_docs/preprocessing-guide.md)
@@ -595,18 +640,22 @@ memoryAPI.Forget("my-skill", "last-run", domain.MemoryScopeSkill)
 │   └── nuimanbot/         # Application entry point
 ├── internal/
 │   ├── domain/            # Business entities (no dependencies)
+│   │   └── memoryv2/      # Memory cell, scene entities and repository interfaces
 │   ├── usecase/           # Application business logic
-│   │   ├── chat/          # Chat service orchestration
+│   │   ├── chat/          # Chat service orchestration (with memory integration)
+│   │   ├── memoryv2/      # Memory curator and recall services
 │   │   ├── security/      # Security & encryption
 │   │   ├── user/          # User management
 │   │   ├── notes/         # Notes repository interface
 │   │   └── tool/         # Tool execution framework with RBAC
 │   ├── adapter/           # Interface adapters
+│   │   ├── cli/           # CLI command handlers (incl. memory commands)
 │   │   ├── gateway/       # CLI, Telegram, Slack gateways
 │   │   └── repository/    # SQLite repositories (users, messages, notes)
 │   └── infrastructure/    # External concerns
 │       ├── crypto/        # AES encryption, vault
 │       ├── llm/           # LLM provider clients (Anthropic, OpenAI, Ollama)
+│       ├── memory/        # SQLite memory repositories (cells, scenes, FTS5)
 │       ├── weather/       # OpenWeatherMap client
 │       └── search/        # DuckDuckGo search client
 ├── internal/tools/       # Built-in tools (calculator, datetime, weather, websearch, notes)
@@ -866,7 +915,8 @@ See `AGENTS.md` for detailed contribution guidelines.
 
 ✅ **Production-Ready MVP** - 95.6% Complete (43/45 planned features)
 
-**Recently Completed (Phases 5, 6, 7.1, & Agent Skills Phase 3)**:
+**Recently Completed (Phases 5, 6, 7.1, Agent Skills Phase 3, & Self-Organizing Memory)**:
+- ✅ **Self-Organizing Memory v2 Complete** (2026-02-15): LLM-powered extraction, FTS5 recall, scene consolidation, full CLI, observability, admin documentation
 - ✅ **Phase 5 Complete** (100%): Streaming, Multi-Provider Fallback, User Preferences, Conversation Export
 - ✅ **Phase 6 Complete** (100%): Prometheus Metrics, Distributed Tracing, Error Tracking, Real-time Alerting, Usage Analytics
 - ✅ **Phase 7.1 Complete** (2026-02-07): GitHub Actions CI/CD Pipeline - All workflows passing! 🎉
@@ -950,6 +1000,7 @@ For detailed progress tracking and implementation plans, see `POST_REVIEW_IMPROV
 ### Administration
 
 - **[Admin Guide](documentation/admin-guide.md)** - Complete administration guide (REST API, CLI, user/bot management)
+- **[Memory Admin Guide](documentation/admin-guide-memory.md)** - Memory system administration (CLI, metrics, alerting, troubleshooting)
 - **[API Reference](documentation/api-reference.md)** - REST API endpoint documentation
 - **[Configuration Reference](documentation/configuration-reference.md)** - Configuration file reference
 - **[Migration Guide](documentation/migration-guide.md)** - Migration from old architecture

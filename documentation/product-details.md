@@ -1,7 +1,7 @@
 # NuimanBot Product Details
 
-**Version:** 1.0
-**Last Updated:** 2026-02-07
+**Version:** 1.2
+**Last Updated:** 2026-02-15
 **Status:** Production Ready (95.6% Complete)
 
 ---
@@ -223,6 +223,24 @@
   - ✅ TTL and expiration support
   - ✅ Automatic cleanup of expired memory
   - ✅ Documentation and usage guide
+
+#### FR-017: Self-Organizing Memory v2
+- **Priority:** P1 (High)
+- **Status:** ✅ Complete
+- **Description:** LLM-powered long-term memory that automatically extracts, organizes, and recalls knowledge across conversations
+- **Acceptance Criteria:**
+  - ✅ Domain entities: MemoryCell (6 types, salience scoring), MemoryScene (consolidated summaries)
+  - ✅ SQLite infrastructure: Separate `nuimanbot-memory.db` with FTS5 full-text search, auto-sync triggers
+  - ✅ Memory Curator Service: LLM-based extraction of structured cells from interactions, scene consolidation
+  - ✅ Memory Recall Service: FTS5 search with salience fallback, token-budgeted context injection
+  - ✅ ChatService integration: Automatic extraction after responses, recall before context building
+  - ✅ CLI commands: list, get, search, delete, scenes, prune, stats, clear-user, export, import, rebuild-fts
+  - ✅ Prometheus metrics: 9 memory-specific metrics (extraction, consolidation, recall, FTS)
+  - ✅ Distributed tracing: Spans for extraction, consolidation, recall, FTS search
+  - ✅ Structured logging: slog with component tags, all error/decision points covered
+  - ✅ Alerting: LLM failures, slow operations, zero-cell extractions
+  - ✅ Graceful degradation: Memory failures never block chat functionality
+  - ✅ Admin documentation: Comprehensive operations guide with metrics, troubleshooting, backup/recovery
 
 ### Non-Functional Requirements
 
@@ -606,6 +624,85 @@
 - Dependencies resolved and available
 - Security validations passed
 - Skills from plugin available in skill catalog
+
+### Workflow 12: Memory-Enhanced Conversation
+
+**Actors:** User
+
+**Preconditions:**
+- Self-organizing memory v2 is enabled
+- User has had prior conversations with NuimanBot
+
+**Steps:**
+1. User sends: "Let's continue working on the authentication module"
+2. NuimanBot builds context window for the new turn:
+   - MemoryRecallService queries FTS5 index with "authentication module"
+   - FTS5 returns 5 matching cells from scene "authentication" (salience 0.75-0.95)
+   - Scene summary fetched: "User configured OAuth2 with JWT tokens, 24h expiry..."
+   - Token budget applied: 3 cells + 1 scene summary fit within 2000-token budget
+3. Memory context injected into system prompt:
+   ```
+   ### Relevant Long-Term Memory (Curated)
+   **Scene: authentication**
+   Summary: User configured OAuth2 with JWT tokens...
+   **Key Facts:**
+   - [decision, salience=0.90] Decided to use JWT with 24-hour expiry
+   - [fact, salience=0.85] OAuth2 provider is Auth0
+   - [task, salience=0.80] Need to implement token refresh endpoint
+   ```
+4. LLM receives full context including recalled memories
+5. LLM responds with awareness of prior decisions and pending tasks
+6. After response, MemoryCuratorService extracts new cells:
+   - LLM analyzes the interaction for memorable information
+   - New cells created (e.g., "Started implementing token refresh endpoint")
+   - Scene "authentication" consolidation triggered with updated summary
+7. User continues conversation with persistent context across sessions
+
+**Postconditions:**
+- Relevant prior knowledge surfaced without user having to repeat context
+- New knowledge extracted and persisted for future conversations
+- Scene summaries updated to reflect latest state
+- All operations logged with metrics and tracing
+
+### Workflow 13: Memory Administration
+
+**Actors:** System Admin
+
+**Preconditions:**
+- NuimanBot is running with memory v2 enabled
+
+**Steps:**
+1. Admin checks memory health:
+   ```bash
+   ./bin/nuimanbot memory stats
+   # Output: Cells: 142, Scenes: 8, Database Size: 2.3 MB
+   ```
+2. Admin searches for specific memories:
+   ```bash
+   ./bin/nuimanbot memory search "authentication OAuth2" --limit 5
+   ```
+3. Admin reviews scene summaries:
+   ```bash
+   ./bin/nuimanbot memory scenes --format json
+   ```
+4. Admin prunes expired cells:
+   ```bash
+   ./bin/nuimanbot memory prune
+   ```
+5. Admin exports conversation data for backup:
+   ```bash
+   ./bin/nuimanbot memory export --conversation conv-123 > backup.json
+   ```
+6. Admin monitors Prometheus metrics:
+   - `memory_extraction_total{status="success"}` - Extraction success rate
+   - `memory_recall_duration_seconds` - Recall latency (target: <100ms)
+   - `memory_fts_query_duration_seconds` - FTS query latency (target: <50ms)
+
+**Postconditions:**
+- Memory system health verified
+- Expired data cleaned up
+- Backups created for disaster recovery
+- Performance metrics within acceptable thresholds
 
 ---
 
@@ -1302,9 +1399,11 @@ skills:
 - **[Plugins Guide](../support_docs/plugins-guide.md)** - Third-party skill packages
 - **[Versioning Guide](../support_docs/versioning-guide.md)** - Skill version management
 - **[Memory Guide](../support_docs/memory-guide.md)** - Persistent skill state
+- **[Memory Admin Guide](admin-guide-memory.md)** - Self-organizing memory operations and monitoring
 
 ---
 
 **Document History:**
 - **v1.0 (2026-02-07):** Initial creation from MVP PRD and Post-MVP roadmap
 - **v1.1 (2026-02-07):** Added Phase 3 features and documentation reference
+- **v1.2 (2026-02-15):** Added FR-017 Self-Organizing Memory v2, Workflows 12-13

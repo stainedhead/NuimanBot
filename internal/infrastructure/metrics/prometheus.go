@@ -133,6 +133,77 @@ var (
 		},
 	)
 
+	// Memory Metrics
+	MemoryExtractionTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "memory_extraction_total",
+			Help: "Total number of memory extractions",
+		},
+		[]string{"status"},
+	)
+
+	MemoryExtractionDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "memory_extraction_duration_seconds",
+			Help:    "Memory extraction duration in seconds",
+			Buckets: []float64{0.01, 0.05, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0},
+		},
+	)
+
+	MemoryCellsCreatedTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "memory_cells_created_total",
+			Help: "Total number of memory cells created",
+		},
+	)
+
+	MemoryConsolidationTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "memory_consolidation_total",
+			Help: "Total number of scene consolidations",
+		},
+		[]string{"status"},
+	)
+
+	MemoryConsolidationDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "memory_consolidation_duration_seconds",
+			Help:    "Scene consolidation duration in seconds",
+			Buckets: []float64{0.01, 0.05, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0},
+		},
+	)
+
+	MemoryRecallTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "memory_recall_total",
+			Help: "Total number of memory recalls",
+		},
+		[]string{"status", "query_type"},
+	)
+
+	MemoryRecallDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "memory_recall_duration_seconds",
+			Help:    "Memory recall duration in seconds",
+			Buckets: []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0},
+		},
+	)
+
+	MemoryRecallCellsTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "memory_recall_cells_total",
+			Help: "Total number of memory cells recalled",
+		},
+	)
+
+	MemoryFTSQueryDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "memory_fts_query_duration_seconds",
+			Help:    "FTS query duration in seconds",
+			Buckets: []float64{0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1},
+		},
+	)
+
 	// Rate Limiting Metrics
 	RateLimitExceeded = promauto.NewCounterVec(
 		prometheus.CounterOpts{

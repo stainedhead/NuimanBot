@@ -1,0 +1,30 @@
+%% Memory v2 Database Schema - SQLite + FTS5
+erDiagram
+    memory_cells {
+        TEXT id PK "UUID primary key"
+        TEXT conversation_id "User/conversation identifier (max 128)"
+        TEXT scene "Topic bucket (3-64 chars, lowercase)"
+        TEXT cell_type "fact|decision|task|preference|plan|risk"
+        REAL salience "Importance 0.0-1.0"
+        TEXT content "Knowledge text (max 2000)"
+        TEXT source "JSON array of message IDs"
+        TIMESTAMP created_at "Creation time"
+        TIMESTAMP updated_at "Last update time"
+        TIMESTAMP expires_at "Optional expiration"
+    }
+
+    memory_scenes {
+        TEXT scene PK "Topic name (3-64 chars, lowercase)"
+        TEXT summary "Consolidated summary (max 10000)"
+        INTEGER token_count "Summary token count (1-2000)"
+        TIMESTAMP updated_at "Last consolidation time"
+    }
+
+    memory_cells_fts {
+        TEXT content "FTS5 indexed content"
+        TEXT scene "FTS5 indexed scene"
+        TEXT cell_type "FTS5 indexed type"
+    }
+
+    memory_cells ||--o{ memory_cells_fts : "triggers sync"
+    memory_cells }o--|| memory_scenes : "grouped by scene"

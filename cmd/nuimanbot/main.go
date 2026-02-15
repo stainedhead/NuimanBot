@@ -12,7 +12,8 @@ import (
 	"syscall"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3" // SQLite driver
+	_ "github.com/mattn/go-sqlite3" // SQLite driver for core tables
+	_ "modernc.org/sqlite"          // Pure Go SQLite driver with FTS5 for memory v2
 
 	cliadapter "nuimanbot/internal/adapter/cli"
 	"nuimanbot/internal/adapter/gateway/cli"
@@ -21,6 +22,7 @@ import (
 	"nuimanbot/internal/adapter/repository/sqlite"
 	"nuimanbot/internal/config"
 	"nuimanbot/internal/domain"
+	"nuimanbot/internal/domain/memoryv2"
 	"nuimanbot/internal/infrastructure/audit"
 	"nuimanbot/internal/infrastructure/cache"
 	"nuimanbot/internal/infrastructure/crypto"
@@ -30,6 +32,7 @@ import (
 	ollama "nuimanbot/internal/infrastructure/llm/ollama"
 	openai "nuimanbot/internal/infrastructure/llm/openai"
 	"nuimanbot/internal/infrastructure/logger"
+	memorysqlite "nuimanbot/internal/infrastructure/memory"
 	infrasecurity "nuimanbot/internal/infrastructure/security"
 	skillinfra "nuimanbot/internal/infrastructure/skill"
 	"nuimanbot/internal/infrastructure/storage"
@@ -41,6 +44,7 @@ import (
 	"nuimanbot/internal/usecase/botmgmt"
 	"nuimanbot/internal/usecase/chat"
 	"nuimanbot/internal/usecase/memory"
+	memoryv2uc "nuimanbot/internal/usecase/memoryv2"
 	"nuimanbot/internal/usecase/profile"
 	"nuimanbot/internal/usecase/security"
 	skillusecase "nuimanbot/internal/usecase/skill"
@@ -67,6 +71,9 @@ type application struct {
 	ToolExecutionService *tool.Service
 	HealthServer         *health.Server
 	DB                   *sql.DB
+	MemoryDB             *sql.DB                        // Separate DB connection for memory v2 (FTS5)
+	MemoryCellRepo       memoryv2.MemoryCellRepository  // Memory v2 cell repository
+	MemorySceneRepo      memoryv2.MemorySceneRepository // Memory v2 scene repository
 }
 
 func main() {
@@ -196,6 +203,80 @@ func main() {
 		"ttl", "1h",
 	)
 
+	// 10.5. Initialize Memory v2 (Self-Organizing Memory)
+	// Uses modernc.org/sqlite driver ("sqlite") for built-in FTS5 support.
+	// Separate DB file avoids driver conflicts with mattn/go-sqlite3 used for core tables.
+	memoryDBPath := cfg.Storage.DSN
+	if memoryDBPath == "" {
+		memoryDBPath = "./data/nuimanbot-memory.db"
+	} else {
+		// Derive memory DB path from main DB path
+		memoryDBPath = memoryDBPath[:len(memoryDBPath)-3] + "-memory.db"
+	}
+
+	var memoryCellRepo memoryv2.MemoryCellRepository
+	var memorySceneRepo memoryv2.MemorySceneRepository
+	var memoryDB *sql.DB
+
+	memoryDB, err = sql.Open("sqlite", memoryDBPath)
+	if err != nil {
+		slog.Warn("Failed to open memory v2 database (continuing without memory)",
+			"error", err,
+			"path", memoryDBPath,
+		)
+	} else {
+		memoryDB.SetMaxOpenConns(10)
+		memoryDB.SetMaxIdleConns(3)
+		memoryDB.SetConnMaxLifetime(5 * time.Minute)
+
+		if err := initializeMemoryV2Schema(memoryDB); err != nil {
+			slog.Warn("Failed to initialize memory v2 schema (continuing without memory)",
+				"error", err,
+			)
+			memoryDB.Close()
+			memoryDB = nil
+		} else {
+			cellRepo := memorysqlite.NewSQLiteMemoryCellRepository(memoryDB)
+			sceneRepo := memorysqlite.NewSQLiteMemorySceneRepository(memoryDB)
+			memoryCellRepo = cellRepo
+			memorySceneRepo = sceneRepo
+
+			// Initialize MemoryRecallService (no LLM dependency)
+			recallConfig := memoryv2uc.RecallConfig{
+				FTSResultLimit:    20,
+				SalienceThreshold: 0.5,
+				FallbackCellLimit: 10,
+				MaxScenes:         10,
+				TokenBudget:       2000,
+			}
+			recallService := memoryv2uc.NewMemoryRecallService(cellRepo, sceneRepo, recallConfig)
+			chatService.SetMemoryRecaller(&memoryRecallerAdapter{recaller: recallService})
+
+			// Initialize MemoryCuratorService (requires LLM)
+			curatorConfig := memoryv2uc.CuratorConfig{
+				Enabled:               true,
+				ExtractionModel:       "claude-3-haiku-20240307",
+				ConsolidationModel:    "claude-3-haiku-20240307",
+				MaxCellsPerExtraction: 5,
+				RetryOnInvalidJSON:    false,
+				SceneSummaryMaxTokens: 500,
+			}
+			llmAdapter := memoryv2uc.NewLLMServiceAdapter(llmService, domain.LLMProviderAnthropic, curatorConfig.ExtractionModel)
+			curatorService := memoryv2uc.NewMemoryCuratorService(llmAdapter, cellRepo, sceneRepo, curatorConfig)
+			chatService.SetMemoryCurator(&memoryCuratorAdapter{curator: curatorService})
+
+			slog.Info("Memory v2 (self-organizing memory) initialized",
+				"db_path", memoryDBPath,
+				"curator_enabled", curatorConfig.Enabled,
+				"recall_fts_limit", recallConfig.FTSResultLimit,
+				"recall_token_budget", recallConfig.TokenBudget,
+			)
+		}
+	}
+	if memoryDB != nil {
+		defer memoryDB.Close()
+	}
+
 	// 11. Create Application
 	app := &application{
 		Config:               cfg,
@@ -208,6 +289,9 @@ func main() {
 		ToolExecutionService: toolExecutionService,
 		HealthServer:         healthServer,
 		DB:                   db,
+		MemoryDB:             memoryDB,
+		MemoryCellRepo:       memoryCellRepo,
+		MemorySceneRepo:      memorySceneRepo,
 	}
 
 	// 12. Run application in goroutine
@@ -468,6 +552,121 @@ func registerDeveloperProductivityTools(registry tool.ToolRegistry, llmService d
 	return nil
 }
 
+// memoryCuratorAdapter adapts MemoryCuratorService to chat.MemoryCurator interface.
+type memoryCuratorAdapter struct {
+	curator *memoryv2uc.MemoryCuratorService
+}
+
+func (a *memoryCuratorAdapter) ExtractMemoryCells(ctx context.Context, conversationID, userMessage, assistantReply string, toolOutputs []string) error {
+	interaction := memoryv2uc.InteractionContext{
+		ConversationID: conversationID,
+		UserMessage:    userMessage,
+		AssistantReply: assistantReply,
+		ToolOutputs:    toolOutputs,
+	}
+	_, err := a.curator.ExtractCells(ctx, interaction)
+	return err
+}
+
+// memoryRecallerAdapter adapts MemoryRecallService to chat.MemoryRecaller interface.
+type memoryRecallerAdapter struct {
+	recaller *memoryv2uc.MemoryRecallService
+}
+
+func (a *memoryRecallerAdapter) RecallAndFormat(ctx context.Context, conversationID, query string, maxTokens int) (string, error) {
+	request := memoryv2uc.RecallRequest{
+		ConversationID: conversationID,
+		Query:          query,
+		MaxTokens:      maxTokens,
+	}
+	response, err := a.recaller.RecallMemory(ctx, request)
+	if err != nil {
+		return "", err
+	}
+	return a.recaller.FormatMemoryForInjection(response), nil
+}
+
+// initializeMemoryV2Schema creates memory_cells, memory_scenes, and FTS5 tables.
+func initializeMemoryV2Schema(db *sql.DB) error {
+	schema := `
+	CREATE TABLE IF NOT EXISTS memory_cells (
+		id TEXT PRIMARY KEY,
+		conversation_id TEXT NOT NULL,
+		scene TEXT NOT NULL,
+		cell_type TEXT NOT NULL,
+		salience REAL NOT NULL,
+		content TEXT NOT NULL,
+		source TEXT NOT NULL,
+		created_at TIMESTAMP NOT NULL,
+		updated_at TIMESTAMP NOT NULL,
+		expires_at TIMESTAMP,
+		CONSTRAINT chk_salience CHECK (salience >= 0.0 AND salience <= 1.0),
+		CONSTRAINT chk_cell_type CHECK (cell_type IN ('fact', 'decision', 'task', 'preference', 'plan', 'risk'))
+	);
+
+	CREATE INDEX IF NOT EXISTS idx_memory_cells_conversation ON memory_cells(conversation_id);
+	CREATE INDEX IF NOT EXISTS idx_memory_cells_scene ON memory_cells(scene);
+	CREATE INDEX IF NOT EXISTS idx_memory_cells_salience ON memory_cells(salience DESC);
+	CREATE INDEX IF NOT EXISTS idx_memory_cells_expires_at ON memory_cells(expires_at) WHERE expires_at IS NOT NULL;
+	CREATE INDEX IF NOT EXISTS idx_memory_cells_created_at ON memory_cells(created_at DESC);
+	CREATE INDEX IF NOT EXISTS idx_memory_cells_conv_scene ON memory_cells(conversation_id, scene);
+
+	CREATE TABLE IF NOT EXISTS memory_scenes (
+		scene TEXT PRIMARY KEY,
+		summary TEXT NOT NULL,
+		token_count INTEGER NOT NULL,
+		updated_at TIMESTAMP NOT NULL,
+		CONSTRAINT chk_token_count CHECK (token_count > 0 AND token_count <= 2000)
+	);
+	`
+
+	if _, err := db.Exec(schema); err != nil {
+		return fmt.Errorf("failed to create memory v2 tables: %w", err)
+	}
+
+	// Create FTS5 virtual table (separate exec to handle IF NOT EXISTS gracefully)
+	ftsSchema := `CREATE VIRTUAL TABLE IF NOT EXISTS memory_cells_fts USING fts5(
+		content,
+		scene,
+		cell_type,
+		content='memory_cells',
+		content_rowid='rowid'
+	);`
+	if _, err := db.Exec(ftsSchema); err != nil {
+		return fmt.Errorf("failed to create memory FTS5 table: %w", err)
+	}
+
+	// Create triggers for FTS sync
+	triggers := []string{
+		`CREATE TRIGGER IF NOT EXISTS memory_cells_ai
+		AFTER INSERT ON memory_cells
+		BEGIN
+			INSERT INTO memory_cells_fts(rowid, content, scene, cell_type)
+			VALUES (new.rowid, new.content, new.scene, new.cell_type);
+		END;`,
+		`CREATE TRIGGER IF NOT EXISTS memory_cells_ad
+		AFTER DELETE ON memory_cells
+		BEGIN
+			DELETE FROM memory_cells_fts WHERE rowid = old.rowid;
+		END;`,
+		`CREATE TRIGGER IF NOT EXISTS memory_cells_au
+		AFTER UPDATE ON memory_cells
+		BEGIN
+			DELETE FROM memory_cells_fts WHERE rowid = old.rowid;
+			INSERT INTO memory_cells_fts(rowid, content, scene, cell_type)
+			VALUES (new.rowid, new.content, new.scene, new.cell_type);
+		END;`,
+	}
+	for _, trigger := range triggers {
+		if _, err := db.Exec(trigger); err != nil {
+			return fmt.Errorf("failed to create FTS trigger: %w", err)
+		}
+	}
+
+	slog.Info("Memory v2 schema initialized successfully")
+	return nil
+}
+
 // initializeDatabase creates necessary tables if they don't exist.
 func initializeDatabase(db *sql.DB) error {
 	// Create users table
@@ -669,6 +868,14 @@ func (app *application) Run(ctx context.Context) error {
 	cliGateway.SetBotHandler(botHandler)
 	slog.Info("Bot admin commands initialized")
 
+	// Initialize memory CLI commands (if memory v2 is available)
+	if app.MemoryCellRepo != nil && app.MemorySceneRepo != nil {
+		memoryCmd := cliadapter.NewMemoryCommand(app.MemoryCellRepo, app.MemorySceneRepo, os.Stdout)
+		memoryHandler := cli.NewMemoryCommandHandler(memoryCmd)
+		cliGateway.SetMemoryHandler(memoryHandler)
+		slog.Info("Memory CLI commands initialized")
+	}
+
 	// Set current user as admin for CLI (CLI users are trusted)
 	cliGateway.SetCurrentUser(&domain.User{
 		ID:       "cli_admin",
@@ -742,6 +949,7 @@ func (app *application) Run(ctx context.Context) error {
 	fmt.Println("Type your messages below. Commands:")
 	fmt.Println("  - Type 'exit' or 'quit' to stop")
 	fmt.Println("  - Type 'help' for available skills")
+	fmt.Println("  - Type '/memory help' for memory commands")
 	fmt.Println()
 
 	// Start CLI gateway (blocks until shutdown)

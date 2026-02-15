@@ -15,7 +15,8 @@
 4. [Security Architecture](#security-architecture)
 5. [Observability & Monitoring](#observability--monitoring)
 6. [Data Flow](#data-flow)
-7. [API Documentation](#api-documentation)
+7. [Self-Organizing Memory v2](#self-organizing-memory-v2)
+8. [API Documentation](#api-documentation)
 8. [Configuration](#configuration)
 9. [Testing Strategy](#testing-strategy)
 10. [CI/CD Pipeline](#cicd-pipeline)
@@ -818,6 +819,189 @@ CREATE INDEX idx_skill_memory_scope ON skill_memory(scope);
 ```
 
 **Migrations:** Automatically applied on startup via `schema.sql`
+
+### Self-Organizing Memory v2
+
+NuimanBot includes a self-organizing long-term memory system that automatically extracts, organizes, and recalls knowledge across conversations. The system uses a "scene + cell" architecture where individual knowledge units (cells) are organized into topic buckets (scenes) with consolidated summaries.
+
+#### Architecture Overview
+
+The memory system follows Clean Architecture with four layers:
+
+```mermaid
+graph LR
+    subgraph DOM["Domain Layer"]
+        Cell["MemoryCell"]
+        Scene["MemoryScene"]
+        CellRepo["MemoryCellRepository<br/>(interface)"]
+        SceneRepo["MemorySceneRepository<br/>(interface)"]
+    end
+    subgraph UC["Use Case Layer"]
+        CurSvc["MemoryCuratorService"]
+        RecSvc["MemoryRecallService"]
+    end
+    subgraph ADAPT["Adapter Layer"]
+        SQLiteCell["SQLiteMemoryCellRepo"]
+        SQLiteScene["SQLiteMemorySceneRepo"]
+        MemCmd["MemoryCommand (CLI)"]
+        CurAdapt["memoryCuratorAdapter"]
+        RecAdapt["memoryRecallerAdapter"]
+    end
+    subgraph INFRA["Infrastructure"]
+        DB["SQLite + FTS5"]
+        Prom["Prometheus Metrics"]
+        Trace["Tracing Spans"]
+    end
+
+    SQLiteCell -->|implements| CellRepo
+    SQLiteScene -->|implements| SceneRepo
+    CurSvc --> CellRepo
+    CurSvc --> SceneRepo
+    RecSvc --> CellRepo
+    RecSvc --> SceneRepo
+    CurAdapt --> CurSvc
+    RecAdapt --> RecSvc
+    SQLiteCell --> DB
+    SQLiteScene --> DB
+    CurSvc --> Prom
+    RecSvc --> Prom
+    CurSvc --> Trace
+    RecSvc --> Trace
+
+    style DOM fill:#e8f5e9,stroke:#2e7d32
+    style UC fill:#e3f2fd,stroke:#1565c0
+    style ADAPT fill:#fff3e0,stroke:#ef6c00
+    style INFRA fill:#fce4ec,stroke:#c62828
+```
+
+**Source diagrams:** `documentation/diagrams/memory-*.mmd`
+
+#### Memory Cell Types
+
+| Type | Description | Example |
+|------|-------------|---------|
+| `fact` | Objective information or observations | "User's project uses Go 1.22" |
+| `decision` | Choices made or preferences expressed | "Decided to use JWT with 24h expiry" |
+| `task` | Action items, TODOs, or goals | "Need to implement rate limiting" |
+| `preference` | User preferences or patterns | "User prefers TDD workflow" |
+| `plan` | Future plans or strategies | "Will migrate to PostgreSQL in Q3" |
+| `risk` | Warnings, concerns, or issues | "API rate limit may be hit at scale" |
+
+#### Memory Extraction Flow
+
+After each chat interaction, the curator service extracts structured memory:
+
+```
+ChatService.ProcessMessage()
+    → memoryCuratorAdapter.ExtractMemoryCells()
+        → MemoryCuratorService.ExtractCells()
+            1. Build extraction prompt with interaction context
+            2. Call LLM (GenerateJSON) for structured extraction
+            3. Parse response into ExtractedCell array
+            4. For each cell: validate, persist to memory_cells table
+               (FTS5 trigger auto-indexes content)
+            5. For each touched scene: consolidate summary
+                → Call LLM for scene summary
+                → Upsert into memory_scenes table
+```
+
+#### Memory Recall Flow
+
+When building context for a new conversation turn:
+
+```
+ChatService / BuildContextWindow
+    → memoryRecallerAdapter.RecallAndFormat()
+        → MemoryRecallService.RecallMemory()
+            1. FTS5 full-text search (BM25 ranking, limit 20)
+            2. If no FTS results: fallback to high-salience cells
+            3. Fetch scene summaries for matched cells
+            4. Apply token budget (cells + scenes fit within limit)
+            5. Format as markdown for system prompt injection
+```
+
+Output format injected into context:
+```markdown
+### Relevant Long-Term Memory (Curated)
+
+**Scene: authentication**
+Summary: User configured OAuth2 with JWT tokens...
+
+**Key Facts:**
+- [decision, salience=0.90] Decided to use JWT with 24-hour expiry
+- [fact, salience=0.85] OAuth2 provider is Auth0
+
+*Retrieved 2 cells from 1 scenes (45 tokens)*
+```
+
+#### Memory Database Schema
+
+```sql
+-- Structured knowledge units
+CREATE TABLE memory_cells (
+    id TEXT PRIMARY KEY,              -- UUID
+    conversation_id TEXT NOT NULL,    -- User/conversation (max 128)
+    scene TEXT NOT NULL,              -- Topic bucket (3-64 chars)
+    cell_type TEXT NOT NULL,          -- fact|decision|task|preference|plan|risk
+    salience REAL NOT NULL,           -- Importance 0.0-1.0
+    content TEXT NOT NULL,            -- Knowledge text (max 2000)
+    source TEXT NOT NULL,             -- JSON array of message IDs
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL,
+    expires_at TIMESTAMP              -- Optional expiration
+);
+
+-- FTS5 full-text search index (auto-synced via triggers)
+CREATE VIRTUAL TABLE memory_cells_fts USING fts5(
+    content, scene, cell_type,
+    content='memory_cells', content_rowid='rowid'
+);
+
+-- Consolidated scene summaries
+CREATE TABLE memory_scenes (
+    scene TEXT PRIMARY KEY,           -- Topic name (3-64 chars)
+    summary TEXT NOT NULL,            -- Consolidated summary (max 10000)
+    token_count INTEGER NOT NULL,     -- Summary tokens (1-2000)
+    updated_at TIMESTAMP NOT NULL
+);
+```
+
+**Indexes:** conversation_id, scene, salience DESC, expires_at, created_at DESC, (conversation_id, scene) composite.
+
+**FTS5 Triggers:** Auto-sync on INSERT, UPDATE, DELETE from memory_cells to memory_cells_fts.
+
+#### Memory Metrics (Prometheus)
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `memory_extraction_total` | Counter | status | Extraction operations (success/error/skipped) |
+| `memory_extraction_duration_seconds` | Histogram | - | Extraction latency |
+| `memory_cells_created_total` | Counter | - | Total cells created |
+| `memory_consolidation_total` | Counter | status | Scene consolidations (success/error) |
+| `memory_consolidation_duration_seconds` | Histogram | - | Consolidation latency |
+| `memory_recall_total` | Counter | status, query_type | Recall operations (fts/fallback) |
+| `memory_recall_duration_seconds` | Histogram | - | Recall latency |
+| `memory_recall_cells_total` | Counter | - | Total cells recalled |
+| `memory_fts_query_duration_seconds` | Histogram | - | FTS query latency |
+
+#### Memory CLI Commands
+
+| Command | Description |
+|---------|-------------|
+| `/memory list [--scene X] [--type Y] [--limit N]` | List memory cells with filters |
+| `/memory get <id>` | Show full cell details |
+| `/memory search <query> [--limit N]` | Full-text search across cells |
+| `/memory delete <id>` | Delete a specific cell |
+| `/memory scenes` | List all scene summaries |
+| `/memory prune` | Delete expired cells |
+| `/memory help` | Show available commands |
+
+#### Graceful Degradation
+
+- **Memory DB init failure:** App continues without memory v2 (logged warning)
+- **Extraction LLM failure:** Error logged, chat continues normally
+- **Recall failure:** Empty memory returned, response generated without memory context
+- **Individual cell errors:** Collected in result.Errors, non-blocking
 
 ---
 

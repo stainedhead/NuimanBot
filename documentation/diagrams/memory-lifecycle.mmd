@@ -1,0 +1,76 @@
+%% Memory Lifecycle - Full Cycle from Creation to Usage to Expiration
+stateDiagram-v2
+    [*] --> ChatInteraction: User sends message
+
+    state ChatInteraction {
+        UserMessage --> LLMResponse: ChatService processes
+        LLMResponse --> ToolExecution: If tools needed
+        ToolExecution --> LLMResponse: Tool results
+        LLMResponse --> FinalResponse: No more tools
+    }
+
+    FinalResponse --> Extraction: Post-response hook
+
+    state Extraction {
+        state extraction_check <<choice>>
+        [*] --> extraction_check
+        extraction_check --> SkipExtraction: Disabled
+        extraction_check --> LLMExtraction: Enabled
+
+        LLMExtraction --> ParseCells: JSON response
+        ParseCells --> ValidateCell: For each cell
+        ValidateCell --> PersistCell: Valid
+        ValidateCell --> SkipCell: Invalid
+        PersistCell --> FTSIndex: Trigger auto-syncs FTS5
+        FTSIndex --> TrackScene: Record touched scene
+    }
+
+    TrackScene --> Consolidation
+
+    state Consolidation {
+        [*] --> FetchSceneCells: For each touched scene
+        FetchSceneCells --> FetchExistingSummary
+        FetchExistingSummary --> LLMConsolidate: Build prompt
+        LLMConsolidate --> UpsertScene: Store summary
+    }
+
+    UpsertScene --> StoredMemory: Cells + Scenes in DB
+
+    state StoredMemory {
+        CellsTable: memory_cells\n(structured knowledge)
+        ScenesTable: memory_scenes\n(consolidated summaries)
+        FTSTable: memory_cells_fts\n(full-text search index)
+    }
+
+    StoredMemory --> Recall: Next conversation turn
+
+    state Recall {
+        [*] --> FTSSearch: Query via BM25
+        state fts_check <<choice>>
+        FTSSearch --> fts_check
+        fts_check --> ApplyBudget: Results found
+        fts_check --> SalienceFallback: No results
+        SalienceFallback --> ApplyBudget: High-salience cells
+        ApplyBudget --> FetchScenes: Get scene summaries
+        FetchScenes --> FormatOutput: Build markdown
+    }
+
+    FormatOutput --> ContextInjection: Insert into system prompt
+    ContextInjection --> ChatInteraction: Memory-augmented conversation
+
+    StoredMemory --> Pruning: Scheduled or manual
+    state Pruning {
+        [*] --> CheckExpired: DeleteExpired()
+        CheckExpired --> RemoveCells: Remove expired
+        RemoveCells --> UpdateFTS: Trigger removes from FTS
+    }
+
+    StoredMemory --> CLIManagement: Admin commands
+    state CLIManagement {
+        ListCells: /memory list
+        GetCell: /memory get ID
+        SearchCells: /memory search query
+        DeleteCell: /memory delete ID
+        ListScenes: /memory scenes
+        PruneCells: /memory prune
+    }
