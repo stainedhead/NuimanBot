@@ -9,11 +9,21 @@
 
 ## Overall Progress
 
-**Status:** 🟡 In Progress (Phase 0 - Planning)
-**Completion:** 20% (1/5 planning tasks, 0% implementation)
+**Status:** 🟡 In Progress (Phase 1 - Domain Layer)
+**Completion:** 20% (planning docs created; implementation in progress)
 **Estimated Total Time:** 40-54 hours (1-2 weeks full-time)
-**Time Spent:** ~2 hours (PRD analysis + spec creation)
-**Current Phase:** Phase 0 - Planning
+**Time Spent:** ~2 hours planning + (Phase 1 in progress)
+**Current Phase:** Phase 1 - Domain Layer
+
+## Time Tracking
+
+All times in **America/New_York**.
+
+| Phase | Start | End | Elapsed |
+|------:|-------|-----|---------|
+| Phase 1: Domain Layer | 2026-02-15 12:42 | (in progress) | (in progress) |
+
+**Total Implementation Time:** (in progress)
 
 ---
 
