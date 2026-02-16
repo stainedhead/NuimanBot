@@ -34,11 +34,11 @@ type LLMModelConfig struct {
 }
 
 // LLMDefaultModelConfig holds default LLM model configuration.
-
 type LLMDefaultModelConfig struct {
-	Primary string `yaml:"primary"`
-
-	Fallbacks []string `yaml:"fallbacks"`
+	Primary     string   `yaml:"primary"`
+	Fallbacks   []string `yaml:"fallbacks"`
+	MaxTokens   int      `yaml:"max_tokens"`
+	Temperature float64  `yaml:"temperature"`
 }
 
 // AnthropicProviderConfig holds Anthropic-specific provider configuration.
@@ -228,4 +228,43 @@ type ToolsExecConfig struct {
 type ToolSettings struct {
 	WebSearch ToolsWebSearchConfig `yaml:"web_search"`
 	Exec      ToolsExecConfig      `yaml:"exec"`
+}
+
+// AlertingConfig holds alerting system configuration.
+type AlertingConfig struct {
+	Enabled        bool                   `yaml:"enabled"`
+	ServiceName    string                 `yaml:"service_name"`
+	ThrottleWindow int                    `yaml:"throttle_window"` // Seconds
+	Channels       AlertingChannelsConfig `yaml:"channels"`
+}
+
+// AlertingChannelsConfig holds configuration for individual alerting channels.
+type AlertingChannelsConfig struct {
+	Log   AlertingLogConfig   `yaml:"log"`
+	Slack AlertingSlackConfig `yaml:"slack"`
+	Email AlertingEmailConfig `yaml:"email"`
+}
+
+// AlertingLogConfig holds log-based alerting configuration.
+type AlertingLogConfig struct {
+	Enabled bool `yaml:"enabled"`
+}
+
+// AlertingSlackConfig holds Slack webhook alerting configuration.
+type AlertingSlackConfig struct {
+	Enabled    bool   `yaml:"enabled"`
+	WebhookURL string `yaml:"webhook_url"`
+	Channel    string `yaml:"channel"`
+	Username   string `yaml:"username"`
+}
+
+// AlertingEmailConfig holds email SMTP alerting configuration.
+type AlertingEmailConfig struct {
+	Enabled    bool   `yaml:"enabled"`
+	SMTPHost   string `yaml:"smtp_host"`
+	SMTPPort   int    `yaml:"smtp_port"`
+	Username   string `yaml:"username"`
+	Password   string `yaml:"password"`
+	From       string `yaml:"from"`
+	Recipients string `yaml:"recipients"` // Comma-separated email addresses
 }

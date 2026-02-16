@@ -11,7 +11,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.49.0
 	github.com/go-telegram/bot v1.18.0
 	github.com/google/uuid v1.6.0
-	github.com/gorilla/mux v1.8.1
 	github.com/joho/godotenv v1.5.1
 	github.com/mattn/go-sqlite3 v1.14.33
 	github.com/mitchellh/mapstructure v1.5.0
@@ -20,7 +19,7 @@ require (
 	github.com/slack-go/slack v0.17.3
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.11.1
-	golang.org/x/crypto v0.47.0
+	golang.org/x/crypto v0.40.0
 	golang.org/x/time v0.14.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.45.0

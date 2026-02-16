@@ -78,6 +78,13 @@ type PromptComposerOutput struct {
 	TruncatedFiles []string
 }
 
+// LLMDefaults holds default LLM parameters used when constructing LLM requests.
+type LLMDefaults struct {
+	Model       string  // Default model name (e.g., "anthropic/claude-sonnet")
+	MaxTokens   int     // Default max tokens for completions
+	Temperature float64 // Default temperature for completions
+}
+
 // Service implements the ChatService use case.
 type Service struct {
 	llmService      LLMService
@@ -88,6 +95,7 @@ type Service struct {
 	memoryCurator   MemoryCurator  // Optional memory curator for long-term storage
 	memoryRecaller  MemoryRecaller // Optional memory recaller for context injection
 	promptComposer  PromptComposer // Optional persona-aware prompt composer
+	llmDefaults     LLMDefaults    // Default LLM parameters from config
 }
 
 // NewService creates a new ChatService instance.
@@ -123,6 +131,35 @@ func (s *Service) SetMemoryRecaller(recaller MemoryRecaller) {
 // SetPromptComposer sets the persona-aware prompt composer (optional).
 func (s *Service) SetPromptComposer(composer PromptComposer) {
 	s.promptComposer = composer
+}
+
+// SetLLMDefaults sets default LLM parameters from configuration.
+func (s *Service) SetLLMDefaults(defaults LLMDefaults) {
+	s.llmDefaults = defaults
+}
+
+// defaultModel returns the configured default model or a sensible fallback.
+func (s *Service) defaultModel() string {
+	if s.llmDefaults.Model != "" {
+		return s.llmDefaults.Model
+	}
+	return "claude-3-sonnet-20240229"
+}
+
+// defaultMaxTokens returns the configured default max tokens or a sensible fallback.
+func (s *Service) defaultMaxTokens() int {
+	if s.llmDefaults.MaxTokens > 0 {
+		return s.llmDefaults.MaxTokens
+	}
+	return 1024
+}
+
+// defaultTemperature returns the configured default temperature or a sensible fallback.
+func (s *Service) defaultTemperature() float64 {
+	if s.llmDefaults.Temperature > 0 {
+		return s.llmDefaults.Temperature
+	}
+	return 0.7
 }
 
 // getConversationID generates a conversation ID based on platform and user
@@ -215,11 +252,11 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 	llmMessages = append(llmMessages, domain.Message{Role: "user", Content: incomingMsg.Text})
 
 	llmRequest := &domain.LLMRequest{
-		Model:        "claude-3-sonnet-20240229", // TODO: Get from config/user preferences
+		Model:        s.defaultModel(),
 		Messages:     llmMessages,
-		MaxTokens:    1024,  // TODO: From config
-		Temperature:  0.7,   // TODO: From config
-		Tools:        tools, // Skills exposed as tools
+		MaxTokens:    s.defaultMaxTokens(),
+		Temperature:  s.defaultTemperature(),
+		Tools:        tools,
 		SystemPrompt: systemPrompt,
 	}
 
@@ -242,7 +279,7 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 		// Get LLM Response if not cached
 		if llmResponse == nil {
 			var err error
-			llmResponse, err = s.llmService.Complete(ctx, domain.LLMProviderAnthropic, llmRequest) // TODO: Route dynamically
+			llmResponse, err = s.llmService.Complete(ctx, "", llmRequest) // Provider auto-resolved from model
 			if err != nil {
 				return domain.OutgoingMessage{}, fmt.Errorf("LLM completion failed: %w", err)
 			}

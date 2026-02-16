@@ -199,6 +199,11 @@ func (s *Server) GetAddr() string {
 	return s.addr
 }
 
+// GetAuth returns the authentication service for external configuration
+func (s *Server) GetAuth() *AuthService {
+	return s.auth
+}
+
 // renderTemplate renders an HTML template with data
 func (s *Server) renderTemplate(w http.ResponseWriter, name string, data interface{}) error {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

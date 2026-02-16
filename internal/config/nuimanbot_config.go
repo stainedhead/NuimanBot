@@ -11,6 +11,7 @@ type NuimanBotConfig struct {
 	Tools        ToolsSystemConfig `yaml:"tools"`  // Tool registry system (renamed from Skills)
 	Skills       SkillsConfig      `yaml:"skills"` // Agent Skills system (Anthropic-style)
 	Memory       MemoryConfig      `yaml:"memory"`
+	Alerting     AlertingConfig    `yaml:"alerting"`
 	ExternalAPI  ExternalAPIConfig `yaml:"external_api"`
 	ToolSettings ToolSettings      `yaml:"tool_settings"` // Tool-specific settings (renamed from Tools)
 }

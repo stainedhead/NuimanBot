@@ -71,11 +71,11 @@ func (s *Service) ProcessMessageStream(ctx context.Context, incomingMsg *domain.
 		})
 
 		// 5. Stream LLM response
-		streamCh, err := s.llmService.Stream(ctx, domain.LLMProviderAnthropic, &domain.LLMRequest{
-			Model:       "claude-3-5-sonnet-20241022",
+		streamCh, err := s.llmService.Stream(ctx, "", &domain.LLMRequest{
+			Model:       s.defaultModel(),
 			Messages:    llmMessages,
-			MaxTokens:   4096,
-			Temperature: 0.7,
+			MaxTokens:   s.defaultMaxTokens(),
+			Temperature: s.defaultTemperature(),
 			Tools:       tools,
 		})
 		if err != nil {

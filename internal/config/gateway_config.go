@@ -35,9 +35,16 @@ type CLIConfig struct {
 	DebugMode   bool   `yaml:"debug_mode"`
 }
 
+// WebUIConfig configures the Web Admin UI server.
+type WebUIConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Addr    string `yaml:"addr"` // Listen address (e.g., ":8081")
+}
+
 // GatewaysConfig holds all gateway configurations.
 type GatewaysConfig struct {
 	Telegram TelegramConfig `yaml:"telegram"`
 	Slack    SlackConfig    `yaml:"slack"`
 	CLI      CLIConfig      `yaml:"cli"`
+	WebUI    WebUIConfig    `yaml:"web_ui"`
 }

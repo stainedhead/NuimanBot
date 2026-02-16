@@ -38,7 +38,7 @@ func (s *Service) SummarizeConversation(ctx context.Context, conversationID stri
 Be specific and factual. Avoid generic statements.`,
 	}
 
-	response, err := s.llmService.Complete(ctx, domain.LLMProviderAnthropic, llmRequest)
+	response, err := s.llmService.Complete(ctx, "", llmRequest) // Provider auto-resolved from model
 	if err != nil {
 		return "", fmt.Errorf("failed to generate summary: %w", err)
 	}

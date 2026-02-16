@@ -1,10 +1,16 @@
 package alerting
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"log/slog"
+	"net/http"
+	"net/smtp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -165,7 +171,6 @@ func sendToLog(alert Alert) {
 }
 
 // sendToSlack sends alert to Slack webhook.
-// For MVP, this is a placeholder. In production, use Slack API.
 func sendToSlack(ctx context.Context, alert Alert, config map[string]string) {
 	webhookURL := config["webhook_url"]
 	if webhookURL == "" {
@@ -173,29 +178,83 @@ func sendToSlack(ctx context.Context, alert Alert, config map[string]string) {
 		return
 	}
 
-	slog.Info("Alert sent to Slack",
-		"title", alert.Title,
-		"severity", alert.Severity,
-		"webhook", webhookURL,
-	)
+	payload := buildSlackPayload(alert, config)
+	jsonPayload, err := json.Marshal(payload)
+	if err != nil {
+		slog.Error("Failed to marshal Slack payload", "error", err)
+		return
+	}
 
-	// TODO: Implement actual Slack webhook POST
-	// payload := map[string]any{
-	//     "text": alert.Title,
-	//     "attachments": []map[string]any{
-	//         {
-	//             "color": getSeverityColor(alert.Severity),
-	//             "text":  alert.Message,
-	//             "fields": buildSlackFields(alert),
-	//         },
-	//     },
-	// }
-	// http.Post(webhookURL, "application/json", bytes.NewBuffer(jsonPayload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, webhookURL, bytes.NewBuffer(jsonPayload))
+	if err != nil {
+		slog.Error("Failed to create Slack request", "error", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		slog.Error("Failed to send Slack alert", "error", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		slog.Error("Slack webhook returned non-OK status", "status", resp.StatusCode)
+		return
+	}
+
+	slog.Info("Alert sent to Slack", "title", alert.Title, "severity", alert.Severity)
+}
+
+// buildSlackPayload constructs the Slack webhook JSON payload.
+func buildSlackPayload(alert Alert, config map[string]string) map[string]any {
+	fields := []map[string]any{
+		{"title": "Severity", "value": string(alert.Severity), "short": true},
+	}
+	for k, v := range alert.Tags {
+		fields = append(fields, map[string]any{"title": k, "value": v, "short": true})
+	}
+
+	payload := map[string]any{
+		"text": fmt.Sprintf("[%s] %s", strings.ToUpper(string(alert.Severity)), alert.Title),
+		"attachments": []map[string]any{
+			{
+				"color":  severityColor(alert.Severity),
+				"text":   alert.Message,
+				"fields": fields,
+			},
+		},
+	}
+
+	if channel := config["channel"]; channel != "" {
+		payload["channel"] = channel
+	}
+	if username := config["username"]; username != "" {
+		payload["username"] = username
+	}
+
+	return payload
+}
+
+// severityColor returns the Slack attachment color for a severity level.
+func severityColor(s Severity) string {
+	switch s {
+	case SeverityCritical:
+		return "#FF0000"
+	case SeverityError:
+		return "#CC0000"
+	case SeverityWarning:
+		return "#FFA500"
+	default:
+		return "#36A64F"
+	}
 }
 
 // sendToPagerDuty sends alert to PagerDuty.
 // For MVP, this is a placeholder. In production, use PagerDuty Events API.
-func sendToPagerDuty(ctx context.Context, alert Alert, config map[string]string) {
+func sendToPagerDuty(_ context.Context, alert Alert, config map[string]string) {
 	integrationKey := config["integration_key"]
 	if integrationKey == "" {
 		slog.Warn("PagerDuty integration key not configured")
@@ -211,23 +270,74 @@ func sendToPagerDuty(ctx context.Context, alert Alert, config map[string]string)
 	// https://api.pagerduty.com/incidents
 }
 
-// sendToEmail sends alert via email.
-// For MVP, this is a placeholder.
-func sendToEmail(ctx context.Context, alert Alert, config map[string]string) {
+// sendToEmail sends alert via SMTP email.
+func sendToEmail(_ context.Context, alert Alert, config map[string]string) {
 	recipients := config["recipients"]
 	if recipients == "" {
 		slog.Warn("Email recipients not configured")
 		return
 	}
 
-	slog.Info("Alert sent via email",
-		"title", alert.Title,
-		"severity", alert.Severity,
-		"recipients", recipients,
-	)
+	smtpHost := config["smtp_host"]
+	smtpPort := config["smtp_port"]
+	if smtpHost == "" || smtpPort == "" {
+		slog.Warn("Email SMTP host/port not configured")
+		return
+	}
 
-	// TODO: Implement actual email sending
-	// Use SMTP or email service API
+	from := config["from"]
+	if from == "" {
+		slog.Warn("Email sender address not configured")
+		return
+	}
+
+	to := strings.Split(recipients, ",")
+	for i := range to {
+		to[i] = strings.TrimSpace(to[i])
+	}
+
+	body := buildEmailBody(alert, from, to)
+
+	addr := smtpHost + ":" + smtpPort
+	var auth smtp.Auth
+	if username := config["username"]; username != "" {
+		auth = smtp.PlainAuth("", username, config["password"], smtpHost)
+	}
+
+	if err := smtp.SendMail(addr, auth, from, to, []byte(body)); err != nil {
+		slog.Error("Failed to send email alert", "error", err, "recipients", recipients)
+		return
+	}
+
+	slog.Info("Alert sent via email", "title", alert.Title, "severity", alert.Severity, "recipients", recipients)
+}
+
+// buildEmailBody constructs a MIME email message for an alert.
+func buildEmailBody(alert Alert, from string, to []string) string {
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("From: %s\r\n", from))
+	b.WriteString(fmt.Sprintf("To: %s\r\n", strings.Join(to, ", ")))
+	b.WriteString(fmt.Sprintf("Subject: [%s] %s\r\n", strings.ToUpper(string(alert.Severity)), alert.Title))
+	b.WriteString("MIME-Version: 1.0\r\n")
+	b.WriteString("Content-Type: text/plain; charset=\"utf-8\"\r\n")
+	b.WriteString("\r\n")
+	b.WriteString(fmt.Sprintf("Severity: %s\n", alert.Severity))
+	b.WriteString(fmt.Sprintf("Title: %s\n", alert.Title))
+	b.WriteString(fmt.Sprintf("Message: %s\n", alert.Message))
+
+	if len(alert.Tags) > 0 {
+		b.WriteString("\nTags:\n")
+		for k, v := range alert.Tags {
+			b.WriteString(fmt.Sprintf("  %s: %s\n", k, v))
+		}
+	}
+	if len(alert.Details) > 0 {
+		b.WriteString("\nDetails:\n")
+		for k, v := range alert.Details {
+			b.WriteString(fmt.Sprintf("  %s: %v\n", k, v))
+		}
+	}
+	return b.String()
 }
 
 // generateAlertFingerprint creates a unique fingerprint for throttling.

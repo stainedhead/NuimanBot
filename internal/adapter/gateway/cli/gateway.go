@@ -27,6 +27,7 @@ type Gateway struct {
 	adminHandler   *AdminCommandHandler
 	profileHandler *AdminProfileCommandHandler
 	botHandler     *AdminBotCommandHandler
+	configHandler  *AdminConfigCommandHandler
 	memoryHandler  *MemoryCommandHandler
 	skillHandler   SkillCommandHandler
 	currentUser    *domain.User // Current CLI user for admin commands
@@ -109,6 +110,36 @@ func (g *Gateway) Start(ctx context.Context) error {
 				}
 				if err := g.memoryHandler.HandleMemoryCommand(ctx, input); err != nil {
 					if _, writeErr := fmt.Fprintf(g.Writer, "Error: %v\n", err); writeErr != nil {
+						fmt.Fprintf(os.Stderr, "Error writing to CLI output: %v\n", writeErr)
+					}
+				}
+				continue
+			}
+
+			// Check if this is a config admin command
+			if IsConfigCommand(input) {
+				if g.configHandler == nil {
+					if _, err := fmt.Fprintln(g.Writer, "Error: Config admin commands not available."); err != nil {
+						fmt.Fprintf(os.Stderr, "Error writing to CLI output: %v\n", err)
+					}
+					continue
+				}
+
+				user := g.currentUser
+				if user == nil {
+					user = &domain.User{
+						ID:   "cli_default",
+						Role: domain.RoleUser,
+					}
+				}
+
+				result, err := g.configHandler.HandleConfigCommand(ctx, user, input)
+				if err != nil {
+					if _, writeErr := fmt.Fprintf(g.Writer, "Error: %v\n", err); writeErr != nil {
+						fmt.Fprintf(os.Stderr, "Error writing to CLI output: %v\n", writeErr)
+					}
+				} else {
+					if _, writeErr := fmt.Fprintln(g.Writer, result); writeErr != nil {
 						fmt.Fprintf(os.Stderr, "Error writing to CLI output: %v\n", writeErr)
 					}
 				}
@@ -321,6 +352,11 @@ func (g *Gateway) SetCurrentUser(user *domain.User) {
 // SetMemoryHandler sets the memory command handler for the gateway.
 func (g *Gateway) SetMemoryHandler(handler *MemoryCommandHandler) {
 	g.memoryHandler = handler
+}
+
+// SetConfigHandler sets the admin config command handler for the gateway.
+func (g *Gateway) SetConfigHandler(handler *AdminConfigCommandHandler) {
+	g.configHandler = handler
 }
 
 // SetSkillHandler sets the skill command handler for the gateway.

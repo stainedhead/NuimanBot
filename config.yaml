@@ -13,6 +13,17 @@ storage:
 llm:
   default_model:
     primary: anthropic/claude-sonnet
+    max_tokens: 1024
+    temperature: 0.7
+    fallbacks:
+      - anthropic/claude-haiku
+  models:
+    claude-sonnet:
+      alias: claude-sonnet
+      provider_config_id: anthropic-main
+    claude-haiku:
+      alias: claude-haiku
+      provider_config_id: anthropic-main
   providers:
     - id: anthropic-main
       type: anthropic
@@ -28,6 +39,9 @@ gateways:
     # bot_token: "xoxb-..."
     # app_token: "xapp-..."
     # workspace_id: "T..."
+  web_ui:
+    enabled: true
+    addr: ":8081"
   telegram:
     enabled: false
     # token: "bot_token_from_botfather"
@@ -56,6 +70,27 @@ skills:
     # Enterprise skills can be added here (highest priority)
     # - path: "./data/skills/enterprise"
     #   scope: 0  # ScopeEnterprise
+
+alerting:
+  enabled: true
+  service_name: "nuimanbot"
+  throttle_window: 300  # 5 minutes
+  channels:
+    log:
+      enabled: true
+    slack:
+      enabled: false
+      # webhook_url: "https://hooks.slack.com/services/T.../B.../xxx"
+      # channel: "#alerts"
+      # username: "NuimanBot"
+    email:
+      enabled: false
+      # smtp_host: "smtp.example.com"
+      # smtp_port: 587
+      # username: "alerts@example.com"
+      # password: "smtp-password"
+      # from: "alerts@example.com"
+      # recipients: "admin@example.com,ops@example.com"
 
 mcp:
   client:

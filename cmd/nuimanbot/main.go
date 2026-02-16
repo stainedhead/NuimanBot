@@ -20,11 +20,14 @@ import (
 	"nuimanbot/internal/adapter/gateway/slack"
 	"nuimanbot/internal/adapter/gateway/telegram"
 	"nuimanbot/internal/adapter/repository/sqlite"
+	"nuimanbot/internal/adapter/web"
 	"nuimanbot/internal/config"
 	"nuimanbot/internal/domain"
 	"nuimanbot/internal/domain/memoryv2"
+	"nuimanbot/internal/infrastructure/alerting"
 	"nuimanbot/internal/infrastructure/audit"
 	"nuimanbot/internal/infrastructure/cache"
+	infraconfig "nuimanbot/internal/infrastructure/config"
 	"nuimanbot/internal/infrastructure/crypto"
 	"nuimanbot/internal/infrastructure/health"
 	anthropic "nuimanbot/internal/infrastructure/llm/anthropic"
@@ -44,6 +47,8 @@ import (
 	"nuimanbot/internal/tools/websearch"
 	"nuimanbot/internal/usecase/botmgmt"
 	"nuimanbot/internal/usecase/chat"
+	usecaseconfig "nuimanbot/internal/usecase/config"
+	llm "nuimanbot/internal/usecase/llm"
 	"nuimanbot/internal/usecase/memory"
 	memoryv2uc "nuimanbot/internal/usecase/memoryv2"
 	"nuimanbot/internal/usecase/profile"
@@ -63,6 +68,7 @@ import (
 // It holds all the dependencies that different parts of the application need.
 type application struct {
 	Config               *config.NuimanBotConfig
+	ConfigManager        *usecaseconfig.ConfigManager
 	ChatService          *chat.Service
 	LLMService           domain.LLMService
 	Memory               memory.MemoryRepository
@@ -71,6 +77,7 @@ type application struct {
 	Vault                domain.CredentialVault
 	ToolExecutionService *tool.Service
 	HealthServer         *health.Server
+	WebServer            *web.Server
 	DB                   *sql.DB
 	MemoryDB             *sql.DB                        // Separate DB connection for memory v2 (FTS5)
 	MemoryCellRepo       memoryv2.MemoryCellRepository  // Memory v2 cell repository
@@ -113,6 +120,17 @@ func main() {
 		"level", cfg.Server.LogLevel,
 		"format", logFormat,
 	)
+
+	// 2.5. Initialize Alerting System
+	alertingCfg := buildAlertingConfig(cfg)
+	if err := alerting.Initialize(alertingCfg); err != nil {
+		log.Fatalf("Failed to initialize alerting: %v", err)
+	}
+	defer func() {
+		if err := alerting.Shutdown(); err != nil {
+			slog.Error("Failed to shutdown alerting", "error", err)
+		}
+	}()
 
 	// 3. Initialize Credential Vault
 	vaultPath := cfg.Security.VaultPath
@@ -195,6 +213,13 @@ func main() {
 
 	// 10. Initialize Chat Service
 	chatService := chat.NewService(llmService, memoryRepo, toolExecutionService, securityService)
+
+	// Configure LLM defaults from config
+	chatService.SetLLMDefaults(chat.LLMDefaults{
+		Model:       cfg.LLM.DefaultModel.Primary,
+		MaxTokens:   cfg.LLM.DefaultModel.MaxTokens,
+		Temperature: cfg.LLM.DefaultModel.Temperature,
+	})
 
 	// Configure LLM response cache (optional)
 	llmCache := cache.NewLLMCache(1000, 1*time.Hour) // Cache up to 1000 responses for 1 hour
@@ -308,9 +333,15 @@ func main() {
 		defer memoryDB.Close()
 	}
 
+	// 10.6. Initialize Config Hot-Reload Manager
+	configLoader := infraconfig.NewViperConfigLoaderAdapter()
+	configManager := usecaseconfig.NewConfigManager(cfg, configLoader, securityService)
+	slog.Info("Config hot-reload manager initialized")
+
 	// 11. Create Application
 	app := &application{
 		Config:               cfg,
+		ConfigManager:        configManager,
 		Vault:                vault,
 		SecurityService:      securityService,
 		Memory:               memoryRepo,
@@ -370,79 +401,91 @@ func (app *application) connectGateway(gw domain.Gateway) {
 	})
 }
 
-// initializeLLMService initializes the LLM service based on configuration.
+// initializeLLMService initializes the LLM orchestration service, registering all configured providers.
 func initializeLLMService(cfg *config.NuimanBotConfig) (domain.LLMService, error) {
-	// Try provider-specific configs first (new way)
-	// Check OpenAI
+	svc := llm.NewService(&cfg.LLM)
+	registered := 0
+
+	// Register legacy provider-specific configs
 	if cfg.LLM.OpenAI.APIKey.Value() != "" {
-		slog.Info("Initializing LLM provider", "provider", "openai", "source", "legacy_config")
-		return openai.New(&cfg.LLM.OpenAI), nil
+		svc.RegisterProviderClient(domain.LLMProviderOpenAI, openai.New(&cfg.LLM.OpenAI))
+		slog.Info("LLM provider registered", "provider", "openai", "source", "legacy_config")
+		registered++
 	}
-
-	// Check Ollama
 	if cfg.LLM.Ollama.BaseURL != "" {
-		slog.Info("Initializing LLM provider", "provider", "ollama", "source", "legacy_config")
-		return ollama.New(&cfg.LLM.Ollama), nil
+		svc.RegisterProviderClient(domain.LLMProviderOllama, ollama.New(&cfg.LLM.Ollama))
+		slog.Info("LLM provider registered", "provider", "ollama", "source", "legacy_config")
+		registered++
 	}
-
-	// Check Anthropic
 	if cfg.LLM.Anthropic.APIKey.Value() != "" {
-		slog.Info("Initializing LLM provider", "provider", "anthropic", "source", "legacy_config")
-		// Convert to generic provider config for Anthropic
 		providerCfg := &config.LLMProviderConfig{
 			Type:   domain.LLMProviderAnthropic,
 			APIKey: cfg.LLM.Anthropic.APIKey,
 		}
-		return anthropic.NewClient(providerCfg)
-	}
-
-	// Check Bedrock
-	if cfg.LLM.Bedrock.AWSRegion != "" {
-		slog.Info("Initializing LLM provider", "provider", "bedrock", "region", cfg.LLM.Bedrock.AWSRegion, "source", "legacy_config")
-		return bedrock.NewClient(&cfg.LLM.Bedrock)
-	}
-
-	// Fallback to generic Providers array (old way)
-	if len(cfg.LLM.Providers) > 0 {
-		// For MVP, use the first provider
-		// TODO: Implement provider selection based on default_model config
-		provider := &cfg.LLM.Providers[0]
-
-		switch provider.Type {
-		case domain.LLMProviderAnthropic:
-			slog.Info("Initializing LLM provider", "provider", "anthropic", "source", "providers_array")
-			return anthropic.NewClient(provider)
-		case domain.LLMProviderOpenAI:
-			slog.Info("Initializing LLM provider", "provider", "openai", "source", "providers_array")
-			// Convert generic provider config to OpenAI-specific config
-			openaiCfg := &config.OpenAIProviderConfig{
-				APIKey:  provider.APIKey,
-				BaseURL: provider.BaseURL,
-			}
-			return openai.New(openaiCfg), nil
-		case domain.LLMProviderOllama:
-			slog.Info("Initializing LLM provider", "provider", "ollama", "source", "providers_array")
-			// Ollama doesn't need API key, just BaseURL
-			ollamaCfg := &config.OllamaProviderConfig{
-				BaseURL: provider.BaseURL,
-			}
-			if ollamaCfg.BaseURL == "" {
-				ollamaCfg.BaseURL = "http://localhost:11434" // Default Ollama URL
-			}
-			return ollama.New(ollamaCfg), nil
-		case domain.LLMProviderBedrock:
-			slog.Info("Initializing LLM provider", "provider", "bedrock", "source", "providers_array")
-			// For Bedrock in providers array, use BaseURL as region
-			bedrockCfg := &config.BedrockProviderConfig{
-				AWSRegion: provider.BaseURL, // Use BaseURL field to store region
-			}
-			return bedrock.NewClient(bedrockCfg)
-		default:
-			return nil, fmt.Errorf("unsupported LLM provider: %s", provider.Type)
+		client, err := anthropic.NewClient(providerCfg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create anthropic client: %w", err)
 		}
+		svc.RegisterProviderClient(domain.LLMProviderAnthropic, client)
+		slog.Info("LLM provider registered", "provider", "anthropic", "source", "legacy_config")
+		registered++
+	}
+	if cfg.LLM.Bedrock.AWSRegion != "" {
+		client, err := bedrock.NewClient(&cfg.LLM.Bedrock)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create bedrock client: %w", err)
+		}
+		svc.RegisterProviderClient(domain.LLMProviderBedrock, client)
+		slog.Info("LLM provider registered", "provider", "bedrock", "source", "legacy_config")
+		registered++
 	}
 
-	return nil, fmt.Errorf("no LLM providers configured (set llm.openai.api_key, llm.ollama.base_url, or llm.anthropic.api_key)")
+	// Register providers from Providers array (skip duplicates)
+	for i := range cfg.LLM.Providers {
+		p := &cfg.LLM.Providers[i]
+		if _, err := svc.GetClientForProvider(p.Type); err == nil {
+			continue
+		}
+		switch p.Type {
+		case domain.LLMProviderAnthropic:
+			client, err := anthropic.NewClient(p)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create anthropic client: %w", err)
+			}
+			svc.RegisterProviderClient(domain.LLMProviderAnthropic, client)
+		case domain.LLMProviderOpenAI:
+			svc.RegisterProviderClient(domain.LLMProviderOpenAI, openai.New(&config.OpenAIProviderConfig{APIKey: p.APIKey, BaseURL: p.BaseURL}))
+		case domain.LLMProviderOllama:
+			ollamaCfg := &config.OllamaProviderConfig{BaseURL: p.BaseURL}
+			if ollamaCfg.BaseURL == "" {
+				ollamaCfg.BaseURL = "http://localhost:11434"
+			}
+			svc.RegisterProviderClient(domain.LLMProviderOllama, ollama.New(ollamaCfg))
+		case domain.LLMProviderBedrock:
+			client, err := bedrock.NewClient(&config.BedrockProviderConfig{AWSRegion: p.BaseURL})
+			if err != nil {
+				return nil, fmt.Errorf("failed to create bedrock client: %w", err)
+			}
+			svc.RegisterProviderClient(domain.LLMProviderBedrock, client)
+		default:
+			slog.Warn("Unsupported LLM provider, skipping", "type", p.Type)
+			continue
+		}
+		slog.Info("LLM provider registered", "provider", p.Type, "id", p.ID, "source", "providers_array")
+		registered++
+	}
+
+	if registered == 0 {
+		return nil, fmt.Errorf("no LLM providers configured")
+	}
+
+	if dp, err := svc.DefaultProvider(); err == nil {
+		slog.Info("LLM orchestration initialized", "providers_registered", registered, "default_provider", dp, "default_model", cfg.LLM.DefaultModel.Primary)
+	} else {
+		slog.Info("LLM orchestration initialized", "providers_registered", registered)
+	}
+
+	return svc, nil
 }
 
 // registerBuiltInTools registers all built-in skills with the registry.
@@ -853,6 +896,40 @@ func (app *application) Run(ctx context.Context) error {
 	botMgmtService := botmgmt.NewService(botConfigRepo)
 	slog.Info("Bot management initialized", "file", botsFilePath)
 
+	// Start Web UI server if enabled
+	if app.Config.Gateways.WebUI.Enabled {
+		addr := app.Config.Gateways.WebUI.Addr
+		if addr == "" {
+			addr = ":8081"
+		}
+		webServer := web.NewServer(addr)
+
+		// Wire services into Web UI
+		webServer.SetProfileService(profileService)
+
+		// Add default admin user for web login
+		if err := webServer.GetAuth().AddUser("admin", "admin", "admin"); err != nil {
+			slog.Warn("Failed to add default web admin user", "error", err)
+		}
+
+		app.WebServer = webServer
+
+		go func() {
+			slog.Info("Starting Web Admin UI", "addr", addr)
+			if err := webServer.Start(); err != nil && err != http.ErrServerClosed {
+				slog.Error("Web Admin UI error", "error", err)
+			}
+		}()
+
+		defer func() {
+			if app.WebServer != nil {
+				if err := app.WebServer.Stop(); err != nil {
+					slog.Error("Failed to stop Web Admin UI", "error", err)
+				}
+			}
+		}()
+	}
+
 	// Initialize Agent Skills System (Phase 6: Config Integration)
 	skillRepo := skillinfra.NewFilesystemSkillRepository()
 	skillRegistry := skillusecase.NewInMemorySkillRegistry(skillRepo)
@@ -898,6 +975,13 @@ func (app *application) Run(ctx context.Context) error {
 	botHandler := cli.NewAdminBotCommandHandler(botMgmtService)
 	cliGateway.SetBotHandler(botHandler)
 	slog.Info("Bot admin commands initialized")
+
+	// Initialize config admin command handler (Phase 0.5)
+	if app.ConfigManager != nil {
+		configHandler := cli.NewAdminConfigCommandHandler(app.ConfigManager)
+		cliGateway.SetConfigHandler(configHandler)
+		slog.Info("Config admin commands initialized")
+	}
 
 	// Initialize memory CLI commands (if memory v2 is available)
 	if app.MemoryCellRepo != nil && app.MemorySceneRepo != nil {
@@ -981,8 +1065,59 @@ func (app *application) Run(ctx context.Context) error {
 	fmt.Println("  - Type 'exit' or 'quit' to stop")
 	fmt.Println("  - Type 'help' for available skills")
 	fmt.Println("  - Type '/memory help' for memory commands")
+	fmt.Println("  - Type '/admin config help' for config management")
+	if app.WebServer != nil {
+		fmt.Printf("  - Web Admin UI: http://localhost%s\n", app.Config.Gateways.WebUI.Addr)
+	}
 	fmt.Println()
 
 	// Start CLI gateway (blocks until shutdown)
 	return cliGateway.Start(ctx)
+}
+
+// buildAlertingConfig constructs an alerting.Config from the application configuration.
+func buildAlertingConfig(cfg *config.NuimanBotConfig) alerting.Config {
+	ac := cfg.Alerting
+	var channels []alerting.ChannelConfig
+
+	if ac.Channels.Log.Enabled {
+		channels = append(channels, alerting.ChannelConfig{
+			Type:    alerting.ChannelTypeLog,
+			Enabled: true,
+		})
+	}
+
+	if ac.Channels.Slack.Enabled {
+		channels = append(channels, alerting.ChannelConfig{
+			Type:    alerting.ChannelTypeSlack,
+			Enabled: true,
+			Config: map[string]string{
+				"webhook_url": ac.Channels.Slack.WebhookURL,
+				"channel":     ac.Channels.Slack.Channel,
+				"username":    ac.Channels.Slack.Username,
+			},
+		})
+	}
+
+	if ac.Channels.Email.Enabled {
+		channels = append(channels, alerting.ChannelConfig{
+			Type:    alerting.ChannelTypeEmail,
+			Enabled: true,
+			Config: map[string]string{
+				"smtp_host":  ac.Channels.Email.SMTPHost,
+				"smtp_port":  fmt.Sprintf("%d", ac.Channels.Email.SMTPPort),
+				"username":   ac.Channels.Email.Username,
+				"password":   ac.Channels.Email.Password,
+				"from":       ac.Channels.Email.From,
+				"recipients": ac.Channels.Email.Recipients,
+			},
+		})
+	}
+
+	return alerting.Config{
+		Enabled:        ac.Enabled,
+		ServiceName:    ac.ServiceName,
+		Channels:       channels,
+		ThrottleWindow: ac.ThrottleWindow,
+	}
 }
