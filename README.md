@@ -362,7 +362,9 @@ See [Product Summary](documentation/product-summary.md) for detailed status and 
 
 ## License
 
-[Add your license here]
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
+
+Copyright 2026 NuimanBot Contributors
 
 ---
 
