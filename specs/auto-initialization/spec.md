@@ -330,10 +330,20 @@ NUIMANBOT_STORAGE_DEFAULT_ADMIN_EMAIL=admin@example.com
 2. `support_docs/install-and-setup.md` - Simplify setup instructions
 3. `support_docs/admin-guide.md` - Document enhanced health endpoint
 4. `support_docs/operations/README.md` - Mark scripts as optional
+5. `config.yaml` - Clarify multi-bot architecture and gateway configuration
 
 **New Documentation:**
 - Health endpoint schema documentation
 - Storage metrics reference
+- Multi-bot support explanation in config.yaml
+
+**Multi-Bot Configuration Clarification:**
+Add comprehensive documentation to `config.yaml` gateways section explaining:
+- System-level bots (config.yaml) vs user-owned bots (bots.json)
+- Bot selection priority (user private bot → public bot → system bot)
+- BYOB (Bring Your Own Bot) capability via Admin API
+- Credential storage locations (config.yaml vs encrypted bots.json)
+- How users can create their own Slack/Telegram bots
 
 ## Open Questions
 
@@ -384,8 +394,13 @@ NUIMANBOT_STORAGE_DEFAULT_ADMIN_EMAIL=admin@example.com
 - [ ] Update README.md quick start
 - [ ] Update install-and-setup.md
 - [ ] Create health endpoint documentation
-- [ ] Move shell scripts to `support_docs/operations/`
-- [ ] Create operations README marking scripts as optional
+- [ ] Update `config.yaml` with multi-bot architecture clarification
+  - [ ] Add comprehensive header to `gateways:` section
+  - [ ] Document system bot vs user-owned bot distinction
+  - [ ] Explain bot selection priority (user → system fallback)
+  - [ ] Document BYOB capability via Admin API
+  - [ ] Clarify credential storage locations
+- [ ] Update support_docs/operations/README.md (already done)
 - [ ] Update AGENTS.md if needed
 
 ### Phase 4: Quality Gates
