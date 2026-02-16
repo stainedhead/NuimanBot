@@ -183,16 +183,12 @@ skills:
 2. `config.yaml` file in current directory
 3. Default values
 
-### Step 4: Initialize Data Directory
+### Step 4: Run the Application
 
-```bash
-# Create data directory for database and vault
-mkdir -p data
-
-# The application will automatically create:
-# - data/nuimanbot.db (SQLite database)
-# - data/vault.enc (encrypted credential vault)
-```
+No manual directory setup is needed. NuimanBot **automatically initializes** storage on startup:
+- Creates the `data/` directory structure (`data/users/`, `data/system/`)
+- Creates a default admin user on first run
+- Initialization is idempotent — safe to run multiple times
 
 ---
 
@@ -207,28 +203,32 @@ export NUIMANBOT_ENCRYPTION_KEY="your-32-byte-key"
 # Set at least one LLM provider
 export NUIMANBOT_LLM_ANTHROPIC_APIKEY="sk-ant-your-key"
 
-# Run the application
+# Run the application (storage auto-initializes on first run)
 ./bin/nuimanbot
 ```
 
-**Expected Output:**
+**Expected Output (first run):**
 ```
 NuimanBot starting...
 Config file used: ./config.yaml
-2026/02/06 12:00:00 INFO Database schema initialized successfully
-2026/02/06 12:00:00 INFO Calculator skill registered
-2026/02/06 12:00:00 INFO DateTime skill registered
-2026/02/06 12:00:00 INFO Weather skill registered
-2026/02/06 12:00:00 INFO WebSearch skill registered
-2026/02/06 12:00:00 INFO Notes skill registered
-2026/02/06 12:00:00 INFO Database connection pool configured max_open=25 max_idle=5
-2026/02/06 12:00:00 INFO LLM response cache configured max_size=1000 ttl=1h
-2026/02/06 12:00:00 INFO Starting health check server port=:8080
-2026/02/06 12:00:00 INFO NuimanBot initialized with:
-2026/02/06 12:00:00 INFO   Log Level: info
-2026/02/06 12:00:00 INFO   Debug Mode: false
-2026/02/06 12:00:00 INFO   LLM Provider: anthropic
-2026/02/06 12:00:00 INFO   Skills Registered: 5
+2026/02/16 12:00:00 INFO Initializing storage base_dir=./data
+2026/02/16 12:00:00 INFO Creating default admin user
+2026/02/16 12:00:00 INFO Default admin user created user_id=admin email=admin@localhost
+2026/02/16 12:00:00 INFO Storage initialization complete base_dir=./data
+2026/02/16 12:00:00 INFO Database schema initialized successfully
+2026/02/16 12:00:00 INFO Calculator skill registered
+2026/02/16 12:00:00 INFO DateTime skill registered
+2026/02/16 12:00:00 INFO Weather skill registered
+2026/02/16 12:00:00 INFO WebSearch skill registered
+2026/02/16 12:00:00 INFO Notes skill registered
+2026/02/16 12:00:00 INFO Database connection pool configured max_open=25 max_idle=5
+2026/02/16 12:00:00 INFO LLM response cache configured max_size=1000 ttl=1h
+2026/02/16 12:00:00 INFO Starting health check server port=:8080
+2026/02/16 12:00:00 INFO NuimanBot initialized with:
+2026/02/16 12:00:00 INFO   Log Level: info
+2026/02/16 12:00:00 INFO   Debug Mode: false
+2026/02/16 12:00:00 INFO   LLM Provider: anthropic
+2026/02/16 12:00:00 INFO   Skills Registered: 5
 
 Starting CLI Gateway...
 Type your messages below. Commands:
@@ -237,6 +237,8 @@ Type your messages below. Commands:
 
 >
 ```
+
+On subsequent runs, storage initialization is a no-op and existing data is preserved.
 
 ### Interactive Usage
 
@@ -422,6 +424,8 @@ sudo systemctl status nuimanbot
 
 **Docker (Optional):**
 
+No init containers required — NuimanBot auto-initializes storage on startup.
+
 ```dockerfile
 FROM golang:1.21-alpine AS builder
 WORKDIR /app
@@ -495,10 +499,17 @@ rate_limits:
 
 **Problem: `NUIMANBOT_ENCRYPTION_KEY is not set in environment`**
 
-```bash
-# Solution: Export the encryption key
-export NUIMANBOT_ENCRYPTION_KEY="your-32-byte-key-here"
-```
+**Solution:** This error should no longer occur! NuimanBot now auto-generates an encryption key on first startup.
+
+If you see this error:
+1. **First run:** The app will automatically generate a key and save it to `.env`
+2. **Subsequent runs:** The key is loaded from `.env` automatically
+3. **Manual override:** If needed, you can still set it manually:
+   ```bash
+   export NUIMANBOT_ENCRYPTION_KEY="your-32-byte-key-here"
+   ```
+
+**Important:** If you're deploying to production, consider using a secrets manager instead of the `.env` file for better security.
 
 **Problem: `failed to connect to Anthropic API`**
 
@@ -509,6 +520,21 @@ curl https://api.anthropic.com/v1/messages \
   -H "anthropic-version: 2023-06-01" \
   -H "content-type: application/json" \
   -d '{"model":"claude-3-sonnet-20240229","max_tokens":10,"messages":[{"role":"user","content":"test"}]}'
+```
+
+**Problem: `Failed to initialize storage` on startup**
+
+This means NuimanBot could not create the required directories or default admin user.
+
+```bash
+# Check directory permissions
+ls -la ./data
+
+# Ensure the parent directory is writable
+chmod 755 .
+
+# Re-run — storage initialization is idempotent
+./bin/nuimanbot
 ```
 
 **Problem: Database errors on startup**

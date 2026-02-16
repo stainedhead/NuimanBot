@@ -12,6 +12,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"nuimanbot/internal/domain"
+	"nuimanbot/internal/infrastructure/storage"
 )
 
 // Server provides HTTP endpoints for health checks.
@@ -19,6 +20,8 @@ type Server struct {
 	server      *http.Server
 	checker     HealthChecker
 	version     string
+	dataDir     string
+	startTime   time.Time
 	mu          sync.RWMutex
 	shutdownCtx context.Context
 	cancel      context.CancelFunc
@@ -30,6 +33,7 @@ func NewServer(db *sql.DB, llmService domain.LLMService, vaultPath string) *Serv
 
 	s := &Server{
 		version:     "1.0.0", // Default version
+		startTime:   time.Now(),
 		shutdownCtx: ctx,
 		cancel:      cancel,
 	}
@@ -56,13 +60,94 @@ func (s *Server) SetVersion(version string) {
 	s.version = version
 }
 
+// SetDataDirectory sets the data directory path for storage metrics.
+func (s *Server) SetDataDirectory(dataDir string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dataDir = dataDir
+}
+
 // Liveness returns 200 OK if the server is running (Kubernetes liveness probe).
+// Enhanced to include storage metrics, version, and uptime information.
 func (s *Server) Liveness(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	version := s.version
+	dataDir := s.dataDir
+	checker := s.checker
+	startTime := s.startTime
+	s.mu.RUnlock()
+
+	response := s.buildHealthResponse(version, dataDir, checker, startTime)
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
-		"status": "ok",
-	})
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		slog.Error("Failed to encode health response", "error", err)
+	}
+}
+
+// buildHealthResponse constructs the comprehensive health response.
+func (s *Server) buildHealthResponse(version, dataDir string, checker HealthChecker, startTime time.Time) map[string]interface{} {
+	response := map[string]interface{}{
+		"status":         "healthy",
+		"timestamp":      time.Now().UTC().Format(time.RFC3339),
+		"version":        version,
+		"uptime_seconds": int64(time.Since(startTime).Seconds()),
+	}
+
+	s.addStorageMetrics(response, dataDir)
+	s.addHealthChecks(response, checker)
+
+	return response
+}
+
+// addStorageMetrics adds storage metrics to the health response if available.
+func (s *Server) addStorageMetrics(response map[string]interface{}, dataDir string) {
+	if dataDir == "" {
+		return
+	}
+
+	metrics, err := storage.GetStorageMetrics(dataDir)
+	if err != nil {
+		slog.Warn("Failed to collect storage metrics", "error", err)
+		return
+	}
+
+	response["storage"] = metrics
+	response["users"] = metrics.Users
+	response["data"] = metrics.Data
+}
+
+// addHealthChecks adds health check results to the response.
+func (s *Server) addHealthChecks(response map[string]interface{}, checker HealthChecker) {
+	checks := []map[string]interface{}{}
+
+	if checker != nil {
+		checks = append(checks,
+			map[string]interface{}{
+				"name":   "database",
+				"status": checkStatus(checker.CheckDatabase()),
+			},
+			map[string]interface{}{
+				"name":   "llm",
+				"status": checkStatus(checker.CheckLLM()),
+			},
+			map[string]interface{}{
+				"name":   "vault",
+				"status": checkStatus(checker.CheckVault()),
+			},
+		)
+	}
+
+	response["checks"] = checks
+}
+
+// checkStatus converts boolean health check result to status string.
+func checkStatus(healthy bool) string {
+	if healthy {
+		return "ok"
+	}
+	return "unhealthy"
 }
 
 // Readiness checks if all dependencies are healthy (Kubernetes readiness probe).

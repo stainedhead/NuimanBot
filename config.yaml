@@ -8,7 +8,7 @@ security:
 
 storage:
   type: file
-  dsn: "./data"
+  dsn: "./data"  # Auto-initialized on startup (directories + default admin user)
 
 llm:
   default_model:
@@ -29,6 +29,33 @@ llm:
       type: anthropic
       api_key: "your-api-key-here"  # Set via NUIMANBOT_LLM_PROVIDERS_0_APIKEY env var
 
+# Gateway Configuration — Multi-Bot Architecture
+#
+# NuimanBot supports two tiers of bot credentials:
+#
+# 1. SYSTEM BOTS (this file — config.yaml)
+#    - Configured here under gateways.slack / gateways.telegram
+#    - Managed by the system administrator
+#    - Serve as the default fallback for all users
+#    - Credentials stored in plaintext or via environment variables
+#
+# 2. USER-OWNED BOTS (data/bots.json)
+#    - Created via Admin API or CLI: ./bin/nuimanbot admin bot <platform> create
+#    - Can be public (shared with allowed users) or private (single owner)
+#    - Credentials encrypted at rest with AES-256-GCM
+#    - Support BYOB (Bring Your Own Bot): users register their own Slack/Telegram bots
+#
+# Bot Selection Priority (highest to lowest):
+#   1. User's private bot (if configured in bots.json)
+#   2. Public bot the user is allowed to use (bots.json, allowedUserIDs)
+#   3. System bot (this file)
+#
+# To let users bring their own bots:
+#   ./bin/nuimanbot admin bot slack create --name "my-bot" --owner-user-id user-123
+#   ./bin/nuimanbot admin bot telegram create --name "my-tg-bot" --owner-user-id user-123
+#
+# See support_docs/admin-guide.md for full bot management documentation.
+#
 gateways:
   cli:
     enabled: true
@@ -36,14 +63,16 @@ gateways:
     history_file: ".nuimanbot_history"
   slack:
     enabled: false
-    # bot_token: "xoxb-..."
-    # app_token: "xapp-..."
-    # workspace_id: "T..."
+    # System-level Slack bot credentials (fallback for all users)
+    # bot_token: "xoxb-..."      # Bot User OAuth Token
+    # app_token: "xapp-..."      # App-Level Token (Socket Mode)
+    # workspace_id: "T..."       # Slack Workspace ID
   web_ui:
     enabled: true
     addr: ":8081"
   telegram:
     enabled: false
+    # System-level Telegram bot credentials (fallback for all users)
     # token: "bot_token_from_botfather"
     # webhook_url: "https://yourdomain.com/telegram"
     # dm_policy: "pairing"

@@ -40,7 +40,7 @@ This guide covers all administrative functions for managing users, bots, and sys
 - Go 1.24 or later
 - SQLite3
 - At least one LLM provider (Anthropic, OpenAI, Bedrock, or Ollama)
-- Encryption key for secure credential storage
+- Encryption key for secure credential storage (auto-generated on first run)
 
 ### Initial Setup
 
@@ -64,15 +64,17 @@ This guide covers all administrative functions for managing users, bots, and sys
 3. **Create Configuration:**
    Create `config.yaml` in the project root (see Configuration Reference for details).
 
-4. **Initialize Database:**
+4. **Start the Application:**
    ```bash
-   # The database will be created automatically on first run
-   ./bin/nuimanbot help
+   # Storage auto-initializes on first run:
+   # - Creates data/users/ and data/system/ directories
+   # - Creates default admin user (admin@localhost)
+   # - Database schema initialized automatically
+   ./bin/nuimanbot
    ```
 
-5. **Create Admin User:**
+   To create additional admin users:
    ```bash
-   # Using CLI
    ./bin/nuimanbot admin profile create \
      --user-id admin-001 \
      --email admin@example.com \
@@ -439,6 +441,100 @@ curl -X GET "http://localhost:8080/api/v1/admin/logs?level=error&limit=100" \
   -H "Authorization: Bearer ${API_KEY}"
 ```
 
+### Health Endpoints
+
+NuimanBot exposes health check endpoints that require no authentication:
+
+```bash
+# Liveness check
+curl http://localhost:8080/health
+
+# Readiness check
+curl http://localhost:8080/health/ready
+
+# Version information
+curl http://localhost:8080/health/version
+```
+
+**Enhanced Health Response Schema (`/health`):**
+
+```json
+{
+  "status": "healthy",
+  "timestamp": "2026-02-16T12:00:00Z",
+  "version": "1.0.0",
+  "uptime_seconds": 3600,
+  "storage": {
+    "status": "healthy",
+    "data_directory": "/data",
+    "total_size_mb": 150,
+    "disk_available_gb": 50,
+    "disk_used_percent": 15,
+    "writable": true
+  },
+  "users": {
+    "total_count": 25,
+    "active_count": 10
+  },
+  "data": {
+    "conversations": 500,
+    "notes": 150,
+    "memory_cells": 1200
+  },
+  "checks": [
+    {"name": "database", "status": "ok"},
+    {"name": "storage", "status": "ok"},
+    {"name": "llm_provider", "status": "ok"}
+  ]
+}
+```
+
+**Field Reference:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | string | Overall health: `healthy` or `unhealthy` |
+| `timestamp` | string | ISO 8601 timestamp of the response |
+| `version` | string | Application version |
+| `uptime_seconds` | number | Seconds since application start |
+| `storage.status` | string | Storage subsystem health |
+| `storage.data_directory` | string | Configured data directory path |
+| `storage.total_size_mb` | number | Total data directory size in MB |
+| `storage.disk_available_gb` | number | Available disk space in GB |
+| `storage.disk_used_percent` | number | Disk usage percentage (0-100) |
+| `storage.writable` | boolean | Whether the data directory is writable |
+| `users.total_count` | number | Total registered users |
+| `users.active_count` | number | Currently active users |
+| `data.conversations` | number | Total conversation count |
+| `data.notes` | number | Total notes count |
+| `data.memory_cells` | number | Total memory cells count |
+| `checks` | array | Individual subsystem check results |
+
+**Using with monitoring tools:**
+
+```yaml
+# Prometheus scrape config
+scrape_configs:
+  - job_name: 'nuimanbot'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['localhost:8080']
+
+# Kubernetes liveness/readiness probes
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 10
+readinessProbe:
+  httpGet:
+    path: /health/ready
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 10
+```
+
 ### Prometheus Integration
 
 NuimanBot exposes Prometheus metrics at `/metrics` endpoint:
@@ -635,10 +731,17 @@ Failed to load configuration: NUIMANBOT_ENCRYPTION_KEY is not set in environment
 ```
 
 **Solution:**
-```bash
-export NUIMANBOT_ENCRYPTION_KEY=$(openssl rand -base64 32 | head -c 32)
-# Add to ~/.bashrc for persistence
-```
+This error should no longer occur! NuimanBot now **auto-generates an encryption key** on first startup.
+
+- **First run:** The app automatically generates a 32-byte key and saves it to `.env`
+- **Subsequent runs:** The key is loaded from `.env` automatically
+- **Manual override:** For production, use a secrets manager:
+  ```bash
+  export NUIMANBOT_ENCRYPTION_KEY=$(openssl rand -base64 32)
+  # Add to your secrets management solution
+  ```
+
+**Important:** The auto-generated key is saved to `.env` for convenience. For production deployments, consider using a proper secrets management solution (AWS Secrets Manager, Kubernetes Secrets, etc.).
 
 #### Issue: "Unauthorized" API responses
 

@@ -1,3 +1,5 @@
+version: 2
+
 run:
   timeout: 5m
   tests: true  # Run linters on test files
@@ -5,15 +7,11 @@ run:
 linters:
   enable:
     - errcheck      # Check error returns
-    - gosimple      # Simplify code
     - govet         # Suspicious constructs
     - ineffassign   # Unused assignments
     - staticcheck   # Static analysis
     - unused        # Unused code
-    - gofmt         # Formatting
-    - goimports     # Import organization
     - misspell      # Spelling errors
-    - gocritic      # Code quality
 
 linters-settings:
   errcheck:

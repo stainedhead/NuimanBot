@@ -86,6 +86,11 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
+	// Initialize encryption key if not set (first-time setup)
+	if err := ensureEncryptionKey(); err != nil {
+		log.Fatalf("Failed to initialize encryption key: %v", err)
+	}
+
 	// 1. Load Configuration
 	cfg, err := config.LoadConfig()
 	if err != nil {
@@ -929,4 +934,68 @@ func buildAlertingConfig(cfg *config.NuimanBotConfig) alerting.Config {
 		Channels:       channels,
 		ThrottleWindow: ac.ThrottleWindow,
 	}
+}
+
+// ensureEncryptionKey checks if the encryption key is set in the environment.
+// If not, it generates a new key, displays it to the user with warnings,
+// and saves it to the .env file for future use.
+func ensureEncryptionKey() error {
+	// Check if key is already set
+	if crypto.IsEncryptionKeySet() {
+		return nil
+	}
+
+	fmt.Println()
+	fmt.Println("========================================")
+	fmt.Println("🔐 FIRST-TIME SETUP: Encryption Key")
+	fmt.Println("========================================")
+	fmt.Println()
+	fmt.Println("No encryption key found. Generating a new one...")
+	fmt.Println()
+
+	// Generate new encryption key
+	key, err := crypto.GenerateEncryptionKey()
+	if err != nil {
+		return fmt.Errorf("failed to generate encryption key: %w", err)
+	}
+
+	encodedKey := crypto.EncodeKeyToBase64(key)
+
+	// Display the key prominently
+	fmt.Println("┌────────────────────────────────────────────────────────────┐")
+	fmt.Println("│                                                            │")
+	fmt.Println("│  🔑 YOUR ENCRYPTION KEY (SAVE THIS!)                      │")
+	fmt.Println("│                                                            │")
+	fmt.Println("│  NUIMANBOT_ENCRYPTION_KEY=" + encodedKey)
+	fmt.Println("│                                                            │")
+	fmt.Println("│  ⚠️  IMPORTANT WARNINGS:                                   │")
+	fmt.Println("│  • This key encrypts all your credentials and secrets     │")
+	fmt.Println("│  • If you lose this key, you CANNOT recover your data     │")
+	fmt.Println("│  • Keep it safe and secure (password manager, secrets)    │")
+	fmt.Println("│  • For production, use a secrets manager (not .env file)  │")
+	fmt.Println("│                                                            │")
+	fmt.Println("│  ✅ This key has been saved to your .env file             │")
+	fmt.Println("│     and will be loaded automatically on next startup      │")
+	fmt.Println("│                                                            │")
+	fmt.Println("└────────────────────────────────────────────────────────────┘")
+	fmt.Println()
+
+	// Save to .env file
+	envPath := ".env"
+	if err := crypto.SaveEncryptionKeyToEnv(envPath, key); err != nil {
+		return fmt.Errorf("failed to save encryption key to .env: %w", err)
+	}
+
+	fmt.Println("✓ Encryption key saved to .env file")
+	fmt.Println()
+
+	// Set the environment variable for this run
+	if err := os.Setenv(crypto.EncryptionKeyEnvVar, encodedKey); err != nil {
+		return fmt.Errorf("failed to set encryption key environment variable: %w", err)
+	}
+
+	fmt.Println("Continuing startup with generated encryption key...")
+	fmt.Println()
+
+	return nil
 }

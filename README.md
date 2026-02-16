@@ -56,6 +56,7 @@ An AI agent framework built with Clean Architecture principles, featuring LLM in
 - **Performance**: <2 μs prompt composition, <120 ns rules enforcement
 
 ### Data Management
+- **Auto-Initialization**: Zero-config startup — directories and default admin user created automatically on first run
 - **File-Based Storage**: Persistent conversations, users, notes, and audit logs with full CRUD using JSON/JSONL formats
 - **Conversation Summarization**: Automatic LLM-based summarization when context limits approached
 - **Token Window Management**: Dynamic context sizing based on provider limits (200k Claude, 128k GPT-4, 32k Ollama)
@@ -97,6 +98,15 @@ An AI agent framework built with Clean Architecture principles, featuring LLM in
 ## Quick Start
 
 📖 **For detailed installation and configuration instructions, see [Installation & Setup Guide](support_docs/install-and-setup.md)**
+
+### Zero-Config First Run
+
+NuimanBot is designed for **zero-config startup**:
+- 🔐 **Encryption key auto-generated** on first run (saved to `.env`)
+- 📁 **Data directories created automatically** (no manual setup needed)
+- 👤 **Default admin user created** (admin@localhost)
+
+Just run the binary and it works! ✨
 
 ### Prerequisites
 
@@ -246,27 +256,31 @@ export NUIMANBOT_LLM_OLLAMA_BASEURL="http://localhost:11434"
 # Optional: Weather tool
 export OPENWEATHERMAP_API_KEY="your-weather-api-key"
 
-# Run the application
+# Run the application (no manual setup needed — storage auto-initializes)
 ./bin/nuimanbot
 ```
 
-The CLI will start and you can interact with the bot:
+The CLI will start and you can interact with the bot. On first run, NuimanBot automatically creates the required directory structure and a default admin user:
 
 ```
 NuimanBot starting...
 Config file used: ./config.yaml
-2026/02/06 12:00:00 Database schema initialized successfully
-2026/02/06 12:00:00 Calculator tool registered
-2026/02/06 12:00:00 DateTime tool registered
-2026/02/06 12:00:00 Weather tool registered
-2026/02/06 12:00:00 WebSearch tool registered
-2026/02/06 12:00:00 Notes tool registered
-2026/02/06 12:00:00 Registered built-in tools successfully
-2026/02/06 12:00:00 NuimanBot initialized with:
-2026/02/06 12:00:00   Log Level: info
-2026/02/06 12:00:00   Debug Mode: false
-2026/02/06 12:00:00   LLM Provider: anthropic
-2026/02/06 12:00:00   Tools Registered: 5
+2026/02/16 12:00:00 INFO Initializing storage base_dir=./data
+2026/02/16 12:00:00 INFO Creating default admin user
+2026/02/16 12:00:00 INFO Default admin user created user_id=admin email=admin@localhost
+2026/02/16 12:00:00 INFO Storage initialization complete base_dir=./data
+2026/02/16 12:00:00 INFO Database schema initialized successfully
+2026/02/16 12:00:00 INFO Calculator tool registered
+2026/02/16 12:00:00 INFO DateTime tool registered
+2026/02/16 12:00:00 INFO Weather tool registered
+2026/02/16 12:00:00 INFO WebSearch tool registered
+2026/02/16 12:00:00 INFO Notes tool registered
+2026/02/16 12:00:00 INFO Registered built-in tools successfully
+2026/02/16 12:00:00 INFO NuimanBot initialized with:
+2026/02/16 12:00:00 INFO   Log Level: info
+2026/02/16 12:00:00 INFO   Debug Mode: false
+2026/02/16 12:00:00 INFO   LLM Provider: anthropic
+2026/02/16 12:00:00 INFO   Tools Registered: 5
 
 Starting CLI Gateway...
 Type your messages below. Commands:
@@ -282,6 +296,8 @@ Bot: The result is 100.
 > exit
 NuimanBot stopped gracefully.
 ```
+
+On subsequent runs, initialization is a no-op — existing data is preserved.
 
 ## Persona Customization
 
@@ -808,6 +824,7 @@ For full administration details, see **[Memory Admin Guide](support_docs/admin-g
 │       ├── crypto/        # AES encryption, vault
 │       ├── llm/           # LLM provider clients (Anthropic, OpenAI, Ollama)
 │       ├── memory/        # SQLite memory repositories (cells, scenes, FTS5)
+│       ├── storage/       # Auto-initialization (directories, default admin)
 │       ├── weather/       # OpenWeatherMap client
 │       └── search/        # DuckDuckGo search client
 ├── internal/tools/       # Built-in tools (calculator, datetime, weather, websearch, notes)
@@ -1070,7 +1087,8 @@ See `AGENTS.md` for detailed contribution guidelines.
 
 ✅ **Production-Ready MVP** - 95.6% Complete (43/45 planned features)
 
-**Recently Completed (Phases 5, 6, 7.1, Agent Skills Phase 3, & Self-Organizing Memory)**:
+**Recently Completed (Phases 5, 6, 7.1, Agent Skills Phase 3, Self-Organizing Memory, & Auto-Initialization)**:
+- ✅ **Auto-Initialization Complete** (2026-02-16): Zero-config startup — auto-creates directories and default admin user, idempotent, container-friendly
 - ✅ **Self-Organizing Memory v2 Complete** (2026-02-15): LLM-powered extraction, FTS5 recall, scene consolidation, full CLI, observability, admin documentation
 - ✅ **Phase 5 Complete** (100%): Streaming, Multi-Provider Fallback, User Preferences, Conversation Export
 - ✅ **Phase 6 Complete** (100%): Prometheus Metrics, Distributed Tracing, Error Tracking, Real-time Alerting, Usage Analytics
