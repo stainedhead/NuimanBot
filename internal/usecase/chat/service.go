@@ -59,6 +59,25 @@ type MemoryRecaller interface {
 	RecallAndFormat(ctx context.Context, conversationID, query string, maxTokens int) (string, error)
 }
 
+// PromptComposer composes system prompts from persona files.
+type PromptComposer interface {
+	Compose(ctx context.Context, input PromptComposerInput) (*PromptComposerOutput, error)
+}
+
+// PromptComposerInput represents input for prompt composition.
+type PromptComposerInput struct {
+	UserID   string
+	Platform string
+}
+
+// PromptComposerOutput represents composed system prompt.
+type PromptComposerOutput struct {
+	SystemPrompt   string
+	TokensUsed     int
+	Truncated      bool
+	TruncatedFiles []string
+}
+
 // Service implements the ChatService use case.
 type Service struct {
 	llmService      LLMService
@@ -68,6 +87,7 @@ type Service struct {
 	cache           LLMCache       // Optional cache for LLM responses
 	memoryCurator   MemoryCurator  // Optional memory curator for long-term storage
 	memoryRecaller  MemoryRecaller // Optional memory recaller for context injection
+	promptComposer  PromptComposer // Optional persona-aware prompt composer
 }
 
 // NewService creates a new ChatService instance.
@@ -98,6 +118,11 @@ func (s *Service) SetMemoryCurator(curator MemoryCurator) {
 // SetMemoryRecaller sets the memory recaller for context injection (optional).
 func (s *Service) SetMemoryRecaller(recaller MemoryRecaller) {
 	s.memoryRecaller = recaller
+}
+
+// SetPromptComposer sets the persona-aware prompt composer (optional).
+func (s *Service) SetPromptComposer(composer PromptComposer) {
+	s.promptComposer = composer
 }
 
 // getConversationID generates a conversation ID based on platform and user
@@ -142,8 +167,32 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 	}
 	tools := convertSkillsToTools(skills)
 
-	// 4. Recall long-term memories for context injection (graceful degradation)
-	systemPrompt := "You are a helpful AI assistant." // TODO: From config
+	// 4. Compose system prompt with persona files (graceful degradation)
+	systemPrompt := "You are a helpful AI assistant." // Default fallback
+	if s.promptComposer != nil {
+		composerOutput, composeErr := s.promptComposer.Compose(ctx, PromptComposerInput{
+			UserID:   incomingMsg.PlatformUID,
+			Platform: string(incomingMsg.Platform),
+		})
+		if composeErr != nil {
+			logger.Error("Failed to compose persona prompt",
+				"user_id", incomingMsg.PlatformUID,
+				"error", composeErr,
+			)
+			// Fallback to default prompt
+		} else {
+			systemPrompt = composerOutput.SystemPrompt
+			if composerOutput.Truncated {
+				logger.Warn("Persona prompt was truncated",
+					"user_id", incomingMsg.PlatformUID,
+					"tokens_used", composerOutput.TokensUsed,
+					"truncated_files", composerOutput.TruncatedFiles,
+				)
+			}
+		}
+	}
+
+	// 5. Recall long-term memories for context injection (graceful degradation)
 	if s.memoryRecaller != nil {
 		recalled, recallErr := s.memoryRecaller.RecallAndFormat(ctx, conversationID, incomingMsg.Text, MemoryTokenBudget)
 		if recallErr != nil {
@@ -156,7 +205,7 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 		}
 	}
 
-	// 5. Prepare LLM Request with tools
+	// 6. Prepare LLM Request with tools
 	llmMessages := []domain.Message{}
 	// Add history
 	for i := range recentMessages {
@@ -174,7 +223,7 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 		SystemPrompt: systemPrompt,
 	}
 
-	// 6. Tool calling loop (max 5 iterations)
+	// 7. Tool calling loop (max 5 iterations)
 	const maxToolIterations = 5
 	var finalResponse *domain.LLMResponse
 	var collectedToolOutputs []string

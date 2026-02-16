@@ -2,6 +2,7 @@ package persona
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"nuimanbot/internal/domain"
@@ -26,14 +27,18 @@ type EnforcerOutput struct {
 	Reason               string
 }
 
-// RulesEnforcer enforces RULES.md hard rules.
+// RulesEnforcer enforces RULES.md hard rules against requested actions and tools.
+// It loads the user's RULES.md, parses YAML frontmatter for blocked_tools and
+// requires_confirmation lists, and merges with an optional admin policy that
+// cannot be overridden by user rules.
 type RulesEnforcer struct {
 	repo        domain.PersonaFileRepository
 	parser      FrontmatterParser
-	adminPolicy *domain.RulesConfig // Optional admin policy that overrides user rules
+	adminPolicy *domain.RulesConfig
 }
 
-// NewRulesEnforcer creates a new RulesEnforcer.
+// NewRulesEnforcer creates a RulesEnforcer. adminPolicy may be nil if no
+// admin-level overrides are needed.
 func NewRulesEnforcer(repo domain.PersonaFileRepository, parser FrontmatterParser, adminPolicy *domain.RulesConfig) *RulesEnforcer {
 	return &RulesEnforcer{
 		repo:        repo,
@@ -42,105 +47,98 @@ func NewRulesEnforcer(repo domain.PersonaFileRepository, parser FrontmatterParse
 	}
 }
 
-// Enforce checks if an action/tool is allowed according to rules.
+// Enforce checks whether the given tool/action is allowed by the user's
+// RULES.md and the admin policy.
+//
+// Precedence: blocked > requires_confirmation > allowed.
+// Admin policy is merged with user rules and cannot be bypassed.
 func (e *RulesEnforcer) Enforce(ctx context.Context, input EnforcerInput) (*EnforcerOutput, error) {
 	if input.UserID == "" {
 		return nil, fmt.Errorf("userID is required")
 	}
 
-	// Load user's RULES.md file
-	var userRules *domain.RulesConfig
-	rulesFile, err := e.repo.Get(ctx, input.UserID, domain.PersonaFileRULES)
+	userRules, err := e.loadUserRules(ctx, input.UserID)
 	if err != nil {
-		if err == domain.ErrPersonaFileNotFound {
-			// No RULES file - use empty config
-			userRules = &domain.RulesConfig{}
-		} else {
-			return nil, fmt.Errorf("failed to load RULES.md: %w", err)
-		}
-	} else {
-		// Parse frontmatter
-		config, _, parseErr := e.parser.ParseMarkdownWithFrontmatter(rulesFile.Content)
-		if parseErr != nil {
-			return nil, fmt.Errorf("failed to parse RULES.md: %w", parseErr)
-		}
-		userRules = &config
+		return nil, err
 	}
 
-	// Apply admin policy overrides if present
-	effectiveRules := userRules
+	effective := userRules
 	if e.adminPolicy != nil {
-		effectiveRules = e.mergeWithAdminPolicy(userRules)
+		effective = e.mergeWithAdminPolicy(userRules)
 	}
 
-	// Check blocked tools first (highest priority)
-	if input.Tool != "" && effectiveRules.IsToolBlocked(input.Tool) {
+	// Blocked tools take highest priority
+	if input.Tool != "" && effective.IsToolBlocked(input.Tool) {
 		return &EnforcerOutput{
-			Allowed:              false,
-			RequiresConfirmation: false,
-			Reason:               fmt.Sprintf("Tool %q is blocked by rules", input.Tool),
+			Allowed: false,
+			Reason:  fmt.Sprintf("tool %q is blocked by rules", input.Tool),
 		}, nil
 	}
 
-	// Check if action requires confirmation
-	if input.Action != "" && effectiveRules.RequiresConfirmationFor(input.Action) {
-		return &EnforcerOutput{
-			Allowed:              true,
-			RequiresConfirmation: true,
-			Reason:               fmt.Sprintf("Action %q requires user confirmation", input.Action),
-		}, nil
-	}
-
-	// Tool also check for requires confirmation
-	if input.Tool != "" && effectiveRules.RequiresConfirmationFor(input.Tool) {
+	// Check confirmation requirements for actions
+	if input.Action != "" && effective.RequiresConfirmationFor(input.Action) {
 		return &EnforcerOutput{
 			Allowed:              true,
 			RequiresConfirmation: true,
-			Reason:               fmt.Sprintf("Tool %q requires user confirmation", input.Tool),
+			Reason:               fmt.Sprintf("action %q requires user confirmation", input.Action),
 		}, nil
 	}
 
-	// Default: allowed without confirmation
-	return &EnforcerOutput{
-		Allowed:              true,
-		RequiresConfirmation: false,
-	}, nil
+	// Check confirmation requirements for tools
+	if input.Tool != "" && effective.RequiresConfirmationFor(input.Tool) {
+		return &EnforcerOutput{
+			Allowed:              true,
+			RequiresConfirmation: true,
+			Reason:               fmt.Sprintf("tool %q requires user confirmation", input.Tool),
+		}, nil
+	}
+
+	return &EnforcerOutput{Allowed: true}, nil
 }
 
-// mergeWithAdminPolicy merges admin policy with user rules.
-// Admin blocked tools are always enforced.
+// loadUserRules loads and parses the user's RULES.md. Returns an empty
+// RulesConfig if the file does not exist (graceful degradation).
+func (e *RulesEnforcer) loadUserRules(ctx context.Context, userID string) (*domain.RulesConfig, error) {
+	file, err := e.repo.Get(ctx, userID, domain.PersonaFileRULES)
+	if err != nil {
+		if errors.Is(err, domain.ErrPersonaFileNotFound) {
+			return &domain.RulesConfig{}, nil
+		}
+		return nil, fmt.Errorf("loading rules for user %q: %w", userID, err)
+	}
+
+	config, _, err := e.parser.ParseMarkdownWithFrontmatter(file.Content)
+	if err != nil {
+		return nil, fmt.Errorf("parsing rules for user %q: %w", userID, err)
+	}
+
+	return &config, nil
+}
+
+// mergeWithAdminPolicy creates a new RulesConfig combining admin and user rules.
+// Admin rules always apply and cannot be overridden by user configuration.
 func (e *RulesEnforcer) mergeWithAdminPolicy(userRules *domain.RulesConfig) *domain.RulesConfig {
 	merged := *userRules
-
-	// Merge blocked tools (admin + user)
-	blockedMap := make(map[string]bool)
-	for _, tool := range e.adminPolicy.BlockedTools {
-		blockedMap[tool] = true
-	}
-	for _, tool := range userRules.BlockedTools {
-		blockedMap[tool] = true
-	}
-
-	var blocked []string
-	for tool := range blockedMap {
-		blocked = append(blocked, tool)
-	}
-	merged.BlockedTools = blocked
-
-	// Merge requires confirmation (admin + user)
-	confirmMap := make(map[string]bool)
-	for _, action := range e.adminPolicy.RequiresConfirmation {
-		confirmMap[action] = true
-	}
-	for _, action := range userRules.RequiresConfirmation {
-		confirmMap[action] = true
-	}
-
-	var confirm []string
-	for action := range confirmMap {
-		confirm = append(confirm, action)
-	}
-	merged.RequiresConfirmation = confirm
-
+	merged.BlockedTools = mergeUnique(e.adminPolicy.BlockedTools, userRules.BlockedTools)
+	merged.RequiresConfirmation = mergeUnique(e.adminPolicy.RequiresConfirmation, userRules.RequiresConfirmation)
 	return &merged
+}
+
+// mergeUnique combines two string slices, removing duplicates.
+func mergeUnique(a, b []string) []string {
+	seen := make(map[string]bool, len(a)+len(b))
+	var result []string
+	for _, s := range a {
+		if !seen[s] {
+			seen[s] = true
+			result = append(result, s)
+		}
+	}
+	for _, s := range b {
+		if !seen[s] {
+			seen[s] = true
+			result = append(result, s)
+		}
+	}
+	return result
 }
