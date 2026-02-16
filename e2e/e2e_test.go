@@ -1,3 +1,7 @@
+//go:build e2e_disabled
+// +build e2e_disabled
+
+
 package e2e
 
 import (

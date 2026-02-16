@@ -88,15 +88,15 @@ func validateStorage(cfg *StorageConfig) error {
 	var errs []error
 
 	// Validate storage type
-	validTypes := []string{"sqlite", "postgres", "memory"}
+	validTypes := []string{"file", "memory"}
 	if cfg.Type == "" {
 		errs = append(errs, fmt.Errorf("storage.type is required"))
 	} else if !isOneOf(cfg.Type, validTypes) {
 		errs = append(errs, fmt.Errorf("storage.type must be one of: %s", strings.Join(validTypes, ", ")))
 	}
 
-	// Validate storage path or DSN (required for database storage types)
-	requiresPath := cfg.Type == "sqlite" || cfg.Type == "postgres"
+	// Validate storage path or DSN (required for file storage type)
+	requiresPath := cfg.Type == "file"
 	if requiresPath && cfg.Path == "" && cfg.DSN == "" {
 		errs = append(errs, fmt.Errorf("storage.path or storage.dsn is required for %s storage", cfg.Type))
 	}

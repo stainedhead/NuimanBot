@@ -7,8 +7,8 @@ security:
   vault_path: "./data/vault.enc"
 
 storage:
-  type: sqlite
-  dsn: "./data/nuimanbot.db"
+  type: file
+  dsn: "./data"
 
 llm:
   default_model:

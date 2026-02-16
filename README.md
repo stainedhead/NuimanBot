@@ -30,7 +30,7 @@ An AI agent framework built with Clean Architecture principles, featuring LLM in
 ### Administration & Management
 - **REST API**: Complete administrative REST API with full CRUD operations
 - **User Profile Management**: Comprehensive user profiles with multi-platform integration (Slack, Telegram, CLI)
-- **Bot Management**: Database-driven bot configuration with public/private bot support
+- **Bot Management**: File-based bot configuration with public/private bot support
 - **Configuration Hot Reload**: Update configuration without service restart
 - **Platform Integration**: Link user profiles to Slack/Telegram accounts
 - **Bulk Operations**: Import/Export users and configurations (JSON/CSV)
@@ -56,7 +56,7 @@ An AI agent framework built with Clean Architecture principles, featuring LLM in
 - **Performance**: <2 μs prompt composition, <120 ns rules enforcement
 
 ### Data Management
-- **SQLite Storage**: Persistent conversations, users, and notes with full CRUD
+- **File-Based Storage**: Persistent conversations, users, notes, and audit logs with full CRUD using JSON/JSONL formats
 - **Conversation Summarization**: Automatic LLM-based summarization when context limits approached
 - **Token Window Management**: Dynamic context sizing based on provider limits (200k Claude, 128k GPT-4, 32k Ollama)
 - **Conversation Export**: Export conversations in JSON or Markdown format with full metadata
@@ -70,10 +70,9 @@ An AI agent framework built with Clean Architecture principles, featuring LLM in
 - **Context Injection**: Relevant memories automatically injected into conversation context with token budgeting
 - **Memory CLI**: Full management commands — list, search, get, delete, prune, scenes, stats, export/import
 - **Graceful Degradation**: Memory failures never block chat — extraction and recall fail silently with logging
-- **Separate Database**: Isolated `nuimanbot-memory.db` with FTS5 index and auto-sync triggers
+- **File-Based Memory Storage**: Memory cells and scenes stored as individual JSON files with in-memory indexes for fast keyword search
 
 ### Performance & Observability
-- **Connection Pooling**: Optimized database connections (25 max open, 5 idle, lifecycle management)
 - **LLM Response Caching**: In-memory cache with SHA256 hashing (1000 entries, 1-hour TTL, 100% test coverage)
 - **Message Batching**: Buffered writes with dual flush strategy (size-based + time-based)
 - **Prometheus Metrics**: 23+ metric types exposed at `/metrics` endpoint (including 9 memory-specific metrics)
@@ -102,7 +101,6 @@ An AI agent framework built with Clean Architecture principles, featuring LLM in
 ### Prerequisites
 
 - Go 1.24 or later (toolchain specified in go.mod)
-- SQLite3
 - At least one LLM provider:
   - Anthropic Claude (API key required)
   - OpenAI GPT (API key required)
@@ -142,8 +140,8 @@ security:
   vault_path: "./data/vault.enc"
 
 storage:
-  type: sqlite
-  dsn: "./data/nuimanbot.db"
+  type: file
+  dsn: "./data"  # Base path for all file-based storage
 
 llm:
   # Provider-specific configurations (recommended)
@@ -817,7 +815,10 @@ For full administration details, see **[Memory Admin Guide](documentation/admin-
 │   └── datetime/
 ├── config.yaml            # Configuration file
 └── data/                  # Runtime data (gitignored)
-    ├── nuimanbot.db       # SQLite database
+    ├── users.json         # User profiles (central index)
+    ├── users/             # Per-user data directories
+    ├── memory/            # Memory cells and scenes (JSON files)
+    ├── audit/             # Audit logs (JSONL)
     └── vault.enc          # Encrypted credentials
 ```
 
