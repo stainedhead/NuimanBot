@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	_ "modernc.org/sqlite"
 
 	"nuimanbot/internal/domain/memoryv2"
 	memory "nuimanbot/internal/infrastructure/memory"

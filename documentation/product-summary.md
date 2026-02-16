@@ -195,7 +195,7 @@ Infrastructure → Adapter → Use Case → Domain
 
 ### Current (MVP)
 
-- **Single-server deployment**: SQLite backend
+- **Single-server deployment**: file-based JSON storage
 - **Concurrent users**: ~100
 - **Messages/sec**: 50-100 (with batching)
 
@@ -211,7 +211,7 @@ Infrastructure → Adapter → Use Case → Domain
 
 **Core:**
 - Language: Go 1.24
-- Database: SQLite 3 (PostgreSQL-ready)
+- Database: File-based JSON storage (PostgreSQL-ready)
 - Encryption: AES-256-GCM
 - Logging: slog (stdlib)
 

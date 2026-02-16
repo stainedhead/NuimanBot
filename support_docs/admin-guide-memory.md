@@ -30,7 +30,7 @@ NuimanBot's memory system provides persistent, structured long-term memory acros
 - **Memory Recall**: Retrieves relevant memories using FTS5 full-text search with salience-based fallback
 - **Scene Consolidation**: Generates and maintains topic-level summaries for efficient context injection
 
-**Storage:** SQLite with FTS5 full-text search (separate database: `nuimanbot-memory.db`)
+**Storage:** File-based JSON storage with memory indexing
 
 ---
 
@@ -361,45 +361,34 @@ High cell counts may degrade performance over time:
 
 ## Database Maintenance
 
-### Database Location
+### Storage Location
 
-Memory uses a separate SQLite database: `nuimanbot-memory.db` (in the data directory).
+Memory uses file-based JSON storage: `memory/` directory (in the data directory).
 
-### Schema
+### File Structure
 
-**Tables:**
-- `memory_cells` - Individual memory entries (10 columns, 6 indexes)
-- `memory_scenes` - Scene summaries
-- `memory_cells_fts` - FTS5 virtual table for full-text search
-
-**Triggers:**
-- `memory_cells_fts_insert` - Syncs new cells to FTS index
-- `memory_cells_fts_update` - Updates FTS on cell changes
-- `memory_cells_fts_delete` - Removes from FTS on cell deletion
+**Directories:**
+- `memory/cells/` - Individual memory cell JSON files
+- `memory/scenes/` - Scene summary JSON files
+- `memory/index/` - Search index for memory lookup
 
 ### Integrity Check
 
-```bash
-sqlite3 nuimanbot-memory.db "PRAGMA integrity_check;"
-```
-
-### FTS Index Rebuild
-
-If FTS search returns incorrect results or after database recovery:
+Use the built-in memory stats command to verify storage integrity:
 
 ```bash
-./bin/nuimanbot memory rebuild-fts
+./bin/nuimanbot memory stats
 ```
 
-This drops and recreates the FTS5 virtual table and repopulates it from `memory_cells`.
+### Index Rebuild
 
-### Vacuum
-
-Reclaim disk space after large deletions:
+If search returns incorrect results or after storage corruption:
 
 ```bash
-sqlite3 nuimanbot-memory.db "VACUUM;"
+./bin/nuimanbot memory rebuild-index
 ```
+
+This recreates the search index from existing memory cell files.
 
 ---
 
@@ -411,19 +400,19 @@ sqlite3 nuimanbot-memory.db "VACUUM;"
 # 1. Export conversation memories (JSON, portable)
 ./bin/nuimanbot memory export --conversation conv-123 > memory-conv-123.json
 
-# 2. Full database backup (SQLite file copy)
-cp data/nuimanbot-memory.db backups/memory-$(date +%Y%m%d).db
+# 2. Full directory backup (file-based storage)
+cp -r data/memory/ backups/memory-$(date +%Y%m%d)/
 
 # 3. Verify backup
-sqlite3 backups/memory-$(date +%Y%m%d).db "SELECT COUNT(*) FROM memory_cells;"
+./bin/nuimanbot memory stats --data-dir backups/memory-$(date +%Y%m%d)/
 ```
 
 ### Recovery
 
 ```bash
-# Option A: Restore from database backup
-cp backups/memory-20260215.db data/nuimanbot-memory.db
-./bin/nuimanbot memory rebuild-fts  # Rebuild FTS index after restore
+# Option A: Restore from directory backup
+cp -r backups/memory-20260215/ data/memory/
+./bin/nuimanbot memory rebuild-index  # Rebuild search index after restore
 
 # Option B: Import from JSON export
 ./bin/nuimanbot memory import < memory-conv-123.json
@@ -469,7 +458,7 @@ curl -s localhost:8080/metrics | grep memory_extraction_total
 - Check that the LLM client is properly configured
 - Review logs for extraction errors
 
-### Issue: FTS search returns no results
+### Issue: Search returns no results
 
 **Symptom:** `memory search` returns empty despite cells existing.
 
@@ -478,14 +467,14 @@ curl -s localhost:8080/metrics | grep memory_extraction_total
 # Verify cells exist
 ./bin/nuimanbot memory list
 
-# Check FTS index
-sqlite3 nuimanbot-memory.db "SELECT COUNT(*) FROM memory_cells_fts;"
+# Check index status
+./bin/nuimanbot memory stats
 ```
 
 **Solution:**
 ```bash
-# Rebuild FTS index
-./bin/nuimanbot memory rebuild-fts
+# Rebuild search index
+./bin/nuimanbot memory rebuild-index
 ```
 
 ### Issue: High extraction error rate
@@ -521,24 +510,24 @@ curl -s localhost:8080/metrics | grep memory_fts_query_duration
 ```
 
 **Solution:**
-- Rebuild FTS index: `./bin/nuimanbot memory rebuild-fts`
+- Rebuild search index: `./bin/nuimanbot memory rebuild-index`
 - Prune expired cells: `./bin/nuimanbot memory prune`
-- Reduce `FTSResultLimit` in recall config
-- VACUUM the database: `sqlite3 nuimanbot-memory.db "VACUUM;"`
+- Reduce `SearchResultLimit` in recall config
+- Clean up old index files
 
-### Issue: Database locked
+### Issue: File locking errors
 
-**Symptom:** `database is locked` errors in memory operations.
+**Symptom:** File access errors during memory operations.
 
 **Solution:**
-- Ensure only one NuimanBot instance accesses the memory database
+- Ensure only one NuimanBot instance accesses the memory directory
 - Check for zombie processes: `ps aux | grep nuimanbot`
-- Memory DB uses a separate file from the main DB - verify no other tools have it open
-- Set appropriate WAL mode: `sqlite3 nuimanbot-memory.db "PRAGMA journal_mode=WAL;"`
+- Verify file permissions on memory/ directory
+- Check disk space availability
 
 ### Issue: Memory bloat
 
-**Symptom:** Database growing rapidly, cell count very high.
+**Symptom:** Memory directory growing rapidly, cell count very high.
 
 **Solution:**
 ```bash
@@ -551,8 +540,8 @@ curl -s localhost:8080/metrics | grep memory_fts_query_duration
 # Clear inactive conversations
 ./bin/nuimanbot memory clear-user --conversation <old-conv-id> --confirm
 
-# Reclaim space
-sqlite3 nuimanbot-memory.db "VACUUM;"
+# Check directory size
+du -sh data/memory/
 ```
 
 Consider lowering extraction salience thresholds to reduce low-value cells.

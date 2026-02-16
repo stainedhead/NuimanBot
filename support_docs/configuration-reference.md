@@ -65,8 +65,8 @@ security:
   vault_path: "./data/vault.enc"
 
 storage:
-  type: sqlite
-  dsn: "./data/nuimanbot.db"
+  type: file
+  dsn: "./data"
 
 llm:
   default_model:
@@ -244,8 +244,8 @@ Configures database and persistent storage.
 
 ```yaml
 storage:
-  type: sqlite                 # Storage backend type
-  dsn: "./data/nuimanbot.db"   # Data source name
+  type: file                 # Storage backend type
+  dsn: "./data"   # Data source name
 ```
 
 ### Fields
@@ -253,8 +253,8 @@ storage:
 #### `storage.type`
 
 **Type:** string
-**Default:** `sqlite`
-**Options:** `sqlite` (only supported type currently)
+**Default:** `file`
+**Options:** `file` (file-based JSON storage)
 **Description:** Storage backend type.
 
 **Environment Variable:** `NUIMANBOT_STORAGE_TYPE`
@@ -262,16 +262,16 @@ storage:
 #### `storage.dsn`
 
 **Type:** string
-**Default:** `./data/nuimanbot.db`
-**Description:** Data source name (database file path for SQLite).
+**Default:** `./data`
+**Description:** Data source name (data directory path for file-based storage).
 
 **Environment Variable:** `NUIMANBOT_STORAGE_DSN`
 
 **Examples:**
 ```yaml
 storage:
-  type: sqlite
-  dsn: "/var/lib/nuimanbot/nuimanbot.db"
+  type: file
+  dsn: "/var/lib/nuimanbot"
 ```
 
 ---
@@ -688,8 +688,8 @@ mcp:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NUIMANBOT_STORAGE_TYPE` | sqlite | Storage backend |
-| `NUIMANBOT_STORAGE_DSN` | ./data/nuimanbot.db | Database path |
+| `NUIMANBOT_STORAGE_TYPE` | file | Storage backend |
+| `NUIMANBOT_STORAGE_DSN` | ./data | Data directory path |
 
 ### LLM
 
@@ -728,8 +728,8 @@ security:
   vault_path: "./data/vault.enc"
 
 storage:
-  type: sqlite
-  dsn: "./data/nuimanbot.db"
+  type: file
+  dsn: "./data"
 
 llm:
   default_model:
@@ -786,8 +786,8 @@ security:
   vault_path: "/var/lib/nuimanbot/vault.enc"
 
 storage:
-  type: sqlite
-  dsn: "/var/lib/nuimanbot/nuimanbot.db"
+  type: file
+  dsn: "/var/lib/nuimanbot"
 
 llm:
   default_model:
@@ -855,8 +855,8 @@ security:
   vault_path: "/data/vault.enc"
 
 storage:
-  type: sqlite
-  dsn: "/data/nuimanbot.db"
+  type: file
+  dsn: "/data"
 
 llm:
   default_model:

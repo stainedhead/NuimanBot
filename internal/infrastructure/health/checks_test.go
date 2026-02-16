@@ -10,8 +10,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	_ "github.com/mattn/go-sqlite3"
-
 	"nuimanbot/internal/domain"
 	"nuimanbot/internal/infrastructure/health"
 )

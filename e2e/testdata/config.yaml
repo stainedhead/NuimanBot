@@ -23,8 +23,8 @@ gateways:
     history_file: ""
 
 storage:
-  type: sqlite
-  dsn: ""  # Will be set to temp path in tests
+  type: file
+  dsn: ""  # Will be set to temp directory path in tests
 
 skills:
   entries: {}

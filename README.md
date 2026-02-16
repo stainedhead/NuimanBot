@@ -116,6 +116,7 @@ Just run the binary and it works! ✨
   - OpenAI GPT (API key required)
   - AWS Bedrock (AWS credentials required)
   - Ollama (for local models, no API key needed)
+- File system with write access (for JSON-based storage)
 - Optional: OpenWeatherMap API key (for weather tool)
 - Optional: Telegram Bot Token (for Telegram gateway)
 - Optional: Slack Bot/App Tokens (for Slack gateway)

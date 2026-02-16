@@ -112,10 +112,10 @@ storage.Set(memory)
 
 ## Storage
 
-Memory is stored in SQLite:
+Memory is stored in file-based JSON format:
 
 ```
-~/.nuimanbot/skill_memory.db
+~/.nuimanbot/memory/
 ```
 
 ## Cleanup

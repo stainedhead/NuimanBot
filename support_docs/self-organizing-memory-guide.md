@@ -38,7 +38,7 @@ A **memory cell** is a single unit of knowledge extracted from a conversation. E
 
 | Type | What it captures | Example |
 |------|-----------------|---------|
-| **fact** | Objective information | "The project uses Go 1.22 with SQLite" |
+| **fact** | Objective information | "The project uses Go 1.22 with file-based storage" |
 | **decision** | Choices that were made | "Decided to use JWT tokens with 24-hour expiry" |
 | **task** | Action items or goals | "Need to implement rate limiting before launch" |
 | **preference** | Your likes/dislikes/patterns | "User prefers TDD workflow with table-driven tests" |
@@ -177,7 +177,7 @@ View all scene summaries:
 SCENE                      TOKENS   UPDATED               SUMMARY
 ------------------------------------------------------------------------------------------
 authentication             12       2026-02-15 10:30:00    User configured OAuth2 auth...
-project-setup              15       2026-02-15 09:15:00    Go 1.22 project with SQLite...
+project-setup              15       2026-02-15 09:15:00    Go 1.22 project with file-based storage...
 user-preferences           8        2026-02-14 16:45:00    Prefers TDD, dark mode, vim...
 
 3 scene(s) found.
@@ -227,15 +227,15 @@ Higher-salience cells are prioritized during recall when the token budget is lim
 
 ### Where Data is Stored
 
-Memory data is stored locally in a SQLite database file:
+Memory data is stored locally in file-based JSON format:
 ```
-./data/nuimanbot-memory.db
+./data/memory/
 ```
 
-This file contains:
-- All memory cells (facts, decisions, preferences, etc.)
-- Scene summaries
-- Full-text search index
+This directory contains:
+- All memory cells (facts, decisions, preferences, etc.) as JSON files
+- Scene summaries as JSON files
+- Search index for memory lookup
 
 ### What Gets Remembered
 

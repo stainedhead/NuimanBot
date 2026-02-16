@@ -90,7 +90,7 @@
   - Token window management respecting provider limits
   - Conversation export (JSON, Markdown formats)
   - User preferences (model selection, temperature, context windows)
-  - Message persistence with SQLite backend
+  - Message persistence with file-based JSON storage
 
 #### FR-007: Security Hardening
 - **Priority:** P0 (Critical)
@@ -213,10 +213,10 @@
 #### FR-016: Persistent Memory (Phase 3E)
 - **Priority:** P2 (Medium)
 - **Status:** ✅ Complete (4/4 tasks, 4h)
-- **Description:** Stateful skills with SQLite storage
+- **Description:** Stateful skills with file-based JSON storage
 - **Acceptance Criteria:**
   - ✅ Memory domain entities (SkillMemory, MemoryScope)
-  - ✅ SQLite storage implementation with schema management
+  - ✅ file-based JSON storage implementation with schema management
   - ✅ Multiple scopes (skill, user, global, session)
   - ✅ JSON value serialization
   - ✅ Memory API (Remember, Recall, Forget)
@@ -274,7 +274,7 @@
 - **Status:** ✅ Complete (MVP scope)
 - **Requirements:**
   - Single-server deployment: ~100 concurrent users
-  - SQLite backend for MVP
+  - file-based JSON storage for MVP
   - PostgreSQL-ready for horizontal scaling (post-MVP)
   - Database connection pooling with configurable limits
 
@@ -1080,7 +1080,7 @@ jobs:
 
 **Testing:**
 - Unit tests run in CI with race detection
-- Integration tests run in CI against SQLite backend
+- Integration tests run in CI against file-based JSON storage
 - E2E tests (manual verification) for deployment workflow
 
 ### Feature 6: Agent Skills System
@@ -1618,7 +1618,7 @@ requires_confirmation:
 **Required:**
 ```bash
 NUIMANBOT_ENCRYPTION_KEY=<base64-encoded-32-byte-key>  # AES-256 key for credential vault
-DATABASE_URL=sqlite://data/nuimanbot.db                # or postgres://...
+DATABASE_URL=file-based storage in ./data                # or postgres://...
 ```
 
 **LLM Providers (at least one required):**
@@ -1673,7 +1673,7 @@ gateways:
 
 storage:
   type: sqlite
-  path: data/nuimanbot.db
+  dsn: ./data
 
 skills:
   enabled: true

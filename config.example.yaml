@@ -14,8 +14,8 @@ security:
 
 # Storage Configuration
 storage:
-  type: sqlite                    # Database type (sqlite only for now)
-  dsn: "./data/nuimanbot.db"      # Database connection string
+  type: file                      # Storage type (file-based JSON storage)
+  dsn: "./data"                   # Data directory path (auto-initialized on startup)
 
 # LLM Provider Configuration
 llm:

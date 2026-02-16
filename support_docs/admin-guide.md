@@ -38,7 +38,7 @@ This guide covers all administrative functions for managing users, bots, and sys
 ### Prerequisites
 
 - Go 1.24 or later
-- SQLite3
+- File system with write access (for JSON-based storage)
 - At least one LLM provider (Anthropic, OpenAI, Bedrock, or Ollama)
 - Encryption key for secure credential storage (auto-generated on first run)
 
@@ -874,7 +874,10 @@ curl -X GET http://localhost:8080/api/v1/admin/status \
 | `config.yaml` | Project root | Main configuration |
 | `users.json` | data/users.json | User profile registry |
 | `bots.json` | data/bots.json | Bot configurations (encrypted) |
-| `nuimanbot.db` | data/nuimanbot.db | SQLite database |
+| `users.json` | data/users.json | User profiles (encrypted) |
+| `conversations/` | data/conversations/ | Conversation history |
+| `notes/` | data/notes/ | User notes |
+| `memory/` | data/memory/ | Memory cells and scenes |
 | `audit.log` | logs/audit.log | Audit trail |
 
 ### Quick Reference
