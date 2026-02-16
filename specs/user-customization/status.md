@@ -23,7 +23,7 @@
 |-------|--------|-------|-----------|------------|-----------|
 | **Phase 0: Planning** | ✅ Complete | 7 | 7 | 100% | 6-8h |
 | **Phase 1: Domain Layer** | ✅ Complete | 4 | 4 | 100% | 8-10h |
-| **Phase 2: Infrastructure Layer** | ⬜ Not Started | 7 | 0 | 0% | 10-12h |
+| **Phase 2: Infrastructure Layer** | 🟡 In Progress | 7 | 1 | 14% | 10-12h |
 | **Phase 3: Use Case Layer** | ⬜ Not Started | 8 | 0 | 0% | 12-15h |
 | **Phase 4: Adapter Layer** | ⬜ Not Started | 6 | 0 | 0% | 8-10h |
 | **Phase 5: Testing & Documentation** | ⬜ Not Started | 5 | 0 | 0% | 6-8h |
@@ -98,17 +98,17 @@
 
 ## Phase 2: Infrastructure Layer (10-12 hours)
 
-**Status:** ⬜ Not Started
-**Progress:** 0/7 tasks (0%)
+**Status:** 🟡 In Progress
+**Progress:** 1/7 tasks (14%)
 
 ### Tasks
 
-- [ ] **P2.1** - PersonaFileRepository filesystem implementation
-- [ ] **P2.2** - RulesParser YAML frontmatter parser
-- [ ] **P2.3** - File caching mechanism (15-minute TTL)
-- [ ] **P2.4** - Path sanitization and security validation
-- [ ] **P2.5** - AuditLogger implementation
-- [ ] **P2.6** - Persona file templates (SOUL.md, USER.md, RULES.md)
+- [ ] **P2.1** - PersonaFileRepository filesystem implementation (in progress)
+- [ ] **P2.2** - RulesParser YAML frontmatter parser (in progress)
+- [ ] **P2.3** - File caching mechanism (15-minute TTL) (included in P2.1)
+- [ ] **P2.4** - Path sanitization and security validation (in progress)
+- [ ] **P2.5** - AuditLogger implementation (in progress)
+- [x] **P2.6** - Persona file templates (SOUL.md, USER.md, RULES.md) ✅
 - [ ] **P2.7** - Integration tests for file I/O
 
 **Deliverables:**
