@@ -356,4 +356,12 @@ The project is **production-ready** with 95.6% completion. Key achievements:
 
 ---
 
-**Built with ❤️ using Clean Architecture and Test-Driven Development**
+## License
+
+This project is licensed under the Apache License 2.0 - see the [LICENSE](../LICENSE) file for details.
+
+Copyright 2026 NuimanBot Contributors
+
+---
+
+**Built using Clean Architecture and Test-Driven Development**

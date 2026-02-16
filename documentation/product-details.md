@@ -1709,6 +1709,14 @@ skills:
 
 ---
 
+## License
+
+This project is licensed under the Apache License 2.0 - see the [LICENSE](../LICENSE) file for details.
+
+Copyright 2026 NuimanBot Contributors
+
+---
+
 **Document History:**
 - **v1.0 (2026-02-07):** Initial creation from MVP PRD and Post-MVP roadmap
 - **v1.1 (2026-02-07):** Added Phase 3 features and documentation reference

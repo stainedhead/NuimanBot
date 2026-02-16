@@ -1468,6 +1468,14 @@ readinessProbe:
 
 ---
 
+## License
+
+This project is licensed under the Apache License 2.0 - see the [LICENSE](../LICENSE) file for details.
+
+Copyright 2026 NuimanBot Contributors
+
+---
+
 **Document Status:** ✅ **Current and Complete** (95.6% of planned features)
 **CI/CD Status:** ✅ **All Pipelines Passing**
 **Production Ready:** ✅ **Yes** - Fully deployable with automated quality gates
