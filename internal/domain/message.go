@@ -60,4 +60,5 @@ type ConversationSummary struct {
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
 	LastMessageSnippet string // A snippet of the last message for quick overview
+	MessageCount       int    // Total number of messages in conversation
 }

@@ -1,260 +1,238 @@
-# File-Based Storage Migration - Task Breakdown
+# File-Based Storage - Task Breakdown
 
-**Feature:** File-Based Storage Migration
-**Version:** 1.0
 **Created:** 2026-02-16
-**Status:** [Planning | In Progress | Complete]
-**Estimated Total Duration:** [X-Y hours]
+**Version:** 1.0
+**Status:** Active
+**Approach:** Greenfield implementation (no migration from SQLite)
 
 ---
 
-## Task Organization
+## Overview
 
-Tasks are organized by implementation phase following Clean Architecture layers (bottom-up). Each task includes:
-- **ID:** Unique task identifier (e.g., P1.1, P1.2)
-- **Phase:** Implementation phase (1-N)
-- **Dependencies:** Prerequisites that must complete first
-- **Estimated Duration:** Time estimate in hours
-- **Priority:** P0 (Critical), P1 (High), P2 (Medium), P3 (Low)
-- **Description:** What needs to be done
-- **Files to Create/Modify:** Specific files affected
-- **Acceptance Criteria:** Definition of done (checkboxes)
-- **Verification Commands:** Commands to verify completion
+This document provides a concrete, testable task breakdown for implementing file-based storage in NuimanBot. Each task follows TDD methodology (Red-Green-Refactor) and includes clear acceptance criteria.
 
-**Development Approach:** TDD + Bottom-Up Clean Architecture
-- Red → Green → Refactor for each component
-- Domain → Infrastructure → Use Case → Adapter
-- Each phase produces working, tested code
+**Key Approach:**
+- **Greenfield Implementation**: No migration from SQLite—build file repositories from scratch
+- **TDD**: Write tests first, implement to pass, refactor for quality
+- **Bottom-Up**: Infrastructure (file repos) → Integration → Use cases
+- **Quality Gates**: All tasks must pass quality gates before completion
+
+**Total Estimated Duration:** 6-7 weeks (170-210 hours)
 
 ---
 
-## Progress Summary
+## Phase 2: Implementation
 
-**Overall Progress:** [0/N] tasks complete ([0%])
+**Status:** ⬜ Not Started
+**Duration:** 2-3 weeks (80-100 hours)
 
-**By Phase:**
-- Phase 1: [0/X] tasks complete
-- Phase 2: [0/Y] tasks complete
-- Phase 3: [0/Z] tasks complete
-
-**By Priority:**
-- P0 (Critical): [0/X] complete
-- P1 (High): [0/Y] complete
-- P2 (Medium): [0/Z] complete
+**Goal:** Implement all 6 file-based repositories with comprehensive tests.
 
 ---
 
-## Phase 1: [Phase Name] ([X-Y hours])
-
-### Task P1.1: [Task Name]
-
-**ID:** P1.1
-**Dependencies:** None
-**Duration:** [X hours]
-**Priority:** P0 (Critical)
-**Status:** ⬜ Not Started | 🟡 In Progress | ✅ Complete
+### P2.1: Implement FileUserProfileRepository
+**Duration:** 6-8 hours | **Priority:** P0
 
 **Description:**
-[Clear description of what needs to be done]
+Implement file-based user profile repository with unified UserProfile entity.
 
 **Files to Create:**
-- `[path/to/file1.go]` - [Purpose]
-- `[path/to/file1_test.go]` - [Tests for file1]
+- `internal/infrastructure/storage/file_user_profile_repository.go`
+- `internal/infrastructure/storage/file_user_profile_repository_test.go`
 
-**Files to Modify:**
-- `[path/to/existing.go]` - [What changes are needed]
+**Methods:** SaveProfile, GetProfileByUserID, GetProfileByEmail, GetProfileByPlatformID, ListProfiles, DeleteProfile, UpdateProfile
 
 **Acceptance Criteria:**
-- [ ] [Specific, testable criterion 1]
-- [ ] [Specific, testable criterion 2]
-- [ ] [Specific, testable criterion 3]
-- [ ] Tests written and passing
-- [ ] Code coverage >90%
-- [ ] Documentation updated
-
-**Implementation Details:**
-
-```go
-// Example code structure or pseudocode
-package [package]
-
-type [TypeName] struct {
-    // fields
-}
-
-func [FunctionName]() {
-    // implementation
-}
-```
-
-**Test Cases:**
-- [ ] Test case 1: [Description]
-- [ ] Test case 2: [Description]
-- [ ] Test case 3: [Edge case]
-
-**Verification Commands:**
-```bash
-# Run tests for this component
-go test ./[path/to/package] -v
-
-# Check coverage
-go test ./[path/to/package] -cover
-
-# Build to ensure no breaking changes
-go build -o bin/nuimanbot ./cmd/nuimanbot
-```
+- [ ] All 7 repository methods implemented
+- [ ] Unit tests pass (>90% coverage)
+- [ ] Atomic writes verified
+- [ ] Profile operations < 50ms
 
 ---
 
-### Task P1.2: [Task Name]
+### P2.2: Implement FileConversationRepository
+**Duration:** 10-12 hours | **Priority:** P0
 
-**ID:** P1.2
-**Dependencies:** None (can run in parallel with P1.1)
-**Duration:** [X hours]
-**Priority:** P0 (Critical)
+**Files to Create:**
+- `internal/infrastructure/storage/file_conversation_repository.go`
+- `internal/infrastructure/storage/file_conversation_repository_test.go`
+- `internal/infrastructure/storage/conversation_index.go`
+
+**Methods:** SaveConversation, GetConversation, ListConversations, DeleteConversation, GetConversationSummary, CountMessages
+
+**Acceptance Criteria:**
+- [ ] All 6 methods implemented
+- [ ] Index maintained correctly
+- [ ] Large conversation test (10,000 messages)
+- [ ] Conversation load < 100ms (p90)
+
+---
+
+### P2.3: Implement FileMemoryCellRepository  
+**Duration:** 12-16 hours | **Priority:** P0
+
+**Files to Create:**
+- `internal/infrastructure/storage/file_memory_cell_repository.go`
+- `internal/infrastructure/storage/file_memory_cell_repository_test.go`
+- `internal/infrastructure/storage/memory_indexes.go`
+- `internal/infrastructure/storage/keyword_search.go`
+
+**Methods:** Create, Get, List, Delete, SearchFTS (keyword), GetByScene, DeleteExpired, GetBySalience
+
+**Acceptance Criteria:**
+- [ ] All 8 methods implemented
+- [ ] 4 indexes maintained (by-scene, by-type, by-salience, search)
+- [ ] Keyword search functional
+- [ ] Memory search < 500ms
+
+---
+
+### P2.4: Implement FileMemorySceneRepository
+**Duration:** 4-6 hours | **Priority:** P0
+
+**Files to Create:**
+- `internal/infrastructure/storage/file_memory_scene_repository.go`
+- `internal/infrastructure/storage/file_memory_scene_repository_test.go`
+
+**Methods:** Upsert, Get, List, Delete
+
+**Acceptance Criteria:**
+- [ ] All 4 methods implemented
+- [ ] Scene operations < 50ms
+
+---
+
+### P2.5: Implement FileNotesRepository
+**Duration:** 6-8 hours | **Priority:** P1
+
+**Files to Create:**
+- `internal/infrastructure/storage/file_notes_repository.go`
+- `internal/infrastructure/storage/file_notes_repository_test.go`
+- `internal/infrastructure/storage/notes_index.go`
+
+**Methods:** Create, GetByID, List, Update, Delete
+
+**Acceptance Criteria:**
+- [ ] All 5 methods implemented
+- [ ] Tag index maintained
+- [ ] Note operations < 100ms
+
+---
+
+### P2.6: Implement FileAuditRepository
+**Duration:** 6-8 hours | **Priority:** P1
+
+**Files to Create:**
+- `internal/infrastructure/storage/file_audit_repository.go`
+- `internal/infrastructure/storage/file_audit_repository_test.go`
+
+**Methods:** Append, Query (with streaming)
+
+**Acceptance Criteria:**
+- [ ] JSONL format correct
+- [ ] Streaming read (no full load)
+- [ ] Concurrent Append safe
+
+---
+
+### P2.7: Integration Tests
+**Duration:** 10-12 hours | **Priority:** P0
+
+**Files to Create:**
+- `internal/infrastructure/storage/integration_test.go`
+
+**Test Scenarios:** New user onboarding, Conversation workflow, Memory workflow, Notes workflow, Audit workflow, Concurrent access, Index recovery
+
+**Acceptance Criteria:**
+- [ ] All 7 scenarios pass
+- [ ] No data races (`go test -race`)
+- [ ] Index consistency verified
+
+---
+
+### P2.8: Wire File Repositories into Main
+**Duration:** 4-6 hours | **Priority:** P0
+
+**Files to Modify:**
+- `cmd/nuimanbot/main.go`
+- `config.yaml`
+
+**Acceptance Criteria:**
+- [ ] File repositories wired
+- [ ] Application starts successfully
+- [ ] All CLI commands functional
+- [ ] Data persists to files
+
+---
+
+## Phase 3: Testing & Validation
+
 **Status:** ⬜ Not Started
+**Duration:** 1-2 weeks (40-50 hours)
 
-[Repeat structure from P1.1]
+### P3.1: Performance Benchmarks (8-10 hours, P0)
+### P3.2: Edge Case Testing (8-10 hours, P0)
+### P3.3: End-to-End Testing (10-12 hours, P1)
+### P3.4: Security Testing (6-8 hours, P1)
+### P3.5: Data Integrity Validation (6-8 hours, P0)
 
 ---
 
-### Task P1.3: [Task Name]
+## Phase 4: Deployment
 
-**ID:** P1.3
-**Dependencies:** P1.1, P1.2 (must complete first)
-**Duration:** [X hours]
-**Priority:** P0 (Critical)
 **Status:** ⬜ Not Started
+**Duration:** 1 week (20-30 hours)
 
-[Repeat structure from P1.1]
-
----
-
-## Phase 2: [Phase Name] ([X-Y hours])
-
-### Task P2.1: [Task Name]
-
-**ID:** P2.1
-**Dependencies:** P1.3
-**Duration:** [X hours]
-**Priority:** P1 (High)
-**Status:** ⬜ Not Started
-
-[Repeat structure from P1.1]
+### P4.1: Create Data Directory Structure (2-3 hours, P0)
+### P4.2: Initialize in Production (4-6 hours, P0)
+### P4.3: Setup Monitoring (6-8 hours, P1)
+### P4.4: Backup Scripts (6-8 hours, P1)
 
 ---
 
-## Phase 3: [Phase Name] ([X-Y hours])
+## Phase 5: Cleanup
 
-### Task P3.1: [Task Name]
+**Status:** ⬜ Not Started  
+**Duration:** 1 week (30-40 hours)
 
-**ID:** P3.1
-**Dependencies:** P2.3
-**Duration:** [X hours]
-**Priority:** P1 (High)
-**Status:** ⬜ Not Started
-
-[Repeat structure from P1.1]
-
----
-
-## Blocked Tasks
-
-**Tasks currently blocked:**
-- [Task ID]: Blocked by [blocking task or external dependency]
-- [Task ID]: Blocked by [blocking task or external dependency]
+### P5.1: Remove SQLite Repos (8-10 hours, P1)
+### P5.2: Remove SQLite Dependencies (2-3 hours, P1)
+### P5.3: Update Documentation (8-10 hours, P1)
+### P5.4: Remove DB Config (2-3 hours, P2)
+### P5.5: Performance Tuning (8-10 hours, P2)
 
 ---
 
-## Completed Tasks Log
+## Critical Path
 
-### 2026-02-16 - Task P1.1 Complete
-**Completed By:** [Name]
-**Actual Duration:** [X hours] (Estimated: [Y hours])
-**Notes:**
-- [Any deviations from plan]
-- [Lessons learned]
-- [Issues encountered]
+**Critical tasks** (must complete in order):
 
----
+Phase 2: P2.1 → P2.2 → P2.3 → P2.4 → P2.5 → P2.6 → P2.7 → P2.8
+Phase 3: P3.1 → P3.2 → P3.5
+Phase 4: P4.1 → P4.2 → P4.3
 
-## Task Dependencies Graph
-
-**Visual representation of task dependencies:**
-
-```
-P1.1 ──┐
-       ├─→ P1.3 ─→ P2.1 ─→ P2.3 ─→ P3.1 ─→ P3.3
-P1.2 ──┘              ↓
-                    P2.2 ─→ P3.2 ──┘
-
-Legend:
-─→  Dependency (must complete before)
-┐   Merge point (all parents must complete)
-```
-
-**Critical Path:**
-```
-P1.1 → P1.3 → P2.1 → P2.3 → P3.1 → P3.3
-Total: [X hours]
-```
+**Total Critical Path:** ~120-150 hours (3-4 weeks)
 
 ---
 
-## Daily Progress Tracking
+## Quality Gates
 
-### 2026-02-16
-**Tasks Completed:** [List of task IDs]
-**Tasks In Progress:** [List of task IDs]
-**Blockers:** [Any blockers identified]
-**Notes:** [Daily notes]
+Before marking ANY task complete:
 
----
-
-## Quality Gate Checklist
-
-Before marking ANY task as complete:
-
-- [ ] **Tests Pass** - `go test ./...`
-- [ ] **Code Formatted** - `go fmt ./...`
-- [ ] **Dependencies Tidy** - `go mod tidy`
-- [ ] **Vet Passes** - `go vet ./...`
-- [ ] **Linter Passes** - `golangci-lint run`
-- [ ] **Build Succeeds** - `go build -o bin/nuimanbot ./cmd/nuimanbot`
-- [ ] **Code Review** - At least one approval
-- [ ] **Documentation** - Updated if needed
-
-**Never mark a task complete until ALL gates pass.**
-
----
-
-## Estimation Accuracy
-
-**Track actual vs estimated time for continuous improvement:**
-
-| Task ID | Estimated | Actual | Variance | Notes |
-|---------|-----------|--------|----------|-------|
-| P1.1    | 2h        | [Xh]   | [±Xh]    | [Reason for variance] |
-| P1.2    | 3h        | [Xh]   | [±Xh]    | [Reason for variance] |
-
-**Average Variance:** [±X%]
-
-**Adjustments for Future Estimates:**
-- [Learning 1]
-- [Learning 2]
+- [ ] `go test ./...`
+- [ ] `go fmt ./...`
+- [ ] `go mod tidy`
+- [ ] `go vet ./...`
+- [ ] `golangci-lint run`
+- [ ] `go build -o bin/nuimanbot ./cmd/nuimanbot`
+- [ ] `./bin/nuimanbot --help`
 
 ---
 
 ## Notes
 
-**Assumptions:**
-- [Assumption 1]
-- [Assumption 2]
+**No Migration Work:** This is greenfield implementation—no SQLite data to migrate.
 
-**Risks:**
-- [Risk 1]: [Mitigation]
-- [Risk 2]: [Mitigation]
+**TDD Required:** Write tests first, implement, refactor. All three phases mandatory.
 
-**Open Questions:**
-- [Question 1]
-- [Question 2]
+**Update Status:** Update status.md after completing each task (MANDATORY).
