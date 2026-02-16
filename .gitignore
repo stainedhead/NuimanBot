@@ -50,4 +50,5 @@ specs/archive/
 examples/
 examples/HomeBots/lettabot/
 examples/HomeBots/nanobot/
-examples/HomeBots/openclaw/
+examples/HomeBots/openclaw/*.log
+tmux-server-*.log
