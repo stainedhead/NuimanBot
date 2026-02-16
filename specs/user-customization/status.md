@@ -10,10 +10,10 @@
 ## Overall Progress
 
 **Status:** 🟡 In Progress
-**Completion:** 55% (21/38 tasks estimated)
+**Completion:** 58% (22/38 tasks estimated)
 **Estimated Total Time:** 50-60 hours (6-8 weeks part-time)
-**Time Spent:** ~32 hours
-**Current Phase:** Phase 4 - Adapter Layer
+**Time Spent:** ~34 hours
+**Current Phase:** Phase 4 - Adapter Layer (67% complete)
 
 ---
 
@@ -160,16 +160,16 @@
 ## Phase 4: Adapter Layer (8-10 hours)
 
 **Status:** 🟡 In Progress
-**Progress:** 3/6 tasks (50%)
+**Progress:** 4/6 tasks (67%)
 
 ### Tasks
 
 - [x] **P4.1** - Integrate PromptComposer into ChatService ✅
 - [x] **P4.2** - Integrate RulesEnforcer into action execution pipeline ✅ (4 tests, 100% coverage)
 - [x] **P4.3** - CLI onboarding command handler ✅ (5 tests, 100% coverage)
-- [ ] **P4.4** - Slack persona integration
-- [ ] **P4.5** - Telegram persona integration
-- [ ] **P4.6** - Integration tests (end-to-end workflows)
+- [x] **P4.6** - Integration tests (end-to-end workflows) ✅ (4 tests, full system validation)
+- [ ] **P4.4** - Slack persona integration (deferred - follow-on work)
+- [ ] **P4.5** - Telegram persona integration (deferred - follow-on work)
 
 **Deliverables:**
 - [x] `internal/infrastructure/persona/parser_adapter.go` (RulesParser adapter)
@@ -177,13 +177,15 @@
 - [x] Modified: `internal/usecase/tool/service.go` (RulesEnforcer integration)
 - [x] Tests: `internal/usecase/tool/service_test.go` (4 new tests for rules enforcement)
 - [x] `internal/adapter/cli/persona.go` + tests (5 tests, 100% coverage)
-- [ ] `internal/adapter/slack/persona.go` + tests
-- [ ] `internal/adapter/telegram/persona.go` + tests
+- [x] `internal/adapter/cli/persona_integration_test.go` (4 E2E tests)
+- [x] Modified: `internal/infrastructure/persona/filerepository.go` (auto-set Path/ModifiedAt, enhanced security)
 - [x] Quality gates passing (fmt, vet, test, build)
 - [ ] Committed: [pending]
 
 **Dependencies:** Phase 3 complete
 **Priority:** P1 (High)
+
+**Notes:** P4.4 and P4.5 (Slack/Telegram integrations) deferred as they apply existing functionality to additional platforms without adding new capabilities. Core persona system is complete and tested.
 
 ---
 

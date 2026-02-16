@@ -117,14 +117,33 @@ func (r *FileRepository) resolvePath(userID string, fileType domain.PersonaFileT
 
 // Save creates or updates a persona file.
 func (r *FileRepository) Save(ctx context.Context, file *domain.PersonaFile) error {
+	// Always resolve and validate the path (protects against path traversal)
+	validatedPath, err := r.resolvePath(file.UserID, file.Type)
+	if err != nil {
+		return err
+	}
+
+	// If Path is not set, use the validated path
+	if file.Path == "" {
+		file.Path = validatedPath
+	} else {
+		// If Path is set, verify it matches the expected validated path
+		// This prevents callers from bypassing path validation
+		if file.Path != validatedPath {
+			return fmt.Errorf("path mismatch: expected %s, got %s", validatedPath, file.Path)
+		}
+	}
+
+	// Set ModifiedAt to now if not set
+	if file.ModifiedAt.IsZero() {
+		file.ModifiedAt = time.Now()
+	}
+
 	if err := file.Validate(); err != nil {
 		return err
 	}
 
-	absPath, err := r.resolvePath(file.UserID, file.Type)
-	if err != nil {
-		return err
-	}
+	absPath := file.Path
 
 	// Ensure user directory exists
 	dir := filepath.Dir(absPath)
