@@ -954,7 +954,7 @@ func BenchmarkFileNotesRepository_List(b *testing.B) { ... }
 ### Appendix C: Related Documentation
 
 - [Memory Migration Guide](support_docs/memory-migration-guide.md)
-- [Admin Guide](documentation/admin-guide.md)
+- [Admin Guide](support_docs/admin-guide.md)
 - [Technical Details](documentation/technical-details.md)
 - [AGENTS.md](AGENTS.md) - Development guidelines
 

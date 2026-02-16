@@ -1704,7 +1704,7 @@ skills:
 - **[Plugins Guide](../support_docs/plugins-guide.md)** - Third-party skill packages
 - **[Versioning Guide](../support_docs/versioning-guide.md)** - Skill version management
 - **[Memory Guide](../support_docs/memory-guide.md)** - Persistent skill state
-- **[Memory Admin Guide](admin-guide-memory.md)** - Self-organizing memory operations and monitoring
+- **[Memory Admin Guide](../support_docs/admin-guide-memory.md)** - Self-organizing memory operations and monitoring
 - **[Persona Customization](../README.md#persona-customization)** - Per-user AI personality and rules (see README.md)
 
 ---

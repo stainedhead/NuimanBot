@@ -391,7 +391,7 @@ Watch for these in production logs:
 - `LLM consolidation failed` - consolidation LLM call failed
 - `FTS search failed` - database issue
 
-See [Admin Guide](../documentation/admin-guide-memory.md) for complete logging and alerting reference.
+See [Admin Guide](admin-guide-memory.md) for complete logging and alerting reference.
 
 ---
 
@@ -481,6 +481,6 @@ A: The memory database is a standard SQLite file stored on disk. It is not encry
 
 **Related Documentation:**
 - [User Guide](self-organizing-memory-guide.md) - End-user guide for memory features
-- [Admin Guide](../documentation/admin-guide-memory.md) - Administration and monitoring
+- [Admin Guide](admin-guide-memory.md) - Administration and monitoring
 - [Technical Details](../documentation/technical-details.md) - Architecture and system design
 - [Architecture Diagrams](../documentation/diagrams/) - Visual architecture documentation

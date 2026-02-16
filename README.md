@@ -773,7 +773,7 @@ NuimanBot includes an LLM-powered long-term memory system that automatically ext
 ./bin/nuimanbot memory import < backup.json
 ```
 
-For full administration details, see **[Memory Admin Guide](documentation/admin-guide-memory.md)**.
+For full administration details, see **[Memory Admin Guide](support_docs/admin-guide-memory.md)**.
 
 **Phase 3 Documentation:**
 - [Subagents Guide](support_docs/subagents-guide.md)
@@ -1147,6 +1147,10 @@ For detailed progress tracking and implementation plans, see `POST_REVIEW_IMPROV
 
 ## Documentation
 
+NuimanBot maintains two documentation directories:
+- **`support_docs/`** - User-facing guides, tutorials, and operational documentation
+- **`documentation/`** - Internal technical documentation for developers and AI agents
+
 ### Getting Started
 
 - **[User Onboarding Guide](support_docs/user-onboarding.md)** - How to use NuimanBot and customize your experience
@@ -1154,11 +1158,10 @@ For detailed progress tracking and implementation plans, see `POST_REVIEW_IMPROV
 
 ### Administration
 
-- **[Admin Guide](documentation/admin-guide.md)** - Complete administration guide (REST API, CLI, user/bot management)
-- **[Memory Admin Guide](documentation/admin-guide-memory.md)** - Memory system administration (CLI, metrics, alerting, troubleshooting)
-- **[API Reference](documentation/api-reference.md)** - REST API endpoint documentation
-- **[Configuration Reference](documentation/configuration-reference.md)** - Configuration file reference
-- **[Migration Guide](documentation/migration-guide.md)** - Migration from old architecture
+- **[Admin Guide](support_docs/admin-guide.md)** - Complete administration guide (REST API, CLI, user/bot management)
+- **[Memory Admin Guide](support_docs/admin-guide-memory.md)** - Memory system administration (CLI, metrics, alerting, troubleshooting)
+- **[API Reference](support_docs/api-reference.md)** - REST API endpoint documentation
+- **[Configuration Reference](support_docs/configuration-reference.md)** - Configuration file reference
 - **[CLI Administration Guide](support_docs/cli-admin-guide.md)** - Managing users, roles, and permissions
 
 ### Skills & Features
