@@ -10,9 +10,9 @@
 ## Overall Progress
 
 **Status:** 🟡 In Progress
-**Completion:** 53% (20/38 tasks estimated)
+**Completion:** 55% (21/38 tasks estimated)
 **Estimated Total Time:** 50-60 hours (6-8 weeks part-time)
-**Time Spent:** ~30 hours
+**Time Spent:** ~32 hours
 **Current Phase:** Phase 4 - Adapter Layer
 
 ---
@@ -160,13 +160,13 @@
 ## Phase 4: Adapter Layer (8-10 hours)
 
 **Status:** 🟡 In Progress
-**Progress:** 2/6 tasks (33%)
+**Progress:** 3/6 tasks (50%)
 
 ### Tasks
 
 - [x] **P4.1** - Integrate PromptComposer into ChatService ✅
 - [x] **P4.2** - Integrate RulesEnforcer into action execution pipeline ✅ (4 tests, 100% coverage)
-- [ ] **P4.3** - CLI onboarding command handler
+- [x] **P4.3** - CLI onboarding command handler ✅ (5 tests, 100% coverage)
 - [ ] **P4.4** - Slack persona integration
 - [ ] **P4.5** - Telegram persona integration
 - [ ] **P4.6** - Integration tests (end-to-end workflows)
@@ -176,7 +176,7 @@
 - [x] Modified: `internal/usecase/chat/service.go` (PromptComposer integration)
 - [x] Modified: `internal/usecase/tool/service.go` (RulesEnforcer integration)
 - [x] Tests: `internal/usecase/tool/service_test.go` (4 new tests for rules enforcement)
-- [ ] `internal/adapter/cli/onboarding.go` + tests
+- [x] `internal/adapter/cli/persona.go` + tests (5 tests, 100% coverage)
 - [ ] `internal/adapter/slack/persona.go` + tests
 - [ ] `internal/adapter/telegram/persona.go` + tests
 - [x] Quality gates passing (fmt, vet, test, build)
