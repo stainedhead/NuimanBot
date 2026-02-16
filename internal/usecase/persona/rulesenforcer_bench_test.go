@@ -130,7 +130,7 @@ requires_confirmation:
 User rules.`)
 
 	adminPolicy := &domain.RulesConfig{
-		BlockedTools: []string{"admin_blocked_tool"},
+		BlockedTools:         []string{"admin_blocked_tool"},
 		RequiresConfirmation: []string{"admin_confirm_tool"},
 	}
 

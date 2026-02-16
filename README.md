@@ -37,7 +37,23 @@ An AI agent framework built with Clean Architecture principles, featuring LLM in
 - **User Self-Service**: Non-admin users can manage own profiles and bots
 - **CLI Administration**: Full-featured CLI for local administration
 - **Search & Filtering**: Advanced search across user profiles
-- **Agent Personalization**: Per-user agent preferences and customization
+- **Persona Customization**: Per-user agent persona files (SOUL.md, USER.md, RULES.md)
+
+### Persona Customization ✨ NEW
+- **Per-User Persona Files**: Customize AI assistant personality and behavior per user
+  - **SOUL.md**: Define agent's persona, voice, tone, and communication style
+  - **USER.md**: Store user preferences, context, and profile information
+  - **RULES.md**: Enforce hard rules with YAML frontmatter (blocked tools, confirmation requirements)
+- **Dynamic System Prompts**: Automatically compose prompts from persona files with token budget management
+- **Rules Enforcement**: Block tools or require confirmation via YAML configuration
+  - `blocked_tools`: List of tools the AI cannot use for this user
+  - `requires_confirmation`: List of tools requiring explicit user approval
+- **Token Budget Management**: Smart truncation with priority (RULES > SOUL > USER)
+- **CLI Onboarding**: `persona init` command to scaffold persona files from templates
+- **Graceful Degradation**: Missing files automatically fall back to safe defaults
+- **File Caching**: 15-minute TTL cache for performance (sub-microsecond prompt composition)
+- **Path Security**: Strict validation prevents path traversal attacks
+- **Performance**: <2 μs prompt composition, <120 ns rules enforcement
 
 ### Data Management
 - **SQLite Storage**: Persistent conversations, users, and notes with full CRUD
@@ -268,6 +284,144 @@ Bot: The result is 100.
 > exit
 NuimanBot stopped gracefully.
 ```
+
+## Persona Customization
+
+Customize your AI assistant's personality, behavior, and rules using per-user persona files.
+
+### Quick Start
+
+Initialize persona files for a user:
+
+```bash
+# This creates SOUL.md, USER.md, and RULES.md from templates
+./bin/nuimanbot persona init <user-id>
+```
+
+### Persona Files
+
+Three files control persona customization (stored in `~/.nuimanbot/personas/<user-id>/`):
+
+#### SOUL.md - Agent Persona
+Defines the AI's personality, voice, and communication style:
+
+```markdown
+# SOUL.md - Agent Persona
+
+## Overview
+I am a helpful AI assistant with expertise in software development.
+
+## Voice & Tone
+- Tone: Professional but approachable
+- Communication: Direct and concise
+- Expertise: Focus on Go, Python, and system design
+
+## Core Values
+- Accuracy over speed
+- Clear explanations
+- Admit when uncertain
+```
+
+#### USER.md - User Profile
+Stores user preferences and context:
+
+```markdown
+# USER.md - User Profile
+
+## Basic Information
+- Name: Alex Chen
+- Pronouns: they/them
+- Timezone: America/Los_Angeles
+- Preferred Language: English
+
+## Preferences
+- Code Style: Follow Go best practices
+- Response Format: Prefer markdown with code blocks
+- Detail Level: Detailed explanations for complex topics
+
+## Context
+- Role: Senior Software Engineer
+- Current Project: Building distributed systems
+- Learning: Kubernetes and gRPC
+```
+
+#### RULES.md - Hard Rules
+Enforces restrictions using YAML frontmatter:
+
+```markdown
+---
+blocked_tools:
+  - filesystem_delete
+  - credential_use
+requires_confirmation:
+  - external_api
+  - destructive_action
+---
+
+# RULES.md - Operating Rules
+
+## Tool Restrictions
+- Never delete files without explicit permission
+- Always confirm before external API calls
+- Never use credentials without user consent
+
+## Privacy
+- Don't store sensitive data in conversation history
+- Redact API keys and passwords from responses
+```
+
+### How It Works
+
+**System Prompt Composition:**
+1. Global policy (admin-defined baseline)
+2. RULES.md (highest priority - preserved during truncation)
+3. SOUL.md (agent personality)
+4. USER.md (user context - truncated first if needed)
+
+**Token Budget:**
+- Default: 4000 tokens total, 1500 per file
+- Smart truncation preserves RULES first, USER last
+- Files marked with `[truncated]` when trimmed
+
+**Rules Enforcement:**
+- `blocked_tools`: Tool execution blocked with error
+- `requires_confirmation`: Execution paused pending user approval
+- Admin policy overrides user rules (cannot be bypassed)
+
+### Performance
+
+Persona system is highly optimized:
+- **Prompt Composition**: <2 microseconds
+- **Rules Enforcement**: <120 nanoseconds
+- **File Caching**: 15-minute TTL, automatic invalidation on changes
+- **Parallel Safe**: Lock-free concurrent access
+
+### Example Usage
+
+```bash
+# Initialize persona files
+./bin/nuimanbot persona init alex-chen
+
+# Edit files (use your preferred editor)
+nano ~/.nuimanbot/personas/alex-chen/SOUL.md
+nano ~/.nuimanbot/personas/alex-chen/USER.md
+nano ~/.nuimanbot/personas/alex-chen/RULES.md
+
+# Start bot - persona automatically loaded
+./bin/nuimanbot
+
+# The AI will now follow the persona you defined
+> Hello!
+Bot: Hi Alex! I'm your software engineering assistant.
+     How can I help with your distributed systems project today?
+```
+
+### Security
+
+- **Path Validation**: Strict allowlist prevents path traversal
+- **YAML Parsing**: Malformed frontmatter falls back to defaults
+- **Input Sanitization**: All content validated before use
+- **Audit Logging**: All file operations logged for compliance
 
 ## Security Features
 

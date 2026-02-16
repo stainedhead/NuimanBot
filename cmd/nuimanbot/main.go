@@ -33,6 +33,7 @@ import (
 	openai "nuimanbot/internal/infrastructure/llm/openai"
 	"nuimanbot/internal/infrastructure/logger"
 	memorysqlite "nuimanbot/internal/infrastructure/memory"
+	personainfra "nuimanbot/internal/infrastructure/persona"
 	infrasecurity "nuimanbot/internal/infrastructure/security"
 	skillinfra "nuimanbot/internal/infrastructure/skill"
 	"nuimanbot/internal/infrastructure/storage"
@@ -202,6 +203,36 @@ func main() {
 		"max_size", 1000,
 		"ttl", "1h",
 	)
+
+	// 10.4. Initialize Persona Customization System
+	personaBasePath := os.ExpandEnv("${HOME}/.nuimanbot/personas")
+	if envPath := os.Getenv("NUIMANBOT_PERSONA_PATH"); envPath != "" {
+		personaBasePath = envPath
+	}
+
+	personaRepo := personainfra.NewFileRepository(personaBasePath)
+	personaParser := personainfra.NewRulesParser()
+
+	// Global admin policy (customize per organization)
+	var adminPolicy *domain.RulesConfig
+	// Example: Block dangerous tools globally
+	// adminPolicy = &domain.RulesConfig{
+	// 	BlockedTools: []string{"production_deploy", "database_migration"},
+	// 	RequiresConfirmation: []string{"external_api", "filesystem_delete"},
+	// }
+
+	globalSystemPrompt := "You are a helpful AI assistant." // Default fallback
+	promptComposer := personainfra.NewPromptComposerAdapter(personaRepo, globalSystemPrompt)
+	chatService.SetPromptComposer(promptComposer)
+	slog.Info("Persona customization enabled",
+		"base_path", personaBasePath,
+		"admin_policy_enabled", adminPolicy != nil,
+	)
+
+	// Wire up rules enforcement in tool execution
+	rulesEnforcer := personainfra.NewRulesEnforcerAdapter(personaRepo, personaParser, adminPolicy)
+	toolExecutionService.SetRulesEnforcer(rulesEnforcer)
+	slog.Info("Persona rules enforcement enabled")
 
 	// 10.5. Initialize Memory v2 (Self-Organizing Memory)
 	// Uses modernc.org/sqlite driver ("sqlite") for built-in FTS5 support.

@@ -151,6 +151,18 @@ func (r *FileRepository) Save(ctx context.Context, file *domain.PersonaFile) err
 		return fmt.Errorf("creating user directory: %w", err)
 	}
 
+	// Security: Remove existing file if it's a symlink before writing
+	// This prevents users from creating symlinks and then updating them
+	if err := ValidateNoSymlink(absPath); err != nil {
+		if errors.Is(err, domain.ErrPathTraversal) {
+			// File exists and is a symlink - remove it
+			if rmErr := os.Remove(absPath); rmErr != nil {
+				return fmt.Errorf("removing symlink: %w", rmErr)
+			}
+		}
+		// If error is something else (like permission denied), let WriteFile handle it
+	}
+
 	if err := os.WriteFile(absPath, []byte(file.Content), 0644); err != nil {
 		return fmt.Errorf("writing persona file: %w", err)
 	}
@@ -182,6 +194,14 @@ func (r *FileRepository) Get(ctx context.Context, userID string, fileType domain
 			ModifiedAt: entry.ModifiedAt,
 			SizeBytes:  entry.SizeBytes,
 		}, nil
+	}
+
+	// Security: Block symlinks to prevent reading files outside user directory
+	if err := ValidateNoSymlink(absPath); err != nil {
+		if errors.Is(err, domain.ErrPathTraversal) {
+			return nil, domain.ErrPathTraversal
+		}
+		return nil, fmt.Errorf("symlink validation failed: %w", err)
 	}
 
 	// Read from disk

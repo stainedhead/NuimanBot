@@ -2,6 +2,7 @@ package persona
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -86,4 +87,25 @@ func containsTraversal(path string) bool {
 // containsNullByte returns true if the string contains a null byte.
 func containsNullByte(s string) bool {
 	return strings.ContainsRune(s, '\x00')
+}
+
+// ValidateNoSymlink checks if the given path is a symlink.
+// Returns domain.ErrPathTraversal if the file is a symlink, to prevent
+// symlink attacks that could read files outside the allowed directory.
+func ValidateNoSymlink(path string) error {
+	info, err := os.Lstat(path) // Lstat does NOT follow symlinks
+	if err != nil {
+		// If file doesn't exist yet, that's OK (not a symlink)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to stat file: %w", err)
+	}
+
+	// Check if it's a symlink
+	if info.Mode()&os.ModeSymlink != 0 {
+		return domain.ErrPathTraversal
+	}
+
+	return nil
 }
