@@ -89,7 +89,7 @@
 - [x] `internal/domain/memoryaction.go` + tests (23 tests, 100% coverage)
 - [x] All tests passing
 - [x] All quality gates passing (fmt, vet, lint, build)
-- [ ] Committed: [pending commit]
+- [x] Committed: 196c55f
 
 **Dependencies:** Phase 0 complete
 **Priority:** P0 (Critical)
