@@ -350,6 +350,20 @@ EOF
 mv specs/gmail-send-command specs/archive/
 ```
 
+## Agent Teams
+
+### Model Selection
+
+When spawning agent teams using the TeamCreate and Task tools:
+
+- **Default to the current/active model** for all teammates unless another model is expressly requested
+- Teammates inherit the model being used by the spawning agent by default
+- Only specify a different model when:
+  - The user explicitly requests a specific model (e.g., "use Opus for this team")
+  - The task has specific model requirements different from the current context
+
+**Rule**: Do not specify the `model` parameter when spawning teammates via the Task tool unless the user has specifically requested a different model. Let teammates inherit the current model automatically.
+
 ## Agent Workflow
 
 When making changes:
