@@ -19,7 +19,7 @@ func TestValidate_ValidConfig(t *testing.T) {
 			EncryptionKey:  "test-key-12345678901234567890123456",
 		},
 		Storage: config.StorageConfig{
-			Type: "sqlite",
+			Type: "file",
 			Path: "/tmp/storage.db",
 		},
 	}
@@ -39,7 +39,7 @@ func TestValidate_InvalidLogLevel(t *testing.T) {
 			EncryptionKey: "test-key-12345678901234567890123456",
 		},
 		Storage: config.StorageConfig{
-			Type: "sqlite",
+			Type: "file",
 			Path: "/tmp/test.db",
 		},
 	}
@@ -64,7 +64,7 @@ func TestValidate_MissingEncryptionKey(t *testing.T) {
 			EncryptionKey: "",
 		},
 		Storage: config.StorageConfig{
-			Type: "sqlite",
+			Type: "file",
 			Path: "/tmp/test.db",
 		},
 	}
@@ -106,7 +106,7 @@ func TestValidate_InvalidInputMaxLength(t *testing.T) {
 					EncryptionKey:  "test-key-12345678901234567890123456",
 				},
 				Storage: config.StorageConfig{
-					Type: "sqlite",
+					Type: "file",
 					Path: "/tmp/test.db",
 				},
 			}
@@ -157,7 +157,7 @@ func TestValidate_MissingStoragePath(t *testing.T) {
 			EncryptionKey: "test-key-12345678901234567890123456",
 		},
 		Storage: config.StorageConfig{
-			Type: "sqlite",
+			Type: "file",
 			Path: "",
 		},
 	}
@@ -236,7 +236,7 @@ func TestValidate_ProductionEncryptionKeyLength(t *testing.T) {
 					EncryptionKey: strings.Repeat("a", tt.keyLength),
 				},
 				Storage: config.StorageConfig{
-					Type: "sqlite",
+					Type: "file",
 					Path: "/tmp/test.db",
 				},
 			}
