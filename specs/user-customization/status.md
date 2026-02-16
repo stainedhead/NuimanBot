@@ -120,7 +120,7 @@
 - [x] `templates/SOUL.md`, `templates/USER.md`, `templates/RULES.md`
 - [x] All tests passing (persona: 93.1%, audit: 83.8%)
 - [x] All quality gates passing (fmt, vet, build)
-- [ ] Committed: [pending commit]
+- [x] Committed: f294c22
 
 **Dependencies:** Phase 1 complete
 **Priority:** P0 (Critical)
