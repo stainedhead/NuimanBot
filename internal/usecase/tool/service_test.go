@@ -527,3 +527,206 @@ func TestExecuteWithUser_EmptyAllowedSkillsAllowsAllForRole(t *testing.T) {
 		t.Errorf("Expected weather result, got: %v", result)
 	}
 }
+
+// RulesEnforcer Integration Tests
+
+// MockRulesEnforcer implements a mock for persona RulesEnforcer.
+// Note: EnforcerInput and EnforcerOutput are defined in the main package (service.go)
+type MockRulesEnforcer struct {
+	EnforceFunc func(ctx context.Context, input EnforcerInput) (*EnforcerOutput, error)
+}
+
+func (m *MockRulesEnforcer) Enforce(ctx context.Context, input EnforcerInput) (*EnforcerOutput, error) {
+	if m.EnforceFunc != nil {
+		return m.EnforceFunc(ctx, input)
+	}
+	return &EnforcerOutput{Allowed: true}, nil
+}
+
+func TestExecuteWithUser_RulesEnforcerBlocksTool(t *testing.T) {
+	mockTool := &MockTool{
+		NameFunc: func() string { return "filesystem.delete" },
+	}
+	mockRegistry := &MockToolRegistry{
+		GetFunc: func(name string) (domain.Tool, error) { return mockTool, nil },
+	}
+	auditEvents := make(chan domain.AuditEvent, 1)
+	mockSecurity := &MockSecurityService{
+		AuditFunc: func(ctx context.Context, event *domain.AuditEvent) error {
+			auditEvents <- *event
+			return nil
+		},
+	}
+
+	// RulesEnforcer that blocks filesystem.delete
+	mockEnforcer := &MockRulesEnforcer{
+		EnforceFunc: func(ctx context.Context, input EnforcerInput) (*EnforcerOutput, error) {
+			if input.Tool == "filesystem.delete" {
+				return &EnforcerOutput{
+					Allowed: false,
+					Reason:  "tool \"filesystem.delete\" is blocked by rules",
+				}, nil
+			}
+			return &EnforcerOutput{Allowed: true}, nil
+		},
+	}
+
+	svc := NewService(&config.ToolsSystemConfig{}, mockRegistry, mockSecurity)
+	svc.SetRulesEnforcer(mockEnforcer)
+
+	user := &domain.User{
+		ID:   "user1",
+		Role: domain.RoleUser,
+	}
+
+	ctx := context.Background()
+	_, err := svc.ExecuteWithUser(ctx, user, "filesystem.delete", nil)
+
+	// Should be blocked by RulesEnforcer
+	if err == nil {
+		t.Fatal("Expected error when tool is blocked by rules, got nil")
+	}
+
+	// Verify audit event for rules enforcement denial
+	select {
+	case event := <-auditEvents:
+		if event.Action != "tool_rules_denied" {
+			t.Errorf("Expected 'tool_rules_denied' action, got %s", event.Action)
+		}
+		if event.Outcome != "denied" {
+			t.Errorf("Expected 'denied' outcome, got %s", event.Outcome)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Timeout waiting for audit event")
+	}
+}
+
+func TestExecuteWithUser_RulesEnforcerAllowsTool(t *testing.T) {
+	mockTool := &MockTool{
+		NameFunc: func() string { return "calculator" },
+		ExecuteFunc: func(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) {
+			return &domain.ExecutionResult{Output: "42"}, nil
+		},
+	}
+	mockRegistry := &MockToolRegistry{
+		GetFunc: func(name string) (domain.Tool, error) { return mockTool, nil },
+	}
+	mockSecurity := &MockSecurityService{
+		AuditFunc: func(ctx context.Context, event *domain.AuditEvent) error { return nil },
+	}
+
+	// RulesEnforcer that allows all tools
+	mockEnforcer := &MockRulesEnforcer{
+		EnforceFunc: func(ctx context.Context, input EnforcerInput) (*EnforcerOutput, error) {
+			return &EnforcerOutput{Allowed: true}, nil
+		},
+	}
+
+	svc := NewService(&config.ToolsSystemConfig{}, mockRegistry, mockSecurity)
+	svc.SetRulesEnforcer(mockEnforcer)
+
+	user := &domain.User{
+		ID:   "user1",
+		Role: domain.RoleUser,
+	}
+
+	ctx := context.Background()
+	result, err := svc.ExecuteWithUser(ctx, user, "calculator", nil)
+
+	if err != nil {
+		t.Errorf("Tool should be allowed by rules, got error: %v", err)
+	}
+	if result == nil || result.Output != "42" {
+		t.Errorf("Expected calculator result, got: %v", result)
+	}
+}
+
+func TestExecuteWithUser_RulesEnforcerRequiresConfirmation(t *testing.T) {
+	mockTool := &MockTool{
+		NameFunc: func() string { return "external.api.call" },
+	}
+	mockRegistry := &MockToolRegistry{
+		GetFunc: func(name string) (domain.Tool, error) { return mockTool, nil },
+	}
+	auditEvents := make(chan domain.AuditEvent, 1)
+	mockSecurity := &MockSecurityService{
+		AuditFunc: func(ctx context.Context, event *domain.AuditEvent) error {
+			auditEvents <- *event
+			return nil
+		},
+	}
+
+	// RulesEnforcer that requires confirmation
+	mockEnforcer := &MockRulesEnforcer{
+		EnforceFunc: func(ctx context.Context, input EnforcerInput) (*EnforcerOutput, error) {
+			if input.Tool == "external.api.call" {
+				return &EnforcerOutput{
+					Allowed:              true,
+					RequiresConfirmation: true,
+					Reason:               "tool \"external.api.call\" requires user confirmation",
+				}, nil
+			}
+			return &EnforcerOutput{Allowed: true}, nil
+		},
+	}
+
+	svc := NewService(&config.ToolsSystemConfig{}, mockRegistry, mockSecurity)
+	svc.SetRulesEnforcer(mockEnforcer)
+
+	user := &domain.User{
+		ID:   "user1",
+		Role: domain.RoleUser,
+	}
+
+	ctx := context.Background()
+	_, err := svc.ExecuteWithUser(ctx, user, "external.api.call", nil)
+
+	// Should be denied pending confirmation (for now - UI integration needed)
+	if err == nil {
+		t.Fatal("Expected error when tool requires confirmation, got nil")
+	}
+
+	// Verify audit event for confirmation requirement
+	select {
+	case event := <-auditEvents:
+		if event.Action != "tool_confirmation_required" {
+			t.Errorf("Expected 'tool_confirmation_required' action, got %s", event.Action)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Timeout waiting for audit event")
+	}
+}
+
+func TestExecuteWithUser_NoRulesEnforcerSet(t *testing.T) {
+	// Test that tool execution works normally when RulesEnforcer is not set
+	mockTool := &MockTool{
+		NameFunc: func() string { return "calculator" },
+		ExecuteFunc: func(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) {
+			return &domain.ExecutionResult{Output: "42"}, nil
+		},
+	}
+	mockRegistry := &MockToolRegistry{
+		GetFunc: func(name string) (domain.Tool, error) { return mockTool, nil },
+	}
+	mockSecurity := &MockSecurityService{
+		AuditFunc: func(ctx context.Context, event *domain.AuditEvent) error { return nil },
+	}
+
+	svc := NewService(&config.ToolsSystemConfig{}, mockRegistry, mockSecurity)
+	// Note: NOT calling SetRulesEnforcer - should work without it
+
+	user := &domain.User{
+		ID:   "user1",
+		Role: domain.RoleUser,
+	}
+
+	ctx := context.Background()
+	result, err := svc.ExecuteWithUser(ctx, user, "calculator", nil)
+
+	if err != nil {
+		t.Errorf("Tool execution should work without RulesEnforcer, got error: %v", err)
+	}
+	if result == nil || result.Output != "42" {
+		t.Errorf("Expected calculator result, got: %v", result)
+	}
+}

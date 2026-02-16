@@ -11,12 +11,32 @@ import (
 	"nuimanbot/internal/infrastructure/ratelimit"
 )
 
+// RulesEnforcer defines the interface for enforcing RULES.md restrictions.
+type RulesEnforcer interface {
+	Enforce(ctx context.Context, input EnforcerInput) (*EnforcerOutput, error)
+}
+
+// EnforcerInput represents input for rule enforcement.
+type EnforcerInput struct {
+	UserID string
+	Action string
+	Tool   string
+}
+
+// EnforcerOutput represents enforcement result.
+type EnforcerOutput struct {
+	Allowed              bool
+	RequiresConfirmation bool
+	Reason               string
+}
+
 // Service implements the ToolExecutionService.
 type Service struct {
-	cfg         *config.ToolsSystemConfig
-	registry    ToolRegistry
-	securitySvc domain.SecurityService // Use domain.SecurityService
-	rateLimiter *ratelimit.RateLimiter // Optional rate limiter
+	cfg           *config.ToolsSystemConfig
+	registry      ToolRegistry
+	securitySvc   domain.SecurityService // Use domain.SecurityService
+	rateLimiter   *ratelimit.RateLimiter // Optional rate limiter
+	rulesEnforcer RulesEnforcer          // Optional persona rules enforcer
 	// timeout      time.Duration // Default timeout for tool execution
 }
 
@@ -88,14 +108,80 @@ func (s *Service) SetRateLimiter(limiter *ratelimit.RateLimiter) {
 	s.rateLimiter = limiter
 }
 
+// SetRulesEnforcer sets the persona rules enforcer for tool execution.
+// This is optional - if not set, no persona rule enforcement is applied.
+func (s *Service) SetRulesEnforcer(enforcer RulesEnforcer) {
+	s.rulesEnforcer = enforcer
+}
+
 // ExecuteWithUser runs a registered tool with given parameters after checking permissions and rate limits.
-// This method enforces RBAC based on the user's role and AllowedTools whitelist.
+// This method enforces RBAC based on the user's role and AllowedTools whitelist, and persona rules (RULES.md).
 func (s *Service) ExecuteWithUser(ctx context.Context, user *domain.User, toolName string, params map[string]any) (*domain.ExecutionResult, error) {
 	// Check permissions first
 	if err := s.checkPermission(user, toolName); err != nil {
 		// Audit permission denial for security monitoring
 		s.auditPermissionDenial(ctx, user, toolName, err)
 		return nil, err
+	}
+
+	// Check persona rules if enforcer is configured
+	if s.rulesEnforcer != nil {
+		output, err := s.rulesEnforcer.Enforce(ctx, EnforcerInput{
+			UserID: user.ID,
+			Tool:   toolName,
+		})
+		if err != nil {
+			// Audit enforcer error
+			if auditErr := s.securitySvc.Audit(ctx, &domain.AuditEvent{
+				Timestamp: time.Now(),
+				Action:    "tool_rules_error",
+				Resource:  toolName,
+				Outcome:   "error",
+				Details: map[string]any{
+					"user_id": user.ID,
+					"error":   err.Error(),
+				},
+			}); auditErr != nil {
+				slog.Error("Error auditing rules enforcement error", "error", auditErr)
+			}
+			return nil, fmt.Errorf("rules enforcement failed: %w", err)
+		}
+
+		// Tool is blocked by rules
+		if !output.Allowed {
+			// Audit rules denial
+			if auditErr := s.securitySvc.Audit(ctx, &domain.AuditEvent{
+				Timestamp: time.Now(),
+				Action:    "tool_rules_denied",
+				Resource:  toolName,
+				Outcome:   "denied",
+				Details: map[string]any{
+					"user_id": user.ID,
+					"reason":  output.Reason,
+				},
+			}); auditErr != nil {
+				slog.Error("Error auditing rules denial", "error", auditErr)
+			}
+			return nil, fmt.Errorf("tool blocked by rules: %s", output.Reason)
+		}
+
+		// Tool requires confirmation (for now, deny until UI confirmation is implemented)
+		if output.RequiresConfirmation {
+			// Audit confirmation requirement
+			if auditErr := s.securitySvc.Audit(ctx, &domain.AuditEvent{
+				Timestamp: time.Now(),
+				Action:    "tool_confirmation_required",
+				Resource:  toolName,
+				Outcome:   "pending",
+				Details: map[string]any{
+					"user_id": user.ID,
+					"reason":  output.Reason,
+				},
+			}); auditErr != nil {
+				slog.Error("Error auditing confirmation requirement", "error", auditErr)
+			}
+			return nil, fmt.Errorf("tool requires user confirmation: %s", output.Reason)
+		}
 	}
 
 	// Check rate limit if limiter is configured
@@ -116,7 +202,7 @@ func (s *Service) ExecuteWithUser(ctx context.Context, user *domain.User, toolNa
 		return nil, domain.ErrRateLimitExceeded
 	}
 
-	// Permission check and rate limit passed, execute the tool
+	// Permission check, rules enforcement, and rate limit passed - execute the tool
 	return s.Execute(ctx, toolName, params)
 }
 
