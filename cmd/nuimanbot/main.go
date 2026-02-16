@@ -139,6 +139,11 @@ func main() {
 		storagePath = "./data" // Default path
 	}
 
+	// 4.1. Auto-initialize storage (create directories and default admin)
+	if err := storage.Initialize(storagePath); err != nil {
+		log.Fatalf("Failed to initialize storage: %v", err)
+	}
+
 	fileRepos, err := initializeFileStorage(storagePath, cfg.Security.EncryptionKey)
 	if err != nil {
 		log.Fatalf("Failed to initialize file storage: %v", err)
