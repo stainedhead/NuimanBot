@@ -243,28 +243,68 @@ issues:
 
 ## Documentation Maintenance
 
-### Required Files
+### Documentation Structure
 
-Maintain these files in the `documentation/` directory. Also maintain README.md at the root direrctoty.  These are collectively called **product docs** (or **product documentation**) and must be kept current for architecturally significant changes and any updates that materially improve human/agent understanding.
+This project maintains two distinct documentation directories with different purposes:
+
+**`documentation/` - Internal Product Documentation**
+- **Audience**: Developers and AI agents
+- **Purpose**: Technical context, architecture, and development guidance
+- **Required minimum files**:
+  - `product-summary.md` - Executive overview of the product and its objectives
+  - `product-details.md` - Detailed product requirements, workflows, and constraints
+  - `technical-details.md` - Architecture, system design, technical decisions, API docs, data flows
+- **Optional files**: Additional developer/agent-focused documentation (architecture diagrams, ADRs, etc.)
+- **Rules**:
+  - Keep focused on technical implementation and architecture
+  - Update when making architecturally significant changes
+  - Limit to developer/agent context needs
+  - Avoid user-facing how-to guides (those go in `support_docs/`)
+
+**`support_docs/` - User-Facing Documentation**
+- **Audience**: End users, operators, and administrators
+- **Purpose**: Usage guides, tutorials, troubleshooting, and adoption support
+- **Content examples**:
+  - How-to guides and tutorials
+  - User manuals and quick-start guides
+  - Troubleshooting and FAQs
+  - Installation and setup instructions
+  - Best practices and tips
+- **Rules**:
+  - Write for non-technical users
+  - Focus on "how to use" rather than "how it works"
+  - Include step-by-step instructions with examples
+  - Keep separate from internal technical documentation
+
+**`README.md` (Root)**
+- **Audience**: Both developers and users
+- **Purpose**: Project overview, quick start, high-level features
+- **Content**: Balance technical and user-facing information
+
+### Product Documentation Files
+
+These files in the `documentation/` directory are collectively called **product docs** and must be kept current for architecturally significant changes:
 
 | File | Purpose |
 |------|---------|
 | `README.md` | Project overview, quick start, usage examples |
 | `documentation/product-summary.md` | Executive overview of the product and its objectives |
 | `documentation/product-details.md` | Detailed product requirements, workflows, and constraints |
-| `documentation/technical-details.md` | Architecture, system design, and technical decisions, API docs, data flows (if applicable, otherwise can be removed) |
+| `documentation/technical-details.md` | Architecture, system design, and technical decisions, API docs, data flows |
 
 **Rules:**
-- Treat product docs as a key delivery artifact for changes.
-- Keep content professional, concise, and up to date.
-- Agents must use these docs to inform their understanding.
+- Treat product docs as a key delivery artifact for changes
+- Keep content professional, concise, and up to date
+- Agents must use these docs to inform their understanding
+- Update in the same commit as architecturally significant code changes
 
 ### Documentation Standards
 
 - **Concise**: No filler words. Every sentence adds value.
 - **Current**: Update docs in the same commit as code changes.
-- **Dual-audience**: Write for both humans and AI agents to understand quickly.
+- **Dual-audience**: Write for both humans and AI agents to understand quickly (for `documentation/`), or for end users (for `support_docs/`).
 - **Structured**: Use consistent headings, lists, and code blocks.
+- **Separation of Concerns**: Technical implementation details go in `documentation/`, user guides go in `support_docs/`.
 
 ## Feature Specification Workflow
 
@@ -469,8 +509,11 @@ dist/
 │   │   └── repository/    # Data access implementations
 │   └── infrastructure/    # External service clients
 ├── pkg/                   # Public libraries (if any)
-├── documentation/
-│   └── technical-details.md # Architecture decisions, API docs, data flows (if applicable)
+├── documentation/         # Internal product documentation (developer/agent focused)
+│   ├── product-summary.md     # Executive overview
+│   ├── product-details.md     # Product requirements, workflows, constraints
+│   └── technical-details.md   # Architecture, system design, technical decisions
+├── support_docs/          # User-facing documentation (usage, tutorials, how-tos)
 ├── specs/                 # Feature specs (gitignored)
 │   ├── <feature-name>/
 │   │   ├── spec.md
