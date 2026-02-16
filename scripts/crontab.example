@@ -1,0 +1,108 @@
+# NuimanBot File-Based Storage - Cron Jobs Example
+#
+# To install these cron jobs:
+# 1. Edit this file to match your installation paths
+# 2. Run: crontab -e
+# 3. Copy the desired cron jobs from this file
+#
+# Cron format:
+# * * * * * command
+# │ │ │ │ │
+# │ │ │ │ └─── day of week (0-7, 0 and 7 are Sunday)
+# │ │ │ └──────── month (1-12)
+# │ │ └───────────── day of month (1-31)
+# │ └────────────────── hour (0-23)
+# └─────────────────────── minute (0-59)
+
+# ============================================================
+# Backup Jobs
+# ============================================================
+
+# Daily backup at 2:00 AM
+# Keeps last 7 days of backups automatically
+0 2 * * * /path/to/nuimanbot/scripts/backup-file-storage.sh /var/lib/nuimanbot/data /var/backups/nuimanbot 2>&1 | logger -t nuimanbot-backup
+
+# Weekly full backup on Sundays at 3:00 AM
+# Store in separate directory for longer retention
+0 3 * * 0 /path/to/nuimanbot/scripts/backup-file-storage.sh /var/lib/nuimanbot/data /var/backups/nuimanbot/weekly 2>&1 | logger -t nuimanbot-backup-weekly
+
+# Monthly backup on 1st of month at 4:00 AM
+# Keep these for compliance/archival purposes
+0 4 1 * * /path/to/nuimanbot/scripts/backup-file-storage.sh /var/lib/nuimanbot/data /var/backups/nuimanbot/monthly 2>&1 | logger -t nuimanbot-backup-monthly
+
+# ============================================================
+# Monitoring Jobs
+# ============================================================
+
+# Health check every 5 minutes
+# Writes JSON output to a log file for analysis
+*/5 * * * * /path/to/nuimanbot/scripts/monitor-file-storage.sh /var/lib/nuimanbot/data --json > /var/log/nuimanbot/health.json 2>&1
+
+# Hourly health check with alerts
+# Sends email if issues detected
+0 * * * * /path/to/nuimanbot/scripts/monitor-file-storage.sh /var/lib/nuimanbot/data --json | jq -r 'select(.health_status != "healthy") | "ALERT: \(.issues | join(", "))"' | mail -s "NuimanBot Storage Alert" admin@example.com
+
+# Daily summary report at 9:00 AM
+# Human-readable report emailed to admins
+0 9 * * * /path/to/nuimanbot/scripts/monitor-file-storage.sh /var/lib/nuimanbot/data | mail -s "NuimanBot Daily Storage Report" admin@example.com
+
+# ============================================================
+# Maintenance Jobs
+# ============================================================
+
+# Weekly cleanup of old backup files (keeps last 30 days)
+# Runs every Sunday at 5:00 AM
+0 5 * * 0 find /var/backups/nuimanbot -name "nuimanbot_backup_*.tar.gz" -mtime +30 -delete 2>&1 | logger -t nuimanbot-cleanup
+
+# Monthly audit log rotation (if > 100MB)
+# Runs on 1st of month at 1:00 AM
+0 1 1 * * if [ $(stat -f%z /var/lib/nuimanbot/data/system/audit.jsonl 2>/dev/null || echo 0) -gt 104857600 ]; then DATE=$(date +\%Y\%m\%d); mkdir -p /var/lib/nuimanbot/data/system/archive; mv /var/lib/nuimanbot/data/system/audit.jsonl /var/lib/nuimanbot/data/system/archive/audit_$DATE.jsonl; gzip /var/lib/nuimanbot/data/system/archive/audit_$DATE.jsonl; touch /var/lib/nuimanbot/data/system/audit.jsonl; chmod 644 /var/lib/nuimanbot/data/system/audit.jsonl; fi
+
+# ============================================================
+# Disk Space Monitoring
+# ============================================================
+
+# Check disk space every hour and alert if > 80% used
+0 * * * * USAGE=$(df /var/lib/nuimanbot/data | awk 'NR==2 {print $5}' | tr -d '%'); if [ $USAGE -gt 80 ]; then echo "Disk usage is $USAGE%" | mail -s "NuimanBot Disk Space Alert" admin@example.com; fi
+
+# ============================================================
+# Custom Maintenance
+# ============================================================
+
+# Add your custom maintenance tasks here
+# Examples:
+# - Cleanup temporary files
+# - Archive old conversations
+# - Generate analytics reports
+# - Sync to remote storage
+
+# Example: Sync backups to S3 daily at 6:00 AM
+# 0 6 * * * aws s3 sync /var/backups/nuimanbot s3://my-bucket/nuimanbot-backups/ --delete 2>&1 | logger -t nuimanbot-s3-sync
+
+# Example: Generate weekly usage report on Mondays at 10:00 AM
+# 0 10 * * 1 /path/to/nuimanbot/scripts/generate-usage-report.sh | mail -s "NuimanBot Weekly Usage Report" admin@example.com
+
+# ============================================================
+# Notes
+# ============================================================
+#
+# 1. Replace /path/to/nuimanbot with your actual installation path
+# 2. Replace /var/lib/nuimanbot/data with your actual data directory
+# 3. Replace admin@example.com with your actual email
+# 4. Ensure scripts have execute permissions: chmod +x scripts/*.sh
+# 5. Test each cron job manually before scheduling
+# 6. Check cron logs: tail -f /var/log/syslog | grep CRON
+# 7. Use logger -t nuimanbot to send output to syslog
+# 8. Consider using logrotate for log files
+#
+# Testing cron jobs:
+# - Run command manually first
+# - Use * * * * * for testing (runs every minute)
+# - Check cron execution: grep CRON /var/log/syslog
+# - Verify outputs in specified log files
+#
+# Backup retention strategy:
+# - Daily: 7 days
+# - Weekly: 4 weeks (1 month)
+# - Monthly: 12 months (1 year)
+#
