@@ -12,6 +12,7 @@ import (
 	"time"
 
 	cliadapter "nuimanbot/internal/adapter/cli"
+	memoryfactory "nuimanbot/internal/adapter/factory"
 	"nuimanbot/internal/adapter/gateway/cli"
 	"nuimanbot/internal/adapter/gateway/slack"
 	"nuimanbot/internal/adapter/gateway/telegram"
@@ -237,9 +238,14 @@ func main() {
 	slog.Info("Persona rules enforcement enabled")
 
 	// 10.5. Initialize Memory v2 (Self-Organizing Memory)
-	// Uses file-based storage for memory cells and scenes
-	memoryCellRepo := fileRepos.MemoryCell
-	memorySceneRepo := fileRepos.MemoryScene
+	// Backend is selected by cfg.Memory.Backend: "builtin" or "ingatan".
+	// BuildMemoryRepositoriesWithFallback performs a health probe for Ingatan and
+	// falls back to built-in storage if the probe fails and fallback_to_builtin is set.
+	memoryCellRepo, memorySceneRepo, err := memoryfactory.BuildMemoryRepositoriesWithFallback(cfg)
+	if err != nil {
+		log.Fatalf("Failed to initialize memory repositories: %v", err)
+	}
+	slog.Info("Memory v2 repositories initialized", "backend", cfg.Memory.Backend)
 
 	// Initialize MemoryRecallService (no LLM dependency)
 	recallConfig := memoryv2uc.RecallConfig{
@@ -266,7 +272,7 @@ func main() {
 	chatService.SetMemoryCurator(&memoryCuratorAdapter{curator: curatorService})
 
 	slog.Info("Memory v2 (self-organizing memory) initialized",
-		"storage_type", "file",
+		"backend", cfg.Memory.Backend,
 		"curator_enabled", curatorConfig.Enabled,
 		"recall_fts_limit", recallConfig.FTSResultLimit,
 		"recall_token_budget", recallConfig.TokenBudget,
@@ -278,10 +284,13 @@ func main() {
 	slog.Info("Config hot-reload manager initialized")
 
 	// 11. Create Application
-	// Build memory admin using concrete file-based types (optional — non-fatal if unavailable)
+	// Build memory admin using concrete file-based types (optional — non-fatal if unavailable).
+	// Only available when the memory backend is file-based (builtin). Ingatan does not support admin ops.
 	var memoryAdmin cliadapter.MemoryAdmin
-	if fileRepos.MemoryCellFile != nil && fileRepos.MemorySceneFile != nil {
-		memoryAdmin = storage.NewFileMemoryAdmin(fileRepos.MemoryCellFile, fileRepos.MemorySceneFile, storagePath)
+	if fileMemCellRepo, ok := memoryCellRepo.(*storage.FileMemoryCellRepository); ok {
+		if fileMemSceneRepo, ok := memorySceneRepo.(*storage.FileMemorySceneRepository); ok {
+			memoryAdmin = storage.NewFileMemoryAdmin(fileMemCellRepo, fileMemSceneRepo, storagePath)
+		}
 	}
 
 	app := &application{

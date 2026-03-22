@@ -62,6 +62,12 @@ func LoadConfig(configPaths ...string) (*NuimanBotConfig, error) {
 		delete(llmSettings, "openai")
 		delete(llmSettings, "ollama")
 	}
+	// Remove SecureString fields from memory.ingatan to handle them manually after decode.
+	if memSettings, ok := allSettings["memory"].(map[string]interface{}); ok {
+		if ingatanSettings, ok := memSettings["ingatan"].(map[string]interface{}); ok {
+			delete(ingatanSettings, "api_key")
+		}
+	}
 
 	decoderConfig := &mapstructure.DecoderConfig{
 		Metadata: nil,
@@ -176,6 +182,11 @@ func LoadConfig(configPaths ...string) (*NuimanBotConfig, error) {
 	}
 	if v.IsSet("external_api.rest.api_key") {
 		cfg.ExternalAPI.REST.APIKey = domain.NewSecureStringFromString(v.GetString("external_api.rest.api_key"))
+	}
+
+	// Ingatan API key (SecureString — must be loaded separately from mapstructure)
+	if v.IsSet("memory.ingatan.api_key") {
+		cfg.Memory.Ingatan.APIKey = domain.NewSecureStringFromString(v.GetString("memory.ingatan.api_key"))
 	}
 
 	// Load tools from environment variables

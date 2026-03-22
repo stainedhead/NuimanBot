@@ -86,9 +86,16 @@ type LLMConfig struct {
 
 // MCPClientConfig holds MCP client-specific configuration.
 type MCPClientConfig struct {
+	// AllowedServers is the list of MCP server names permitted for use.
 	AllowedServers []string `yaml:"allowed_servers"`
-	Timeout        string   `yaml:"timeout"`
-	MaxRetries     int      `yaml:"max_retries"`
+	// Timeout is the per-request timeout for MCP calls (e.g. "30s").
+	Timeout string `yaml:"timeout"`
+	// MaxRetries is the number of retries on transient errors.
+	MaxRetries int `yaml:"max_retries"`
+	// ConfigFile is the path to the mcp.json server configuration file (default: "mcp.json").
+	ConfigFile string `yaml:"config_file"`
+	// Enabled activates the MCP client at startup.
+	Enabled bool `yaml:"enabled"`
 }
 
 // MCPServerConfig holds MCP server-specific configuration.
@@ -132,9 +139,43 @@ type StorageConfig struct {
 type MemoryBackend string
 
 const (
+	// MemoryBackendBuiltin uses the built-in file-based memory storage.
 	MemoryBackendBuiltin MemoryBackend = "builtin"
-	MemoryBackendQMD     MemoryBackend = "qmd"
+	// MemoryBackendQMD uses the Queryable Memory Document backend.
+	MemoryBackendQMD MemoryBackend = "qmd"
+	// MemoryBackendIngatan uses the Ingatan hybrid-search memory backend.
+	MemoryBackendIngatan MemoryBackend = "ingatan"
 )
+
+// IngatanConfig holds configuration for the Ingatan memory backend.
+type IngatanConfig struct {
+	// URL is the base URL of the Ingatan server (e.g. "https://localhost:8443").
+	URL string `yaml:"url"`
+	// APIKey is the API key used to exchange for a JWT. Stored as SecureString to prevent log leakage.
+	APIKey domain.SecureString `yaml:"api_key"`
+	// StorePrefix is the prefix for Ingatan store names (default: "nuiman").
+	StorePrefix string `yaml:"store_prefix"`
+	// TLSSkipVerify skips TLS certificate verification. For development only; logs a warning at startup.
+	TLSSkipVerify bool `yaml:"tls_skip_verify"`
+	// TokenTTL is the duration before proactively refreshing the JWT (e.g. "23h").
+	TokenTTL string `yaml:"token_ttl"`
+	// FallbackToBuiltin enables graceful fallback to the built-in backend when Ingatan is unreachable.
+	FallbackToBuiltin bool `yaml:"fallback_to_builtin"`
+}
+
+// TLSConfig holds TLS configuration for the server.
+type TLSConfig struct {
+	// Enabled activates TLS for the server.
+	Enabled bool `yaml:"enabled"`
+	// AutoGenerate generates a self-signed certificate if no cert files are present.
+	AutoGenerate bool `yaml:"auto_generate"`
+	// CertFile is the path to the TLS certificate file (e.g. "data/certs/server.crt").
+	CertFile string `yaml:"cert_file"`
+	// KeyFile is the path to the TLS private key file (e.g. "data/certs/server.key").
+	KeyFile string `yaml:"key_file"`
+	// Hosts is the list of hostnames to include in the self-signed certificate.
+	Hosts []string `yaml:"hosts"`
+}
 
 // MemoryCitationsMode defines how citations are handled.
 type MemoryCitationsMode string
@@ -186,9 +227,14 @@ type MemoryQMDConfig struct {
 
 // MemoryConfig defines the configuration for the agent's long-term memory.
 type MemoryConfig struct {
-	Backend   MemoryBackend       `yaml:"backend"`
+	// Backend selects the memory storage backend ("builtin", "qmd", or "ingatan").
+	Backend MemoryBackend `yaml:"backend"`
+	// Citations controls how memory citations are presented.
 	Citations MemoryCitationsMode `yaml:"citations"`
-	QMD       MemoryQMDConfig     `yaml:"qmd"`
+	// QMD configures the Queryable Memory Document backend.
+	QMD MemoryQMDConfig `yaml:"qmd"`
+	// Ingatan configures the Ingatan hybrid-search memory backend.
+	Ingatan IngatanConfig `yaml:"ingatan"`
 }
 
 // ExternalAPIOpenAIConfig holds OpenAI-compatible API specific configuration.
