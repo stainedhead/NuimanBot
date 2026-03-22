@@ -86,6 +86,9 @@ type LLMConfig struct {
 
 // MCPClientConfig holds MCP client-specific configuration.
 type MCPClientConfig struct {
+	// ConfigFile is the path to the mcp.json server list; defaults to "mcp.json".
+	ConfigFile     string   `yaml:"config_file"`
+	Enabled        bool     `yaml:"enabled"`
 	AllowedServers []string `yaml:"allowed_servers"`
 	Timeout        string   `yaml:"timeout"`
 	MaxRetries     int      `yaml:"max_retries"`
