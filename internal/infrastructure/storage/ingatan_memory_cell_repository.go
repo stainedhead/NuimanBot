@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"nuimanbot/internal/domain/memoryv2"
@@ -355,6 +356,7 @@ func (r *IngatanMemoryCellRepository) GetHighSalience(ctx context.Context, conve
 // until manually deleted. At recall time, MemoryRecallService calls IsExpired() and skips
 // expired cells. See ADR-4 in implementation-notes.md.
 func (r *IngatanMemoryCellRepository) DeleteExpired(_ context.Context) (int, error) {
+	slog.Debug("ingatan: DeleteExpired called — no-op; expired cells persist in Ingatan (see ADR-4)")
 	return 0, nil
 }
 

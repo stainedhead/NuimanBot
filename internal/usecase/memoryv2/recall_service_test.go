@@ -554,3 +554,68 @@ func TestRecallMemory_Metrics(t *testing.T) {
 		}
 	})
 }
+
+// TestRecallMemory_ExpiredCellsSkippedMetric verifies that expired cells returned by the
+// cell repository are skipped during recall and the expired_cells_skipped counter is
+// incremented (R-08).
+func TestRecallMemory_ExpiredCellsSkippedMetric(t *testing.T) {
+	now := time.Now()
+	past := now.Add(-1 * time.Hour)
+
+	expiredCell := &memoryv2.MemoryCell{
+		ID:             "cell-exp",
+		ConversationID: "conv-123",
+		Scene:          "test-scene",
+		CellType:       memoryv2.CellTypeFact,
+		Salience:       0.9,
+		Content:        "This cell has expired",
+		Source:         `["msg-1"]`,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		ExpiresAt:      &past,
+	}
+	validCell := &memoryv2.MemoryCell{
+		ID:             "cell-ok",
+		ConversationID: "conv-123",
+		Scene:          "test-scene",
+		CellType:       memoryv2.CellTypeFact,
+		Salience:       0.85,
+		Content:        "This cell is still valid",
+		Source:         `["msg-2"]`,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+
+	scenes := []*memoryv2.MemoryScene{
+		{Scene: "test-scene", Summary: "Test scene", TokenCount: 5, UpdatedAt: now},
+	}
+
+	mockCellRepo := &MockFTSCellRepository{
+		FTSResults: []*memoryv2.MemoryCell{expiredCell, validCell},
+	}
+	mockSceneRepo := &MockSceneRepository{Scenes: scenes}
+
+	config := RecallConfig{FTSResultLimit: 10, SalienceThreshold: 0.8, TokenBudget: 500}
+	recall := NewMemoryRecallService(mockCellRepo, mockSceneRepo, config)
+
+	initialSkipped := testutil.ToFloat64(metrics.MemoryRecallExpiredCellsSkipped)
+
+	request := RecallRequest{ConversationID: "conv-123", Query: "test", MaxTokens: 500, MaxCells: 10}
+	response, err := recall.RecallMemory(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	// Only the valid cell should be in the response.
+	if len(response.Cells) != 1 {
+		t.Errorf("Expected 1 non-expired cell, got %d", len(response.Cells))
+	}
+	if len(response.Cells) > 0 && response.Cells[0].ID != "cell-ok" {
+		t.Errorf("Expected valid cell in response, got cell ID %q", response.Cells[0].ID)
+	}
+
+	newSkipped := testutil.ToFloat64(metrics.MemoryRecallExpiredCellsSkipped)
+	if newSkipped != initialSkipped+1 {
+		t.Errorf("Expected expired_cells_skipped counter to increment by 1, got delta %f", newSkipped-initialSkipped)
+	}
+}

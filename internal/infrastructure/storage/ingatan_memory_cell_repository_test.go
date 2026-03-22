@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -355,6 +356,47 @@ func TestIngatanMemoryCellRepository_DeleteExpired_IsNoOp(t *testing.T) {
 	}
 	if requestMade {
 		t.Error("DeleteExpired must not make any HTTP requests")
+	}
+}
+
+// testLogHandler captures slog records for test assertions.
+type testLogHandler struct {
+	records []slog.Record
+}
+
+func (h *testLogHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+func (h *testLogHandler) Handle(_ context.Context, r slog.Record) error {
+	h.records = append(h.records, r)
+	return nil
+}
+func (h *testLogHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h *testLogHandler) WithGroup(_ string) slog.Handler      { return h }
+
+// TestIngatanMemoryCellRepository_DeleteExpired_EmitsDebugLog verifies that DeleteExpired
+// logs a slog.Debug message indicating the no-op behaviour (R-08).
+func TestIngatanMemoryCellRepository_DeleteExpired_EmitsDebugLog(t *testing.T) {
+	_, _, client := newMockIngatan(t)
+	repo := NewIngatanMemoryCellRepository(client, "test")
+
+	handler := &testLogHandler{}
+	original := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(original) })
+
+	_, err := repo.DeleteExpired(context.Background())
+	if err != nil {
+		t.Fatalf("DeleteExpired returned error: %v", err)
+	}
+
+	found := false
+	for _, rec := range handler.records {
+		if rec.Level == slog.LevelDebug && strings.Contains(rec.Message, "DeleteExpired") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("Expected DeleteExpired to emit a slog.Debug log containing 'DeleteExpired', but none was found")
 	}
 }
 
