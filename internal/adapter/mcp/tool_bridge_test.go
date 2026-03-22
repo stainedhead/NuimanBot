@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -235,6 +236,46 @@ func TestMCPToolAdapter_RequiredPermissions(t *testing.T) {
 	perms := adapter.RequiredPermissions()
 
 	assert.Contains(t, perms, domain.PermissionNetwork)
+}
+
+// --- Execute: per-tool timeout ---
+
+// TestMCPToolAdapter_Execute_Timeout verifies that Execute cancels the MCP call
+// when the tool takes longer than the configured per-tool timeout.  The mock
+// transport blocks for 5 seconds, but the adapter is configured with a 100ms
+// timeout so the call must return well before 1 second.
+func TestMCPToolAdapter_Execute_Timeout(t *testing.T) {
+	transport := &mockTransport{
+		sendFn: func(ctx context.Context, method string, _ json.RawMessage) (json.RawMessage, error) {
+			if method == "initialize" {
+				return initResponse(), nil
+			}
+			// Simulate a hanging MCP server: block until the context is cancelled.
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(5 * time.Second):
+				return mustMarshal(infra.MCPToolResult{}), nil
+			}
+		},
+	}
+	client := newInitializedClient(t, transport)
+	adapter := NewMCPToolAdapter(client, infra.MCPTool{Name: "slow-tool"}, "test-server",
+		WithToolTimeout(100*time.Millisecond))
+
+	start := time.Now()
+	result, err := adapter.Execute(context.Background(), nil)
+	elapsed := time.Since(start)
+
+	// Must return quickly — well under 1 second.
+	assert.Less(t, elapsed, 1*time.Second, "Execute should time out before 1 second")
+
+	require.Error(t, err)
+	assert.Nil(t, result)
+	// Error must mention the server name, tool name, and indicate a timeout.
+	assert.Contains(t, err.Error(), "test-server")
+	assert.Contains(t, err.Error(), "slow-tool")
+	assert.Contains(t, err.Error(), "timed out")
 }
 
 // --- InputSchema ---
