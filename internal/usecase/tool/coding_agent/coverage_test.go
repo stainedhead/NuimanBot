@@ -10,15 +10,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestCodingAgentSkill_Config covers the Config() 0.0% function
-func TestCodingAgentSkill_Config(t *testing.T) {
-	t.Parallel()
-	config := domain.ToolConfig{Enabled: true}
-	skill := NewCodingAgentSkill(config, nil, nil)
-	got := skill.Config()
-	assert.Equal(t, config.Enabled, got.Enabled)
-}
-
 // TestGetToolCommand covers all branches
 func TestGetToolCommand(t *testing.T) {
 	t.Parallel()

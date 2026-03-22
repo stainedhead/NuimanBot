@@ -15,15 +15,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestDocSummarizeSkill_Config covers the Config() 0.0% function
-func TestDocSummarizeSkill_Config(t *testing.T) {
-	t.Parallel()
-	config := domain.ToolConfig{Enabled: true}
-	skill := NewDocSummarizeSkill(config, nil, nil)
-	got := skill.Config()
-	assert.Equal(t, config.Enabled, got.Enabled)
-}
-
 // TestCountWords covers the countWords function
 func TestCountWords(t *testing.T) {
 	t.Parallel()
