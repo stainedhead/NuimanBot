@@ -35,6 +35,10 @@ func (r *FailingCellRepository) List(_ context.Context, _ memoryv2.MemoryCellFil
 	return nil, r.ListErr
 }
 
+func (r *FailingCellRepository) Update(_ context.Context, _ *memoryv2.MemoryCell) error {
+	return nil
+}
+
 func (r *FailingCellRepository) Delete(_ context.Context, _ string) error {
 	return nil
 }
@@ -510,6 +514,10 @@ func (r *emptyFTSFailingSalienceRepo) Get(_ context.Context, _ string) (*memoryv
 
 func (r *emptyFTSFailingSalienceRepo) List(_ context.Context, _ memoryv2.MemoryCellFilter) ([]*memoryv2.MemoryCell, error) {
 	return nil, nil
+}
+
+func (r *emptyFTSFailingSalienceRepo) Update(_ context.Context, _ *memoryv2.MemoryCell) error {
+	return nil
 }
 
 func (r *emptyFTSFailingSalienceRepo) Delete(_ context.Context, _ string) error {

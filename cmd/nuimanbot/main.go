@@ -73,6 +73,7 @@ type application struct {
 	WebServer            *web.Server
 	MemoryCellRepo       memoryv2.MemoryCellRepository  // Memory v2 cell repository
 	MemorySceneRepo      memoryv2.MemorySceneRepository // Memory v2 scene repository
+	MemoryAdmin          cliadapter.MemoryAdmin         // Optional admin operations for memory CLI
 }
 
 func main() {
@@ -277,6 +278,12 @@ func main() {
 	slog.Info("Config hot-reload manager initialized")
 
 	// 11. Create Application
+	// Build memory admin using concrete file-based types (optional — non-fatal if unavailable)
+	var memoryAdmin cliadapter.MemoryAdmin
+	if fileRepos.MemoryCellFile != nil && fileRepos.MemorySceneFile != nil {
+		memoryAdmin = storage.NewFileMemoryAdmin(fileRepos.MemoryCellFile, fileRepos.MemorySceneFile, storagePath)
+	}
+
 	app := &application{
 		Config:               cfg,
 		ConfigManager:        configManager,
@@ -290,6 +297,7 @@ func main() {
 		HealthServer:         healthServer,
 		MemoryCellRepo:       memoryCellRepo,
 		MemorySceneRepo:      memorySceneRepo,
+		MemoryAdmin:          memoryAdmin,
 	}
 
 	// 12. Run application in goroutine
@@ -800,6 +808,10 @@ func (app *application) Run(ctx context.Context) error {
 	// Initialize memory CLI commands (if memory v2 is available)
 	if app.MemoryCellRepo != nil && app.MemorySceneRepo != nil {
 		memoryCmd := cliadapter.NewMemoryCommand(app.MemoryCellRepo, app.MemorySceneRepo, os.Stdout)
+		if app.MemoryAdmin != nil {
+			memoryCmd.SetAdmin(app.MemoryAdmin)
+			slog.Info("Memory admin operations enabled")
+		}
 		memoryHandler := cli.NewMemoryCommandHandler(memoryCmd)
 		cliGateway.SetMemoryHandler(memoryHandler)
 		slog.Info("Memory CLI commands initialized")

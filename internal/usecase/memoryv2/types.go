@@ -40,6 +40,7 @@ type ExtractedCell struct {
 // CurationResult represents the result of memory curation
 type CurationResult struct {
 	CellsCreated  int
+	CellsSkipped  int // Cells skipped due to deduplication
 	ScenesUpdated int
 	Errors        []error
 }

@@ -79,7 +79,8 @@ func (s *MemoryRecallService) RecallMemory(ctx context.Context, request RecallRe
 			"query", request.Query,
 		)
 		tracing.AddAttribute(ctx, "fallback_used", true)
-		cells, err = s.cellRepo.GetHighSalience(ctx, request.ConversationID, s.config.SalienceThreshold, s.config.FallbackCellLimit)
+		// Pass empty conversationID for global search across all conversations.
+		cells, err = s.cellRepo.GetHighSalience(ctx, "", s.config.SalienceThreshold, s.config.FallbackCellLimit)
 		if err != nil {
 			alertRecallFailed(ctx, request.ConversationID, request.Query, err)
 			tracing.RecordError(ctx, err.Error())

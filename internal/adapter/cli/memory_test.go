@@ -53,6 +53,10 @@ func (m *mockMemoryCellRepository) List(_ context.Context, _ memoryv2.MemoryCell
 	return result, nil
 }
 
+func (m *mockMemoryCellRepository) Update(_ context.Context, _ *memoryv2.MemoryCell) error {
+	return nil
+}
+
 func (m *mockMemoryCellRepository) Delete(_ context.Context, id string) error {
 	if m.deleteErr != nil {
 		return m.deleteErr

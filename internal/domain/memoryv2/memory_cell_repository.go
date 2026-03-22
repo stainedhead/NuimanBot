@@ -16,6 +16,10 @@ type MemoryCellRepository interface {
 	// Returns empty slice (never nil) if no matches.
 	List(ctx context.Context, filter MemoryCellFilter) ([]*MemoryCell, error)
 
+	// Update persists changes to an existing cell.
+	// Returns ErrNotFound if the cell doesn't exist.
+	Update(ctx context.Context, cell *MemoryCell) error
+
 	// Delete removes a cell by ID.
 	// Returns ErrNotFound if the cell doesn't exist.
 	Delete(ctx context.Context, id string) error

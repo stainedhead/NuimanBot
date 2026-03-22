@@ -67,6 +67,16 @@ func (m *MockCellRepository) Get(ctx context.Context, id string) (*memoryv2.Memo
 	return nil, memoryv2.ErrNotFound
 }
 
+func (m *MockCellRepository) Update(ctx context.Context, cell *memoryv2.MemoryCell) error {
+	for i, c := range m.Cells {
+		if c.ID == cell.ID {
+			m.Cells[i] = cell
+			return nil
+		}
+	}
+	return memoryv2.ErrNotFound
+}
+
 func (m *MockCellRepository) Delete(ctx context.Context, id string) error {
 	return nil
 }
@@ -732,4 +742,79 @@ func TestConsolidateScene_Metrics(t *testing.T) {
 			t.Errorf("Expected consolidation success counter to increment by 1, got delta %f", newSuccess-initialSuccess)
 		}
 	})
+}
+
+func TestMemoryCuratorService_Deduplication(t *testing.T) {
+	cleanup := initTestTracing(t)
+	defer cleanup()
+
+	// Existing cell in the scene
+	now := time.Now()
+	existingCell := &memoryv2.MemoryCell{
+		ID:             "existing-cell-1",
+		ConversationID: "conv-prev",
+		Scene:          "project-setup",
+		CellType:       memoryv2.CellTypeFact,
+		Salience:       0.5,
+		Content:        "User prefers tabs over spaces",
+		Source:         `["msg-old"]`,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	mockCellRepo := &MockCellRepository{Cells: []*memoryv2.MemoryCell{existingCell}}
+	mockSceneRepo := &MockSceneRepository{}
+
+	// LLM returns a cell with the same content but higher salience
+	responseJSON := `{"cells":[{"scene":"project-setup","cell_type":"fact","salience":0.9,"content":"User prefers tabs over spaces","source":["msg-1"]}]}`
+	mockLLM := &MockLLMClient{ResponseJSON: responseJSON}
+
+	curator := NewMemoryCuratorService(mockLLM, mockCellRepo, mockSceneRepo, CuratorConfig{Enabled: true})
+
+	result, err := curator.ExtractCells(context.Background(), InteractionContext{
+		ConversationID: "conv-123",
+		UserMessage:    "What do you prefer for indentation?",
+		AssistantReply: "Tabs.",
+		Timestamp:      now,
+	})
+	if err != nil {
+		t.Fatalf("ExtractCells: %v", err)
+	}
+
+	// The duplicate should be skipped (not created)
+	if result.CellsCreated != 0 {
+		t.Errorf("expected 0 cells created (all duplicates), got %d", result.CellsCreated)
+	}
+	if result.CellsSkipped != 1 {
+		t.Errorf("expected 1 cell skipped, got %d", result.CellsSkipped)
+	}
+
+	// Existing cell's salience should be updated to 0.9
+	if existingCell.Salience != 0.9 {
+		t.Errorf("expected existing cell salience updated to 0.9, got %f", existingCell.Salience)
+	}
+
+	// No new cells should have been added to the repository
+	if len(mockCellRepo.Cells) != 1 {
+		t.Errorf("expected 1 cell in repo (no new cells), got %d", len(mockCellRepo.Cells))
+	}
+}
+
+func TestNormalizeContent(t *testing.T) {
+	cases := []struct {
+		input    string
+		expected string
+	}{
+		{"Hello World", "hello world"},
+		{"  spaces  around  ", "spaces around"},
+		{"tabs\there", "tabs here"},
+		{"newline\nhere", "newline here"},
+		{"multiple   spaces", "multiple spaces"},
+		{"", ""},
+	}
+	for _, c := range cases {
+		got := normalizeContent(c.input)
+		if got != c.expected {
+			t.Errorf("normalizeContent(%q) = %q, want %q", c.input, got, c.expected)
+		}
+	}
 }

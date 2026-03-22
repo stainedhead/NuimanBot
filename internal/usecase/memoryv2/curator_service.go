@@ -131,6 +131,32 @@ func (s *MemoryCuratorService) ExtractCells(ctx context.Context, interaction Int
 			continue
 		}
 
+		// Deduplication: check if a cell with the same scene+content already exists.
+		existing, dupErr := s.findDuplicate(ctx, cell)
+		if dupErr == nil && existing != nil {
+			// Duplicate found: update salience if the new value is higher.
+			if cell.Salience > existing.Salience {
+				existing.Salience = cell.Salience
+				existing.UpdatedAt = cell.CreatedAt
+				if updateErr := s.cellRepo.Update(ctx, existing); updateErr != nil {
+					slog.Debug("Memory deduplication: failed to update salience",
+						"cell_id", existing.ID, "error", updateErr,
+					)
+				} else {
+					slog.Debug("Memory deduplication: updated salience of existing cell",
+						"cell_id", existing.ID, "new_salience", cell.Salience,
+					)
+					touchedScenes[existing.Scene] = true
+				}
+			} else {
+				slog.Debug("Memory deduplication: skipping duplicate cell",
+					"scene", cell.Scene, "content_prefix", truncate(cell.Content, 60),
+				)
+			}
+			result.CellsSkipped++
+			continue
+		}
+
 		err = s.cellRepo.Create(ctx, cell)
 		if err != nil {
 			slog.Error("Failed to persist memory cell",
@@ -443,4 +469,60 @@ func (s *MemoryCuratorService) buildConsolidationUserPrompt(sceneName string, ce
 	prompt += fmt.Sprintf("\n\nGenerate a consolidated summary (max %d tokens). Avoid ephemeral phrasing.", maxTokens)
 
 	return prompt
+}
+
+// findDuplicate looks for a cell in the same scene with identical content (case-insensitive, trimmed).
+// Returns the existing cell and nil error when a duplicate is found.
+// Returns nil, nil when no duplicate exists.
+func (s *MemoryCuratorService) findDuplicate(ctx context.Context, candidate *memoryv2.MemoryCell) (*memoryv2.MemoryCell, error) {
+	existing, err := s.cellRepo.GetByScene(ctx, candidate.Scene, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	normalized := normalizeContent(candidate.Content)
+	for _, cell := range existing {
+		if normalizeContent(cell.Content) == normalized {
+			return cell, nil
+		}
+	}
+	return nil, nil
+}
+
+// normalizeContent returns a lowercase, whitespace-collapsed version of content for comparison.
+func normalizeContent(s string) string {
+	// Simple normalization: lowercase and collapse whitespace
+	result := make([]byte, 0, len(s))
+	prevSpace := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+			if !prevSpace {
+				result = append(result, ' ')
+			}
+			prevSpace = true
+		} else {
+			if c >= 'A' && c <= 'Z' {
+				c += 32 // to lowercase
+			}
+			result = append(result, c)
+			prevSpace = false
+		}
+	}
+	// Trim leading/trailing space
+	for len(result) > 0 && result[0] == ' ' {
+		result = result[1:]
+	}
+	for len(result) > 0 && result[len(result)-1] == ' ' {
+		result = result[:len(result)-1]
+	}
+	return string(result)
+}
+
+// truncate returns the first n characters of s, appending "..." if truncated.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }

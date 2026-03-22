@@ -31,6 +31,10 @@ func (r *failingCellRepo) List(_ context.Context, _ memoryv2.MemoryCellFilter) (
 	return nil, r.listErr
 }
 
+func (r *failingCellRepo) Update(_ context.Context, _ *memoryv2.MemoryCell) error {
+	return nil
+}
+
 func (r *failingCellRepo) Delete(_ context.Context, _ string) error {
 	return r.deleteErr
 }
