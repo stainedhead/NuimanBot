@@ -4,6 +4,7 @@ package integration_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,17 +12,16 @@ import (
 
 	adaptermcp "nuimanbot/internal/adapter/mcp"
 	"nuimanbot/internal/domain"
-	"nuimanbot/internal/infrastructure/mcp"
+	inframcp "nuimanbot/internal/infrastructure/mcp"
+	tooltool "nuimanbot/internal/usecase/tool"
 )
 
 // TestMCPInitialize connects to the Ingatan MCP server and verifies the protocol version.
 func TestMCPInitialize(t *testing.T) {
 	skipIfNoMCPServer(t)
 
-	transport := mcp.NewHTTPTransport(mcp.HTTPTransportConfig{
-		URL: mcpURL(),
-	})
-	client := mcp.NewClient(transport, "ingatan")
+	transport := inframcp.NewHTTPTransport(mcpURL(), nil)
+	client := inframcp.NewMCPClient(transport, "ingatan")
 
 	ctx := context.Background()
 	err := client.Initialize(ctx)
@@ -32,10 +32,8 @@ func TestMCPInitialize(t *testing.T) {
 func TestMCPToolsListAndCall(t *testing.T) {
 	skipIfNoMCPServer(t)
 
-	transport := mcp.NewHTTPTransport(mcp.HTTPTransportConfig{
-		URL: mcpURL(),
-	})
-	client := mcp.NewClient(transport, "ingatan")
+	transport := inframcp.NewHTTPTransport(mcpURL(), nil)
+	client := inframcp.NewMCPClient(transport, "ingatan")
 
 	ctx := context.Background()
 	require.NoError(t, client.Initialize(ctx))
@@ -43,7 +41,6 @@ func TestMCPToolsListAndCall(t *testing.T) {
 	tools, err := client.ListTools(ctx)
 	require.NoError(t, err)
 
-	// Verify memory_search tool is present.
 	var found bool
 	for _, tool := range tools {
 		if tool.Name == "memory_search" {
@@ -53,7 +50,6 @@ func TestMCPToolsListAndCall(t *testing.T) {
 	}
 	assert.True(t, found, "memory_search tool should be listed by Ingatan MCP server")
 
-	// Call memory_search with a test query.
 	if found {
 		result, err := client.CallTool(ctx, "memory_search", map[string]any{
 			"query": "test query",
@@ -68,11 +64,11 @@ func TestMCPToolsListAndCall(t *testing.T) {
 func TestMCPToolRegistration(t *testing.T) {
 	skipIfNoMCPServer(t)
 
-	cfg := &mcp.Config{
-		Servers: []mcp.ServerConfig{
+	cfg := inframcp.MCPConfig{
+		Servers: []inframcp.MCPServerEntry{
 			{
 				Name:      "ingatan",
-				Transport: mcp.TransportHTTP,
+				Transport: "http",
 				URL:       mcpURL(),
 			},
 		},
@@ -84,7 +80,6 @@ func TestMCPToolRegistration(t *testing.T) {
 	err := adaptermcp.BuildMCPTools(ctx, cfg, registry)
 	require.NoError(t, err)
 
-	// All registered tools should have "mcp:" prefix.
 	assert.NotEmpty(t, registry.tools, "at least one tool should be registered")
 	for _, tool := range registry.tools {
 		assert.True(t,
@@ -98,8 +93,31 @@ type mockToolRegistry struct {
 	tools []domain.Tool
 }
 
-// Register adds a tool to the registry.
-func (r *mockToolRegistry) Register(tool domain.Tool) error {
-	r.tools = append(r.tools, tool)
+// Register adds a tool to the registry, satisfying tool.ToolRegistry.
+func (r *mockToolRegistry) Register(t domain.Tool) error {
+	r.tools = append(r.tools, t)
 	return nil
 }
+
+// Get retrieves a tool by name.
+func (r *mockToolRegistry) Get(name string) (domain.Tool, error) {
+	for _, t := range r.tools {
+		if t.Name() == name {
+			return t, nil
+		}
+	}
+	return nil, fmt.Errorf("tool %q not found", name)
+}
+
+// List returns all registered tools.
+func (r *mockToolRegistry) List() []domain.Tool {
+	return r.tools
+}
+
+// ListForUser returns all tools (no permission filtering in mock).
+func (r *mockToolRegistry) ListForUser(_ context.Context, _ string) ([]domain.Tool, error) {
+	return r.tools, nil
+}
+
+// compile-time assertion that mockToolRegistry satisfies the ToolRegistry interface.
+var _ tooltool.ToolRegistry = (*mockToolRegistry)(nil)

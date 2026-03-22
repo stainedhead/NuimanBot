@@ -15,16 +15,16 @@ import (
 	"nuimanbot/internal/infrastructure/storage"
 )
 
-// newIngatanRepo creates an IngatanMemoryCellRepository connected to the real Ingatan server.
-func newIngatanRepo(t *testing.T) *storage.IngatanMemoryCellRepository {
+// newIngatanCellRepo creates an IngatanMemoryCellRepository connected to the real Ingatan server.
+func newIngatanCellRepo(t *testing.T) *storage.IngatanMemoryCellRepository {
 	t.Helper()
-	cfg := storage.IngatanConfig{
-		URL:         ingatanURL(),
+	cfg := storage.IngatanClientConfig{
+		BaseURL:     ingatanURL(),
 		APIKey:      "test-api-key",
 		StorePrefix: "inttest",
 	}
 	client := storage.NewIngatanHTTPClient(cfg)
-	return storage.NewIngatanMemoryCellRepository(client)
+	return storage.NewIngatanMemoryCellRepository(client, "inttest")
 }
 
 // newTestCell creates a valid MemoryCell for testing.
@@ -43,11 +43,11 @@ func newTestCell(conversationID, scene, content string) *memoryv2.MemoryCell {
 	}
 }
 
-// TestIngatanHybridSearch tests that SearchFTSInStore returns results for a seeded cell.
+// TestIngatanHybridSearch tests that SearchFTS returns results for a seeded cell.
 func TestIngatanHybridSearch(t *testing.T) {
 	skipIfNoIngatan(t)
 
-	repo := newIngatanRepo(t)
+	repo := newIngatanCellRepo(t)
 	ctx := context.Background()
 	convID := "inttest-hybrid-" + uuid.New().String()
 
@@ -55,14 +55,14 @@ func TestIngatanHybridSearch(t *testing.T) {
 	cell := newTestCell(convID, "test-scene", "The quick brown fox jumps over the lazy dog")
 	require.NoError(t, repo.Create(ctx, cell))
 	t.Cleanup(func() {
-		_ = repo.DeleteByConversation(context.Background(), convID, cell.ID)
+		_ = repo.Delete(context.Background(), cell.ID)
 	})
 
 	// Allow Ingatan time to index.
 	time.Sleep(500 * time.Millisecond)
 
 	// Search using a partial keyword.
-	results, err := repo.SearchFTSInStore(ctx, convID, "quick brown fox", 10)
+	results, err := repo.SearchFTS(ctx, "quick brown fox", 10)
 	require.NoError(t, err)
 	assert.NotEmpty(t, results, "expected at least one result for seeded cell")
 
@@ -83,23 +83,33 @@ func TestIngatanHybridSearch(t *testing.T) {
 func TestIngatanCrossUserIsolation(t *testing.T) {
 	skipIfNoIngatan(t)
 
-	repo := newIngatanRepo(t)
+	repoA := storage.NewIngatanMemoryCellRepository(
+		storage.NewIngatanHTTPClient(storage.IngatanClientConfig{
+			BaseURL: ingatanURL(), APIKey: "test-api-key", StorePrefix: "inttest",
+		}),
+		"inttest",
+	)
+	repoB := storage.NewIngatanMemoryCellRepository(
+		storage.NewIngatanHTTPClient(storage.IngatanClientConfig{
+			BaseURL: ingatanURL(), APIKey: "test-api-key", StorePrefix: "inttest",
+		}),
+		"inttest",
+	)
 	ctx := context.Background()
 
 	userA := "inttest-user-a-" + uuid.New().String()
-	userB := "inttest-user-b-" + uuid.New().String()
 
 	cellA := newTestCell(userA, "secret-scene", "This is private information for user A only")
-	require.NoError(t, repo.Create(ctx, cellA))
+	require.NoError(t, repoA.Create(ctx, cellA))
 	t.Cleanup(func() {
-		_ = repo.DeleteByConversation(context.Background(), userA, cellA.ID)
+		_ = repoA.Delete(context.Background(), cellA.ID)
 	})
 
 	// Allow Ingatan time to index.
 	time.Sleep(500 * time.Millisecond)
 
-	// User B's store should return no results for user A's data.
-	results, err := repo.SearchFTSInStore(ctx, userB, "private information user A", 10)
+	// User B searching should not find user A's data (different stores).
+	results, err := repoB.SearchFTS(ctx, "private information user A", 10)
 	require.NoError(t, err)
 
 	for _, r := range results {
@@ -112,47 +122,41 @@ func TestIngatanCrossUserIsolation(t *testing.T) {
 func TestIngatanDeleteExpiredIsNoOp(t *testing.T) {
 	skipIfNoIngatan(t)
 
-	repo := newIngatanRepo(t)
+	repo := newIngatanCellRepo(t)
 	ctx := context.Background()
 
 	count, err := repo.DeleteExpired(ctx)
 	require.NoError(t, err, "DeleteExpired should not return an error")
-	assert.Equal(t, 0, count, "DeleteExpired should return 0 (no-op)")
+	assert.Equal(t, 0, count, "DeleteExpired should return 0 (no-op per ADR-4)")
 }
 
 // TestIngatanSceneRoundTrip tests Upsert and Get for MemoryScenes via Ingatan.
 func TestIngatanSceneRoundTrip(t *testing.T) {
 	skipIfNoIngatan(t)
 
-	cfg := storage.IngatanConfig{
-		URL:         ingatanURL(),
+	client := storage.NewIngatanHTTPClient(storage.IngatanClientConfig{
+		BaseURL:     ingatanURL(),
 		APIKey:      "test-api-key",
 		StorePrefix: "inttest",
-	}
-	client := storage.NewIngatanHTTPClient(cfg)
-	sceneRepo := storage.NewIngatanMemorySceneRepository(client)
+	})
+	sceneRepo := storage.NewIngatanMemorySceneRepository(client, "inttest")
 
 	ctx := context.Background()
-	sceneName := "round-trip-" + uuid.New().String()[:8]
+	sceneName := "inttest-" + uuid.New().String()[:8]
 
-	// Ensure the sceneName only uses valid characters (lowercase, numbers, dashes).
 	scene := &memoryv2.MemoryScene{
-		Scene:      "test-scene",
+		Scene:      sceneName,
 		Summary:    "This is a test scene summary created during integration testing.",
 		TokenCount: 50,
 		UpdatedAt:  time.Now().UTC().Truncate(time.Second),
 	}
-	// Override with a valid scene name.
-	scene.Scene = "inttest-" + sceneName
 
 	t.Cleanup(func() {
 		_ = sceneRepo.Delete(context.Background(), scene.Scene)
 	})
 
-	// Upsert (create).
 	require.NoError(t, sceneRepo.Upsert(ctx, scene))
 
-	// Get it back.
 	got, err := sceneRepo.Get(ctx, scene.Scene)
 	require.NoError(t, err)
 	assert.Equal(t, scene.Scene, got.Scene)
