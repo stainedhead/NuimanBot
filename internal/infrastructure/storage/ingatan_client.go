@@ -51,9 +51,11 @@ func (c *TokenCache) needsRefresh() bool {
 // It automatically exchanges an API key for a JWT and transparently refreshes
 // the token before expiry.
 type IngatanHTTPClient struct {
-	baseURL     string
-	httpClient  *http.Client
-	tokenCache  *TokenCache
+	baseURL    string
+	httpClient *http.Client
+	tokenCache *TokenCache
+	// refreshMu serializes concurrent refresh attempts to prevent redundant token exchanges.
+	refreshMu   sync.Mutex
 	apiKey      string
 	storePrefix string
 }
@@ -81,10 +83,20 @@ func NewIngatanHTTPClient(cfg IngatanClientConfig) *IngatanHTTPClient {
 
 // Do executes an authenticated HTTP request against the Ingatan API.
 // It transparently refreshes the JWT when needed before making the request.
+// Double-checked locking ensures that only one goroutine performs the token
+// exchange even when multiple goroutines call Do concurrently with an expired token.
 func (c *IngatanHTTPClient) Do(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
 	if c.tokenCache.needsRefresh() {
-		if err := c.refresh(ctx); err != nil {
-			return nil, err
+		c.refreshMu.Lock()
+		// Re-check after acquiring the lock — another goroutine may have already
+		// refreshed the token while this goroutine was waiting.
+		var refreshErr error
+		if c.tokenCache.needsRefresh() {
+			refreshErr = c.refresh(ctx)
+		}
+		c.refreshMu.Unlock()
+		if refreshErr != nil {
+			return nil, refreshErr
 		}
 	}
 
