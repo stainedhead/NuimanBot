@@ -1,5 +1,6 @@
 # Binaries
 bin/
+nuimanbot
 *.exe
 *.exe~
 *.dll
@@ -44,7 +45,7 @@ dist/
 # vendor/
 
 # Specs directory (local planning artifacts)
-specs/archive/
+specs/
 
 # Example bots (external projects)
 examples/
