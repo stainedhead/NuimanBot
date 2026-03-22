@@ -31,7 +31,8 @@ func (m *MockFTSCellRepository) SearchFTS(ctx context.Context, query string, lim
 func (m *MockFTSCellRepository) GetHighSalience(ctx context.Context, conversationID string, threshold float64, limit int) ([]*memoryv2.MemoryCell, error) {
 	results := []*memoryv2.MemoryCell{}
 	for _, cell := range m.Cells {
-		if cell.ConversationID == conversationID && cell.Salience >= threshold {
+		matchesConv := conversationID == "" || cell.ConversationID == conversationID
+		if matchesConv && cell.Salience >= threshold {
 			results = append(results, cell)
 		}
 	}
