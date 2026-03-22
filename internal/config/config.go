@@ -86,16 +86,16 @@ type LLMConfig struct {
 
 // MCPClientConfig holds MCP client-specific configuration.
 type MCPClientConfig struct {
+	// ConfigFile is the path to the mcp.json server list; defaults to "mcp.json".
+	ConfigFile string `yaml:"config_file"`
+	// Enabled controls whether MCP client integration is active.
+	Enabled bool `yaml:"enabled"`
 	// AllowedServers is the list of MCP server names permitted for use.
 	AllowedServers []string `yaml:"allowed_servers"`
 	// Timeout is the per-request timeout for MCP calls (e.g. "30s").
 	Timeout string `yaml:"timeout"`
 	// MaxRetries is the number of retries on transient errors.
 	MaxRetries int `yaml:"max_retries"`
-	// ConfigFile is the path to the mcp.json server configuration file (default: "mcp.json").
-	ConfigFile string `yaml:"config_file"`
-	// Enabled activates the MCP client at startup.
-	Enabled bool `yaml:"enabled"`
 }
 
 // MCPServerConfig holds MCP server-specific configuration.

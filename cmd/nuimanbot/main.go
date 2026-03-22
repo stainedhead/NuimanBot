@@ -16,6 +16,7 @@ import (
 	"nuimanbot/internal/adapter/gateway/cli"
 	"nuimanbot/internal/adapter/gateway/slack"
 	"nuimanbot/internal/adapter/gateway/telegram"
+	mcpadapter "nuimanbot/internal/adapter/mcp"
 	"nuimanbot/internal/adapter/web"
 	"nuimanbot/internal/config"
 	"nuimanbot/internal/domain"
@@ -30,6 +31,7 @@ import (
 	ollama "nuimanbot/internal/infrastructure/llm/ollama"
 	openai "nuimanbot/internal/infrastructure/llm/openai"
 	"nuimanbot/internal/infrastructure/logger"
+	inframcp "nuimanbot/internal/infrastructure/mcp"
 	personainfra "nuimanbot/internal/infrastructure/persona"
 	infrasecurity "nuimanbot/internal/infrastructure/security"
 	skillinfra "nuimanbot/internal/infrastructure/skill"
@@ -185,6 +187,12 @@ func main() {
 	// Register built-in skills
 	if err := registerBuiltInTools(toolRegistry, notesRepo, llmService); err != nil {
 		log.Fatalf("Failed to register skills: %v", err)
+	}
+
+	// 9.5. Register MCP tools from mcp.json (if MCP client is enabled)
+	if err := registerMCPTools(ctx, cfg, toolRegistry); err != nil {
+		// Non-fatal: MCP errors are logged inside registerMCPTools; we carry on.
+		slog.Warn("MCP tool registration encountered errors", "error", err)
 	}
 
 	toolExecutionService := tool.NewService(&cfg.Tools, toolRegistry, securityService)
@@ -579,6 +587,33 @@ func registerDeveloperProductivityTools(registry tool.ToolRegistry, llmService d
 	return nil
 }
 
+// registerMCPTools loads mcp.json and registers MCP tools from every configured
+// server.  Individual server failures are logged and skipped (non-fatal).
+func registerMCPTools(ctx context.Context, cfg *config.NuimanBotConfig, registry tool.ToolRegistry) error {
+	if !cfg.MCP.Client.Enabled {
+		slog.Info("MCP client disabled; skipping MCP tool registration")
+		return nil
+	}
+
+	cfgFile := cfg.MCP.Client.ConfigFile
+	if cfgFile == "" {
+		cfgFile = "mcp.json"
+	}
+
+	mcpCfg, err := inframcp.LoadMCPConfig(cfgFile)
+	if err != nil {
+		return fmt.Errorf("mcp: load config %q: %w", cfgFile, err)
+	}
+
+	if len(mcpCfg.Servers) == 0 {
+		slog.Info("MCP: no servers configured", "config_file", cfgFile)
+		return nil
+	}
+
+	slog.Info("MCP: registering tools", "config_file", cfgFile, "servers", len(mcpCfg.Servers))
+	return mcpadapter.BuildMCPTools(ctx, *mcpCfg, registry)
+}
+
 // memoryCuratorAdapter adapts MemoryCuratorService to chat.MemoryCurator interface.
 type memoryCuratorAdapter struct {
 	curator *memoryv2uc.MemoryCuratorService
@@ -629,11 +664,10 @@ type conversationRepositoryAdapter struct {
 }
 
 func (a *conversationRepositoryAdapter) SaveMessage(ctx context.Context, convID string, userID string, platform domain.Platform, msg domain.StoredMessage) error {
-	// First, try to get the existing conversation
-	conv, err := a.repo.GetConversation(ctx, convID)
-	if err != nil {
-		// If conversation doesn't exist, create a new one
-		conv = &domain.Conversation{
+	// First, try to get the existing conversation.
+	if _, err := a.repo.GetConversation(ctx, convID); err != nil {
+		// Conversation doesn't exist; create a new one.
+		conv := &domain.Conversation{
 			ID:       convID,
 			UserID:   userID,
 			Platform: platform,
@@ -642,7 +676,7 @@ func (a *conversationRepositoryAdapter) SaveMessage(ctx context.Context, convID 
 		return a.repo.SaveConversation(ctx, conv)
 	}
 
-	// Conversation exists, append the message
+	// Conversation exists; append the message.
 	return a.repo.AppendMessage(ctx, convID, msg)
 }
 
