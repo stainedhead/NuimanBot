@@ -514,13 +514,19 @@ func TestLoginRateLimiterStoreEvictIdleRetainsRecent(t *testing.T) {
 func TestLoginRateLimiterStoreBackgroundGoroutineStarted(t *testing.T) {
 	before := runtime.NumGoroutine()
 	_ = newLoginRateLimiterStore()
-	// Allow the goroutine scheduler to start the background goroutine.
-	time.Sleep(10 * time.Millisecond)
-	after := runtime.NumGoroutine()
 
-	if after <= before {
-		t.Errorf("expected goroutine count to increase by at least 1 after newLoginRateLimiterStore(), before=%d after=%d", before, after)
+	// Poll for up to 200ms for the background goroutine to be scheduled.
+	// The goroutine is started with `go func()`, so it may not appear instantly.
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if runtime.NumGoroutine() > before {
+			return // goroutine started — test passes
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
+
+	t.Errorf("expected goroutine count to increase by at least 1 after newLoginRateLimiterStore(), before=%d after=%d",
+		before, runtime.NumGoroutine())
 }
 
 // TestLoginRateLimiterStoreAllowBlockBehaviorUnchanged verifies that the existing
