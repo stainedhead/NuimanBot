@@ -130,23 +130,15 @@ func TestLoginRateLimitAfterFiveFailures(t *testing.T) {
 		t.Fatalf("AddUser failed: %v", err)
 	}
 
-	// Perform 5 failed login attempts from the same IP
-	for i := 0; i < 5; i++ {
-		csrfToken := auth.GenerateCSRFToken()
-		form := url.Values{}
-		form.Add("username", "admin")
-		form.Add("password", "wrongpassword")
-		form.Add("csrf_token", csrfToken)
-
-		req := httptest.NewRequest(http.MethodPost, "/admin/login", strings.NewReader(form.Encode()))
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		req.RemoteAddr = "192.0.2.1:12345"
-		w := httptest.NewRecorder()
-
-		server.handleLogin(w, req)
+	// Drain all 5 tokens directly via the rate limiter store to avoid slow
+	// password-hashing overhead in handleLogin. The bucket is exhausted
+	// instantly; no credential verification occurs.
+	const clientIP = "192.0.2.1"
+	for i := 0; i < loginRateLimitCapacity; i++ {
+		server.loginLimiter.allow(clientIP)
 	}
 
-	// 6th attempt should be rate limited
+	// Next attempt should be rate limited — bucket is empty.
 	csrfToken := auth.GenerateCSRFToken()
 	form := url.Values{}
 	form.Add("username", "admin")
@@ -155,13 +147,13 @@ func TestLoginRateLimitAfterFiveFailures(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/admin/login", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.RemoteAddr = "192.0.2.1:12345"
+	req.RemoteAddr = clientIP + ":12345"
 	w := httptest.NewRecorder()
 
 	server.handleLogin(w, req)
 
 	if w.Code != http.StatusTooManyRequests {
-		t.Errorf("expected 429 after 5 failed attempts, got %d", w.Code)
+		t.Errorf("expected 429 after exhausting rate limit, got %d", w.Code)
 	}
 }
 
@@ -174,20 +166,9 @@ func TestLoginRateLimitDifferentIPsAreIndependent(t *testing.T) {
 		t.Fatalf("AddUser failed: %v", err)
 	}
 
-	// Exhaust rate limit for IP1
-	for i := 0; i < 5; i++ {
-		csrfToken := auth.GenerateCSRFToken()
-		form := url.Values{}
-		form.Add("username", "admin")
-		form.Add("password", "wrongpassword")
-		form.Add("csrf_token", csrfToken)
-
-		req := httptest.NewRequest(http.MethodPost, "/admin/login", strings.NewReader(form.Encode()))
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		req.RemoteAddr = "192.0.2.1:12345"
-		w := httptest.NewRecorder()
-
-		server.handleLogin(w, req)
+	// Exhaust rate limit for IP1 directly via the store (avoids slow password hashing).
+	for i := 0; i < loginRateLimitCapacity; i++ {
+		server.loginLimiter.allow("192.0.2.1")
 	}
 
 	// IP2 should still be able to attempt login (not rate limited)
@@ -219,20 +200,9 @@ func TestLoginRateLimitSuccessfulLoginResetsCounter(t *testing.T) {
 		t.Fatalf("AddUser failed: %v", err)
 	}
 
-	// Perform 4 failed login attempts
+	// Drain 4 tokens directly (avoids slow password hashing for failed attempts).
 	for i := 0; i < 4; i++ {
-		csrfToken := auth.GenerateCSRFToken()
-		form := url.Values{}
-		form.Add("username", "admin")
-		form.Add("password", "wrongpassword")
-		form.Add("csrf_token", csrfToken)
-
-		req := httptest.NewRequest(http.MethodPost, "/admin/login", strings.NewReader(form.Encode()))
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		req.RemoteAddr = "192.0.2.3:12345"
-		w := httptest.NewRecorder()
-
-		server.handleLogin(w, req)
+		server.loginLimiter.allow("192.0.2.3")
 	}
 
 	// Successful login should reset counter
