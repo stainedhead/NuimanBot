@@ -8,18 +8,22 @@ import (
 
 	"nuimanbot/internal/config"
 	"nuimanbot/internal/domain/memoryv2"
+	"nuimanbot/internal/infrastructure/alerting"
 	"nuimanbot/internal/infrastructure/storage"
 )
 
 // healthProbeTimeout is the default timeout for the Ingatan startup health probe.
 const healthProbeTimeout = 5 * time.Second
 
+// ingatanFallbackImpact describes the operational impact of the Ingatan fallback.
+const ingatanFallbackImpact = "memory recall quality degraded; Ingatan hybrid search unavailable"
+
 // BuildMemoryRepositoriesWithFallback builds memory repositories with optional graceful degradation.
 //
 // For the Ingatan backend:
 //   - Performs a startup health probe (GET /api/v1/health).
 //   - If the probe succeeds, returns Ingatan repositories.
-//   - If the probe fails and fallback_to_builtin is true, logs a warning and returns built-in repositories.
+//   - If the probe fails and fallback_to_builtin is true, logs an error and returns built-in repositories.
 //   - If the probe fails and fallback_to_builtin is false, returns an error.
 //
 // For all other backends, delegates to BuildMemoryRepositories without a health probe.
@@ -51,10 +55,18 @@ func BuildMemoryRepositoriesWithFallback(cfg *config.NuimanBotConfig) (memoryv2.
 
 	if err := client.Ping(ctx); err != nil {
 		if ingatanCfg.FallbackToBuiltin {
-			slog.Warn("ingatan: health probe failed; falling back to built-in memory backend",
+			slog.Error("ingatan: unreachable at startup — falling back to built-in file storage",
 				"url", ingatanCfg.URL,
 				"error", err,
+				"impact", ingatanFallbackImpact,
 			)
+			alerting.SendAlert(ctx, alerting.Alert{
+				Severity: alerting.SeverityError,
+				Title:    "ingatan_fallback",
+				Message: fmt.Sprintf(
+					"Ingatan unreachable at startup (%v). Using built-in file storage. "+
+						"Memory recall quality is degraded.", err),
+			})
 			return buildBuiltinRepositories(cfg)
 		}
 		return nil, nil, fmt.Errorf("ingatan: health probe failed and fallback_to_builtin is disabled: %w", err)

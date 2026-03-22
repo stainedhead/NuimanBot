@@ -37,14 +37,14 @@ type TokenCache struct {
 	expiresAt time.Time
 }
 
-// needsRefresh reports whether the cached token is absent or expiring within tokenRefreshBuffer.
+// needsRefresh reports true if the token is absent or will expire within tokenRefreshBuffer.
 func (c *TokenCache) needsRefresh() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.token == "" {
 		return true
 	}
-	return !time.Now().Add(tokenRefreshBuffer).Before(c.expiresAt)
+	return time.Until(c.expiresAt) < tokenRefreshBuffer
 }
 
 // IngatanHTTPClient is an HTTP client for the Ingatan REST API.
