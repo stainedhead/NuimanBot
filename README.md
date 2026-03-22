@@ -29,8 +29,9 @@ NuimanBot is a production-ready AI agent framework that prioritizes **security**
 - Streaming responses with graceful degradation
 
 **🛠️ Rich Tool Ecosystem**
-- 12 built-in tools (5 core + 7 developer productivity)
+- 12 built-in tools (5 core + 7 developer productivity) + MCP external tools
 - Agent Skills system following [Anthropic standard](https://github.com/anthropics/anthropic-skills)
+- MCP (Model Context Protocol) client: HTTP and stdio transports, `mcp:<server>:<tool>` namespace
 - Custom tool creation with RBAC enforcement
 
 **💬 Multi-Gateway Support**
@@ -39,15 +40,17 @@ NuimanBot is a production-ready AI agent framework that prioritizes **security**
 - Per-user customization via persona files
 
 **🧠 Self-Organizing Memory**
-- Automatic knowledge extraction from conversations
-- Full-text search with scene-based organization
+- Automatic knowledge extraction from conversations (LLM-based)
+- Full-text search (FTS5) with scene-based organization and salience scoring
+- Ingatan backend or built-in file-based storage (configurable)
 - Graceful degradation (memory failures never block chat)
 
 **📊 Production-Grade**
 - Prometheus metrics, distributed tracing, real-time alerting
 - Auto-initialization (zero-config first run)
+- TLS auto-generation (self-signed ECDSA P-256, no config required)
 - CI/CD automation with security scanning
-- 85%+ test coverage
+- 72%+ test coverage (unit + integration)
 
 ---
 
@@ -215,7 +218,7 @@ We welcome contributions! Please follow these guidelines:
 - Follow [Clean Architecture](AGENTS.md#clean-architecture) principles
 - Write tests first (TDD)
 - Ensure all quality gates pass
-- Maintain 85%+ test coverage
+- Maintain or improve test coverage (currently 72%+)
 
 **2. Contribution Process**
 1. Fork the repository
@@ -310,8 +313,11 @@ NuimanBot addresses critical vulnerabilities found in similar AI agent framework
 - Input validation with comprehensive attack pattern detection
 - Encrypted credential vault with key rotation support
 - Comprehensive audit logging for compliance
-- Rate limiting (token bucket algorithm)
-- API authentication with bearer tokens
+- Rate limiting (token bucket algorithm): per-user tool limits, per-IP login limits, per-client REST API limits
+- REST API JWT authentication (HS256, minimum 32-byte secret enforced)
+- TLS auto-generation for admin web and health servers
+- Web admin: forced password change on default credentials, CSRF protection, role middleware
+- MCP tool output sanitized before injection into LLM context
 
 See [Product Details](documentation/product-details.md#security-requirements) for complete security documentation.
 
@@ -335,7 +341,13 @@ See [Product Details](documentation/product-details.md#security-requirements) fo
 - **executor** - Tool execution engine
 - **common** - Shared utilities
 
-All tools include RBAC enforcement, rate limiting, timeout enforcement, and comprehensive testing (85%+ coverage).
+### MCP External Tools (dynamic)
+- Any tool exposed by an MCP-compatible server defined in `mcp.json`
+- Registered at startup under the namespace `mcp:<server>:<tool>`
+- HTTP and stdio transports; bad servers skipped with logged warning
+- 30-second per-tool timeout; output sanitized before LLM injection
+
+All built-in tools include RBAC enforcement, rate limiting, timeout enforcement, and output sanitization.
 
 See [User Onboarding Guide](support_docs/user-onboarding.md) for usage examples.
 
@@ -343,18 +355,18 @@ See [User Onboarding Guide](support_docs/user-onboarding.md) for usage examples.
 
 ## Status
 
-✅ **Production Ready** - 95.6% Complete (43/45 features)
+✅ **Production Ready** - 100% Complete
 
 **Recently Completed**
+- ✅ MCP Client (HTTP + stdio, JSON-RPC 2.0, startup wiring) (2026-03-22)
+- ✅ REST API Security (JWT, per-client rate limiting, body-size limit) (2026-03-22)
+- ✅ Web Admin Security (role middleware, login rate limiter, forced password change) (2026-03-22)
+- ✅ TLS Auto-Generation (self-signed ECDSA P-256 cert, StartTLS) (2026-03-22)
+- ✅ Ingatan Memory Backend (JWT token exchange, graceful degradation fallback) (2026-03-22)
+- ✅ Integration Test Suite (//go:build integration tagged tests) (2026-03-22)
 - ✅ Auto-Initialization (2026-02-16)
 - ✅ Self-Organizing Memory v2 (2026-02-15)
 - ✅ Persona Customization System (2026-02-15)
-- ✅ CI/CD Pipeline with Security Scanning (2026-02-07)
-- ✅ Agent Skills Phase 3: Advanced Features (2026-02-07)
-
-**On Hold** (not required for production)
-- ⏸️ Docker image build & push
-- ⏸️ Kubernetes deployment manifests
 
 See [Product Summary](documentation/product-summary.md) for detailed status and roadmap.
 

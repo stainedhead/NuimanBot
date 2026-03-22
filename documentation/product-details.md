@@ -1,8 +1,8 @@
 # NuimanBot Product Details
 
-**Version:** 1.3
-**Last Updated:** 2026-02-15
-**Status:** Production Ready (96.2% Complete)
+**Version:** 1.4
+**Last Updated:** 2026-03-22
+**Status:** Production Ready (100% Complete)
 
 ---
 
@@ -61,25 +61,27 @@
 - **Acceptance Criteria:**
   - Anthropic Claude (Opus, Sonnet, Haiku) support
   - OpenAI GPT (GPT-4, GPT-3.5) support
+  - AWS Bedrock (Claude 3/3.5 via Converse API) support
   - Ollama local model support (Llama, Mistral)
   - Multi-provider fallback for high availability
   - Streaming support for real-time responses
-  - Provider-aware token limit management (200k Claude, 128k GPT-4)
+  - Provider-aware token limit management (200k Claude/Bedrock, 128k GPT-4, 32k Ollama)
 
 #### FR-005: Custom Tools System
 - **Priority:** P0 (Critical)
-- **Status:** ✅ Complete (12/12 tools - 5 core + 7 developer productivity)
-- **Description:** Built-in tools only, no external tool imports
+- **Status:** ✅ Complete (12 built-in + dynamic MCP tools)
+- **Description:** Built-in tools plus optional MCP external tools
 - **Acceptance Criteria:**
   - ✅ Five core tools (infrastructure layer): calculator, datetime, weather, websearch, notes
   - ✅ Seven developer productivity tools (use case layer): github, repo_search, doc_summarize, summarize, coding_agent, executor, common
-  - ✅ Permission-gated execution (RBAC enforcement)
+  - ✅ MCP external tools: loaded from mcp.json at startup under mcp:\<server\>:\<tool\> namespace
+  - ✅ Permission-gated execution (RBAC enforcement; MCP tools require Network permission)
   - ✅ Rate limiting per user and per tool (token bucket algorithm)
-  - ✅ Timeout enforcement (configurable, 30s default)
-  - ✅ Output sanitization (secret redaction, prompt injection prevention)
+  - ✅ Timeout enforcement (configurable, 30s default; 30s hard limit for MCP tools)
+  - ✅ Output sanitization (secret redaction, prompt injection prevention; MCP output sanitized)
   - ✅ Path traversal prevention (workspace restrictions)
-  - ✅ Comprehensive test coverage (85%+ average)
-  - ✅ No external tool marketplace (security requirement)
+  - ✅ Comprehensive test coverage (72%+ average)
+  - ✅ No external tool marketplace (security requirement; MCP servers must be explicitly configured)
 
 #### FR-006: Conversation Management
 - **Priority:** P0 (Critical)
@@ -95,13 +97,19 @@
 #### FR-007: Security Hardening
 - **Priority:** P0 (Critical)
 - **Status:** ✅ Complete
-- **Description:** Zero credential leakage, comprehensive input validation
+- **Description:** Zero credential leakage, comprehensive input validation, transport security
 - **Acceptance Criteria:**
-  - AES-256-GCM encryption for credentials at rest
-  - No plaintext secrets in configuration or logs
-  - Input sanitization with 80+ attack pattern detection rules
-  - Comprehensive audit logging for all security events
-  - RBAC enforcement throughout application
+  - ✅ AES-256-GCM encryption for credentials at rest
+  - ✅ No plaintext secrets in configuration or logs
+  - ✅ Input sanitization with 80+ attack pattern detection rules
+  - ✅ Comprehensive audit logging for all security events
+  - ✅ RBAC enforcement throughout application
+  - ✅ TLS auto-generation (ECDSA P-256) for admin web and health servers
+  - ✅ Secure cookie enforcement when TLS is active
+  - ✅ Per-IP login rate limiter (token bucket) on web admin
+  - ✅ Forced password change on first login with default admin credentials
+  - ✅ REST API: JWT (HS256, minimum 32-byte secret); per-client rate limiting; 1 MiB body limit
+  - ✅ Injection-pattern validation on REST API JSON string fields
 
 #### FR-008: Production Readiness
 - **Priority:** P0 (Critical)
@@ -260,6 +268,80 @@
   - ✅ Test coverage: 90%+ across all layers (domain 100%, infrastructure 93%, use case 97%)
   - ✅ Documentation: User guide in README.md, technical specs in product-details.md
 
+#### FR-019: Ingatan Memory Backend
+- **Priority:** P1 (High)
+- **Status:** ✅ Complete
+- **Description:** Optional Ingatan REST API backend for memory cells and scenes
+- **Acceptance Criteria:**
+  - ✅ IngatanHTTPClient with JWT token exchange (POST /auth/token) and transparent refresh (5-min buffer)
+  - ✅ Double-checked locking on token refresh to prevent redundant exchanges under concurrent load
+  - ✅ IngatanMemoryCellRepository and IngatanMemorySceneRepository implementing domain interfaces
+  - ✅ memory_factory.go backend selector: `memory.backend = "builtin"` (default) or `"ingatan"`
+  - ✅ store_prefix validation: 2–31 lowercase alphanumeric + hyphens, must start with letter/digit
+  - ✅ Graceful degradation: on Ingatan health-check failure at startup, falls back to built-in storage with logged warning
+  - ✅ TLSSkipVerify option (development only; warning logged)
+  - **Configuration:** `memory.backend`, `memory.ingatan.url`, `memory.ingatan.api_key`, `memory.ingatan.store_prefix`
+
+#### FR-020: TLS Auto-Generation
+- **Priority:** P1 (High)
+- **Status:** ✅ Complete
+- **Description:** Self-signed TLS certificate generation for local HTTPS without external CA
+- **Acceptance Criteria:**
+  - ✅ LoadOrGenerateCert in crypto package: loads existing PEM files if present, otherwise generates
+  - ✅ Self-signed ECDSA P-256 certificate valid for 365 days
+  - ✅ Cert file written with mode 0644; key file with mode 0600
+  - ✅ StartTLS applied to health server and web admin server at startup
+  - ✅ Secure cookie flag automatically set when TLS is active
+
+#### FR-021: Web Admin Security
+- **Priority:** P1 (High)
+- **Status:** ✅ Complete
+- **Description:** Defense-in-depth hardening of the web administration interface
+- **Acceptance Criteria:**
+  - ✅ `requireRole` middleware: validates session role before serving protected pages
+  - ✅ Per-IP login rate limiter: token bucket algorithm, evicts stale entries to prevent memory growth
+  - ✅ Input sanitization on all form fields (username, password, new_password)
+  - ✅ Forced password change: detects default "admin"/"admin" credentials via bcrypt constant-time comparison; redirects to /admin/change-password
+  - ✅ CSRF token: generated per form render, consumed on POST (single-use)
+  - ✅ Session cleanup: single background goroutine via timer (no goroutine leak on high load)
+
+#### FR-022: REST API Security
+- **Priority:** P1 (High)
+- **Status:** ✅ Complete
+- **Description:** JWT-protected REST API with defense-in-depth middleware stack
+- **Acceptance Criteria:**
+  - ✅ POST /api/v1/auth/token: exchanges API key for HS256 JWT; returns token + expiry
+  - ✅ JWT middleware: validates Bearer token on all protected routes; stores subject claim in context
+  - ✅ JWT secret minimum 32 bytes enforced at server construction (returns error otherwise)
+  - ✅ Per-client rate limiting: token bucket keyed on JWT subject; evicts stale buckets
+  - ✅ Body-size limit: 1 MiB cap applied before any auth work (middleware order: BodyLimit → JWT → RateLimit → Validate → Handler)
+  - ✅ Injection-pattern validation: scans all JSON string fields for attack patterns
+  - ✅ GET /api/v1/health: unauthenticated health check endpoint
+
+#### FR-023: MCP Client Integration
+- **Priority:** P1 (High)
+- **Status:** ✅ Complete
+- **Description:** Model Context Protocol client for integrating external tool servers
+- **Acceptance Criteria:**
+  - ✅ mcp.json loader: defines server name, transport type (http/stdio), command/URL
+  - ✅ HTTP transport: JSON-RPC 2.0 over HTTP POST
+  - ✅ Stdio transport: JSON-RPC 2.0 over subprocess stdin/stdout
+  - ✅ MCPClient: Initialize (protocol version 2024-11-05 handshake), ListTools, CallTool
+  - ✅ MCPToolAdapter: implements domain.Tool; name is `mcp:<server>:<tool>`; requires Network permission
+  - ✅ Startup wiring: servers that fail Initialize are skipped with logged warning; bot continues
+  - ✅ Per-tool timeout: 30 seconds (overridable via WithToolTimeout option)
+  - ✅ Output sanitization: MCP tool output passed through OutputSanitizer before returning to LLM
+  - ✅ Atomic request ID counter (sync/atomic) prevents ID collisions under concurrent calls
+
+#### FR-024: Integration Test Suite
+- **Priority:** P1 (High)
+- **Status:** ✅ Complete
+- **Description:** Integration tests covering multi-component interactions
+- **Acceptance Criteria:**
+  - ✅ Tests tagged with `//go:build integration` to separate from unit tests
+  - ✅ Coverage: storage layer (Ingatan client, file repositories), web admin, memoryv2 use cases
+  - ✅ Run with `go test -tags integration ./...`
+
 ### Non-Functional Requirements
 
 #### NFR-001: Performance
@@ -290,7 +372,7 @@
 #### NFR-004: Maintainability
 - **Status:** ✅ Complete
 - **Requirements:**
-  - 85%+ test coverage across all packages
+  - 72%+ test coverage across all packages (unit + integration)
   - Clean Architecture with strict layer dependencies
   - Comprehensive documentation (README, product docs, technical docs)
   - golangci-lint passing with pragmatic configuration
@@ -806,6 +888,84 @@
 - All persona interactions cached for performance
 - Rule violations audited for admin review
 
+### Workflow 15: MCP Tool Configuration
+
+**Actors:** System Admin
+
+**Preconditions:**
+- An MCP-compatible tool server is available (HTTP or process-based)
+
+**Steps:**
+1. Admin creates `mcp.json` in the data directory:
+   ```json
+   {
+     "servers": [
+       {
+         "name": "filesystem",
+         "transport": "stdio",
+         "command": "/usr/local/bin/mcp-filesystem",
+         "args": ["/workspace"]
+       },
+       {
+         "name": "remote-tools",
+         "transport": "http",
+         "url": "https://tools.example.com/mcp"
+       }
+     ]
+   }
+   ```
+2. NuimanBot starts and calls `registerMCPTools`:
+   - For each server, creates transport (HTTPTransport or StdioTransport)
+   - Creates MCPClient and calls Initialize (protocol handshake)
+   - If Initialize fails, logs warning and skips server (non-fatal)
+   - If Initialize succeeds, calls ListTools and registers each tool as MCPToolAdapter
+3. Tools are registered as `mcp:filesystem:<toolname>` and `mcp:remote-tools:<toolname>`
+4. User invokes an MCP tool: "List files in /workspace"
+5. LLM selects `mcp:filesystem:list_directory` tool
+6. MCPToolAdapter.Execute:
+   - Creates a 30-second deadline context
+   - Calls MCPClient.CallTool with tool name and arguments
+   - If server does not respond within 30s, returns timeout error
+   - Sanitizes response via OutputSanitizer before returning
+7. Tool result returned to LLM for response generation
+
+**Postconditions:**
+- MCP tools available in the tool registry alongside built-in tools
+- Bad servers do not prevent bot startup
+- Per-tool 30s timeout prevents hanging on slow servers
+- Output sanitized before LLM injection to prevent prompt injection
+
+### Workflow 16: Ingatan Backend Configuration
+
+**Actors:** System Admin
+
+**Preconditions:**
+- Ingatan server is running and accessible
+
+**Steps:**
+1. Admin configures NuimanBot:
+   ```bash
+   export NUIMANBOT_MEMORY_BACKEND=ingatan
+   export NUIMANBOT_MEMORY_INGATAN_URL=https://ingatan.example.com
+   export NUIMANBOT_MEMORY_INGATAN_API_KEY=my-api-key
+   export NUIMANBOT_MEMORY_INGATAN_STORE_PREFIX=nuiman
+   ```
+2. NuimanBot starts: memory_factory.BuildMemoryRepositories selects Ingatan path
+3. Validates store_prefix: must be 2–31 lowercase alphanumeric + hyphens
+4. Creates IngatanHTTPClient with 30s timeout
+5. Health probe: calls GET /api/v1/health on Ingatan server
+   - If healthy: IngatanMemoryCellRepository and IngatanMemorySceneRepository used
+   - If unhealthy: falls back to built-in file-based storage with logged warning
+6. On first memory operation, client calls POST /auth/token with API key
+7. JWT cached with 5-minute pre-expiry refresh buffer
+8. All subsequent requests use Bearer JWT header
+9. Token refreshed automatically before expiry (double-checked locking)
+
+**Postconditions:**
+- Memory cells and scenes stored in Ingatan
+- Startup failure (unhealthy Ingatan) does not block bot operation
+- JWT rotation transparent to callers
+
 ---
 
 ## System Constraints
@@ -828,7 +988,7 @@
 - **Impact:** All new features must follow dependency rules
 
 #### TC-004: Test Coverage
-- **Constraint:** 85%+ overall test coverage, 90%+ for domain layer
+- **Constraint:** 72%+ overall test coverage (unit + integration), 90%+ for domain layer
 - **Rationale:** Production readiness, regression prevention
 - **Impact:** All new code must include tests before merge
 

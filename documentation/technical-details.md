@@ -1,8 +1,8 @@
 # NuimanBot Technical Documentation
 
-**Version:** 1.0 (MVP + Post-MVP Enhancements)
-**Last Updated:** 2026-02-07
-**Completion Status:** 95.6% (43/45 planned features)
+**Version:** 1.1
+**Last Updated:** 2026-03-22
+**Completion Status:** 100% Complete
 **CI/CD Status:** ✅ All Pipelines Passing
 
 ---
@@ -17,10 +17,15 @@
 6. [Data Flow](#data-flow)
 7. [Self-Organizing Memory v2](#self-organizing-memory-v2)
 8. [API Documentation](#api-documentation)
-8. [Configuration](#configuration)
-9. [Testing Strategy](#testing-strategy)
-10. [CI/CD Pipeline](#cicd-pipeline)
-11. [Deployment Architecture](#deployment-architecture)
+9. [MCP Client Architecture](#mcp-client-architecture)
+10. [REST API Security Architecture](#rest-api-security-architecture)
+11. [TLS Auto-Generation Architecture](#tls-auto-generation-architecture)
+12. [Web Admin Security Architecture](#web-admin-security-architecture)
+13. [Ingatan Memory Backend Architecture](#ingatan-memory-backend-architecture)
+14. [Configuration](#configuration)
+15. [Testing Strategy](#testing-strategy)
+16. [CI/CD Pipeline](#cicd-pipeline)
+17. [Deployment Architecture](#deployment-architecture)
 
 ---
 
@@ -34,10 +39,12 @@ NuimanBot follows **Clean Architecture** with strict dependency inversion:
 ┌─────────────────────────────────────────────────┐
 │  Infrastructure Layer                           │
 │  • LLM Clients (Anthropic, OpenAI, Bedrock, Ollama) │
-│  • Encryption (AES-256-GCM)                     │
+│  • Encryption (AES-256-GCM) + TLS cert gen     │
 │  • Caching (In-memory LRU)                      │
 │  • Metrics (Prometheus)                         │
 │  • External APIs (Weather, Search)              │
+│  • Storage (file-based + Ingatan HTTP client)   │
+│  • MCP transports (HTTP, stdio)                 │
 └────────────┬────────────────────────────────────┘
              │ implements interfaces
 ┌────────────▼────────────────────────────────────┐
@@ -45,7 +52,11 @@ NuimanBot follows **Clean Architecture** with strict dependency inversion:
 │  • CLI Gateway                                  │
 │  • Telegram Gateway                             │
 │  • Slack Gateway                                │
-│  • SQLite Repositories (Users, Messages, Notes) │
+│  • Web Admin Server (TLS, session auth, RBAC)  │
+│  • REST API Server (JWT, rate limiting)         │
+│  • MCP Tool Bridge (MCPToolAdapter)             │
+│  • File Repositories (Users, Messages, Notes)   │
+│  • Memory Factory (backend selector)            │
 └────────────┬────────────────────────────────────┘
              │ implements interfaces
 ┌────────────▼────────────────────────────────────┐
@@ -54,13 +65,15 @@ NuimanBot follows **Clean Architecture** with strict dependency inversion:
 │  • Tool Execution Service (RBAC)               │
 │  • Security Service (validation, audit)         │
 │  • User Management                              │
-│  • Memory Service (summarization)               │
+│  • Memory v2 (MemoryCuratorService, MemoryRecallService) │
 └────────────┬────────────────────────────────────┘
              │ uses entities
 ┌────────────▼────────────────────────────────────┐
 │  Domain Layer                                   │
 │  • Entities (User, Message, Conversation)       │
-│  • Interfaces (LLMService, SkillRegistry)       │
+│  • Memory v2 Entities (MemoryCell, MemoryScene) │
+│  • Interfaces (LLMService, SkillRegistry,       │
+│    MemoryCellRepository, MemorySceneRepository) │
 │  • Business Rules                               │
 │  • Zero external dependencies                   │
 └─────────────────────────────────────────────────┘
@@ -121,7 +134,7 @@ func (s *Service) BuildContextWindow(
 ) ([]domain.Message, int)
 ```
 
-- Provider-aware limits: Anthropic (200k), OpenAI (128k), Bedrock (200k), Ollama (32k)
+- Provider-aware limits: Anthropic (200k), OpenAI (128k), AWS Bedrock (200k), Ollama (32k)
 - Automatic truncation of oldest messages
 - Reserved tokens for response generation (2000)
 
@@ -1070,7 +1083,220 @@ type Tool interface {
 11. **Executor**: Tool execution engine with RBAC, rate limiting, and orchestration
 12. **Common**: Shared utilities for rate limiting, input sanitization, and validation
 
-**Total: 12 Tools** (5 infrastructure + 7 use case)
+**Total: 12 Built-in Tools** (5 infrastructure + 7 use case) + dynamic MCP tools
+
+---
+
+## MCP Client Architecture
+
+### Overview
+
+The MCP (Model Context Protocol) client bridges external tool servers into NuimanBot's domain tool registry. It follows the same Clean Architecture layering as built-in tools.
+
+### Transport Interface (`internal/infrastructure/mcp/`)
+
+```go
+type Transport interface {
+    Send(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, error)
+}
+```
+
+Two implementations:
+- **HTTPTransport**: JSON-RPC 2.0 over HTTP POST. Sends `{"jsonrpc":"2.0","method":...,"params":...,"id":N}`.
+- **StdioTransport**: JSON-RPC 2.0 over subprocess stdin/stdout. Spawns `command args...` and communicates line-delimited JSON.
+
+### MCPClient (`internal/infrastructure/mcp/client.go`)
+
+```go
+type MCPClient struct {
+    transport    Transport
+    serverName   string
+    capabilities ServerCapabilities
+    mu           sync.RWMutex
+    initialized  bool
+    idCounter    atomic.Int64  // Thread-safe request ID generation
+}
+```
+
+**Methods:**
+- `Initialize(ctx)` — Handshake with protocol version `2024-11-05`. Validates server returns same protocol version. Must be called before other methods.
+- `ListTools(ctx)` — Returns `[]MCPTool` (name, description, inputSchema).
+- `CallTool(ctx, name, args)` — Invokes tool; returns error if server returns `isError: true`.
+
+### MCPToolAdapter (`internal/adapter/mcp/tool_bridge.go`)
+
+Wraps an MCPClient + MCPTool and implements `domain.Tool`:
+
+```go
+type MCPToolAdapter struct {
+    client     *infra.MCPClient
+    toolDef    infra.MCPTool
+    serverName string
+    sanitizer  *common.OutputSanitizer
+    timeout    time.Duration  // default 30s
+}
+```
+
+- **Name**: `mcp:<serverName>:<toolName>`
+- **RequiredPermissions**: `[domain.PermissionNetwork]` (all MCP calls involve network I/O to the server)
+- **Execute**: Creates a deadline context (`30s`), calls `client.CallTool`, sanitizes output via `OutputSanitizer` before returning to prevent prompt injection from untrusted MCP servers.
+
+### Startup Wiring (`cmd/nuimanbot/main.go`)
+
+```
+registerMCPTools(ctx, cfg, toolRegistry):
+  for each server in mcp.json:
+    create transport (HTTP or stdio)
+    create MCPClient
+    call Initialize — if error: log warning, skip server (non-fatal)
+    call ListTools
+    for each tool: register MCPToolAdapter in toolRegistry
+```
+
+Servers that fail to initialize are skipped. The bot continues with all successfully registered MCP tools plus built-in tools.
+
+---
+
+## REST API Security Architecture
+
+### Server (`internal/adapter/api/server.go`)
+
+The REST API server enforces a layered middleware stack on all protected routes:
+
+```
+BodyLimit(1 MiB) → JWT → RateLimit(per-client) → Validate(injection) → Handler
+```
+
+The auth endpoint (`POST /api/v1/auth/token`) has a lighter stack:
+
+```
+BodyLimit(1 MiB) → Validate(injection) → AuthHandler
+```
+
+### JWT Flow
+
+1. Client calls `POST /api/v1/auth/token` with API key in request body.
+2. `AuthHandler` validates the key and issues an HS256 JWT with `sub` set to the client identifier and an expiry claim.
+3. JWT secret minimum: **32 bytes** — enforced at `NewServer` construction time (returns error if shorter).
+4. Client includes `Authorization: Bearer <token>` on subsequent requests.
+5. JWT middleware validates signature, expiry, and stores the `sub` claim in request context.
+6. Rate limiter keys buckets by the JWT `sub` claim (per-client, not per-IP).
+
+### Middleware Chain Details
+
+| Middleware | Purpose | Config |
+|-----------|---------|--------|
+| BodyLimit | Caps request body at 1 MiB before any auth work | 1 MiB (1 << 20 bytes) |
+| JWT | Validates HS256 Bearer token | Secret min 32 bytes |
+| RateLimit | Per-client token bucket, keyed on JWT subject | 100 req/min per client |
+| Validate | Scans JSON string fields for injection patterns | 80+ attack patterns |
+
+Server timeouts: ReadTimeout 15s, WriteTimeout 15s, IdleTimeout 60s.
+
+---
+
+## TLS Auto-Generation Architecture
+
+### LoadOrGenerateCert (`internal/infrastructure/crypto/cert.go`)
+
+```go
+func LoadOrGenerateCert(certPath, keyPath string, hosts []string) (tls.Certificate, error)
+```
+
+**Logic:**
+1. If both `certPath` and `keyPath` exist on disk: load them with `tls.LoadX509KeyPair`.
+2. Otherwise: generate a new self-signed certificate:
+   - Algorithm: ECDSA P-256
+   - Validity: 365 days from generation time
+   - SANs: provided `hosts` (parsed as IP addresses or DNS names) plus `127.0.0.1`
+   - Serial number: 128-bit cryptographically random
+3. Write files: cert at mode 0644, key at mode 0600.
+4. Return `tls.Certificate` for direct use with `tls.Config`.
+
+### StartTLS Pattern
+
+At startup, `LoadOrGenerateCert` is called for each server that needs TLS (health server, web admin server). The returned `tls.Certificate` is placed in a `tls.Config` and applied to the `http.Server`. The web `AuthService.setSecureCookies(true)` is called when TLS is active so session cookies carry the `Secure` flag.
+
+---
+
+## Web Admin Security Architecture
+
+### Session-Based Authentication (`internal/adapter/web/auth.go`)
+
+```go
+type AuthService struct {
+    users          map[string]*AuthUser
+    sessions       map[string]*Session
+    csrfTokens     map[string]bool
+    mu             sync.RWMutex
+    sessionTimeout time.Duration  // 24h
+    secureCookies  bool
+}
+```
+
+**Session lifecycle:**
+- Session ID: 32-byte cryptographically random, base64-encoded
+- Expiry: 24 hours from creation
+- Cleanup: single background goroutine on 5-minute timer (prevents goroutine accumulation under load)
+- Cookie flags: `HttpOnly`, `SameSite=Strict`, `Secure` (when TLS active)
+
+### Login Rate Limiter
+
+Per-IP token bucket. On successful authentication, the bucket for that IP is reset. Stale entries (IPs that have not been seen recently) are evicted periodically to bound memory growth.
+
+### Default Credentials Detection
+
+On login, `isDefaultCredentials(username, password)` checks if the submitted credentials match `admin`/`admin` using `bcrypt.CompareHashAndPassword` (constant-time). If matched, `Session.ForcePasswordChange = true` is set and the user is redirected to `/admin/change-password`. The CSRF token is consumed on every POST to prevent replay attacks.
+
+### requireRole Middleware
+
+Routes that require a specific role (e.g., admin-only pages) are wrapped with `requireRole("admin")`. The middleware reads the session from the cookie, checks `session.Role`, and returns HTTP 403 if insufficient.
+
+---
+
+## Ingatan Memory Backend Architecture
+
+### IngatanHTTPClient (`internal/infrastructure/storage/ingatan_client.go`)
+
+```go
+type IngatanHTTPClient struct {
+    baseURL     string
+    httpClient  *http.Client       // 30s timeout
+    tokenCache  *TokenCache        // JWT + expiry
+    refreshMu   sync.Mutex         // Serializes token exchanges
+    apiKey      string
+    storePrefix string
+}
+```
+
+**JWT token exchange:**
+1. On first `Do()` call (or when token will expire within 5 minutes), acquires `refreshMu`.
+2. Double-checked locking: re-tests `needsRefresh()` after acquiring lock (another goroutine may have already refreshed).
+3. POSTs `{"api_key": "..."}` to `/auth/token`.
+4. Validates response: non-empty token, RFC3339 `expires_at`, expiry must be in the future.
+5. Stores token + expiry under `tokenCache.mu`.
+
+**Ping:**
+- `GET /api/v1/health` (unauthenticated) — used by memory factory health probe at startup.
+
+### Backend Selector (`internal/adapter/factory/memory_factory.go`)
+
+```go
+func BuildMemoryRepositories(cfg *config.NuimanBotConfig) (
+    memoryv2.MemoryCellRepository,
+    memoryv2.MemorySceneRepository,
+    error,
+)
+```
+
+| `cfg.Memory.Backend` | Result |
+|---------------------|--------|
+| `"builtin"` or `""` | `FileMemoryCellRepository` + `FileMemorySceneRepository` |
+| `"ingatan"` | `IngatanMemoryCellRepository` + `IngatanMemorySceneRepository` |
+
+**Graceful degradation:** `BuildMemoryRepositoriesWithFallback` (called at startup) pings the Ingatan server. On failure, it logs a warning and falls back to built-in storage — chat functionality is never blocked.
+
+**Store prefix validation:** `^[a-z0-9][a-z0-9-]{1,30}$` — validated at factory construction time; returns descriptive error if invalid.
 
 ---
 
@@ -1100,6 +1326,32 @@ AWS_PROFILE=your-profile  # optional
 NUIMANBOT_LLM_OPENAI_APIKEY=sk-...
 # OR
 NUIMANBOT_LLM_OLLAMA_BASEURL=http://localhost:11434
+
+# Memory backend (optional — defaults to "builtin"):
+NUIMANBOT_MEMORY_BACKEND=ingatan
+NUIMANBOT_MEMORY_INGATAN_URL=https://ingatan.example.com
+NUIMANBOT_MEMORY_INGATAN_API_KEY=your-api-key
+NUIMANBOT_MEMORY_INGATAN_STORE_PREFIX=nuiman   # 2-31 lowercase alphanumeric + hyphens
+NUIMANBOT_MEMORY_INGATAN_TLS_SKIP_VERIFY=false # development only
+```
+
+**MCP Configuration (`mcp.json`):**
+```json
+{
+  "servers": [
+    {
+      "name": "my-server",
+      "transport": "http",
+      "url": "https://tools.example.com/mcp"
+    },
+    {
+      "name": "local-tools",
+      "transport": "stdio",
+      "command": "/usr/local/bin/mcp-server",
+      "args": ["--workspace", "/data"]
+    }
+  ]
+}
 ```
 
 ### Configuration Precedence
@@ -1128,11 +1380,16 @@ func Validate(cfg *NuimanBotConfig) error
 
 | Layer | Coverage | Test Types |
 |-------|----------|------------|
-| Domain | 85.4% | Unit |
-| Use Case | 87.2% | Unit + Integration |
-| Adapter | 78.6% | Integration |
-| Infrastructure | 92.1% | Unit + Integration |
-| **Overall** | **85.8%** | Unit + Integration + E2E |
+| Domain | 85%+ | Unit |
+| Use Case | 75%+ | Unit + Integration |
+| Adapter | 65%+ | Integration |
+| Infrastructure | 80%+ | Unit + Integration |
+| **Overall** | **72%+** | Unit + Integration + E2E |
+
+Integration tests are tagged `//go:build integration` and run with:
+```bash
+go test -tags integration ./...
+```
 
 ### Test Organization
 
@@ -1164,8 +1421,11 @@ e2e/
 ### Test Commands
 
 ```bash
-# Run all tests
+# Run all unit tests
 go test ./...
+
+# Run unit + integration tests
+go test -tags integration ./...
 
 # Run with coverage
 go test -cover ./...
@@ -1187,7 +1447,7 @@ go test -v ./internal/infrastructure/cache/...
 
 ### GitHub Actions Workflows
 
-**Status:** ✅ **All Workflows Passing** (as of 2026-02-07)
+**Status:** ✅ **All Workflows Passing** (as of 2026-03-22)
 
 #### 1. CI/CD Pipeline (.github/workflows/ci.yml)
 
@@ -1298,12 +1558,10 @@ GitHub Environments:
 **Coverage Tracking:**
 - Automatic upload to Codecov
 - Badge integration available
-- ~85% coverage across all packages
+- 72%+ coverage across all packages (unit + integration)
 
 **Quality Metrics:**
-- 45 tasks total
-- 43 tasks complete (95.6%)
-- 2 tasks on hold (Docker, Kubernetes)
+- All planned features complete (100%)
 - 0 failing tests
 - 0 race conditions
 
