@@ -11,6 +11,12 @@ import (
 	"nuimanbot/internal/infrastructure/tracing"
 )
 
+// metricExpiredCellsSkipped is the logical name of the counter that tracks expired cells
+// skipped during recall. The Prometheus metric name is memory_recall_expired_cells_skipped_total.
+// A steadily increasing value indicates expired cells are accumulating in the Ingatan backend.
+// See support_docs/ingatan-operations.md for manual cleanup instructions.
+const metricExpiredCellsSkipped = "memory.recall.expired_cells_skipped"
+
 // MemoryRecallService handles memory retrieval and ranking
 type MemoryRecallService struct {
 	cellRepo  memoryv2.MemoryCellRepository
@@ -160,6 +166,17 @@ func (s *MemoryRecallService) applyBudgetWithScenes(
 	usedScenes := make(map[string]bool)
 
 	for _, cell := range cells {
+		// Skip expired cells and record the metric so operators can detect accumulation.
+		// See metricExpiredCellsSkipped and support_docs/ingatan-operations.md.
+		if cell.IsExpired() {
+			slog.Debug("memory recall: skipping expired cell",
+				"metric", metricExpiredCellsSkipped,
+				"cell_id", cell.ID,
+			)
+			metrics.MemoryRecallExpiredCellsSkipped.Inc()
+			continue
+		}
+
 		// Estimate tokens for this cell
 		cellTokens := s.estimateTokens(cell.Content)
 
