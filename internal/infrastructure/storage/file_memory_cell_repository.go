@@ -561,14 +561,15 @@ func (r *FileMemoryCellRepository) GetHighSalience(ctx context.Context, conversa
 	return cells, nil
 }
 
-// DeleteExpired removes cells past their expiration time
+// DeleteExpired removes cells past their expiration time.
+// Expired cells are collected in a single pass; the index is updated once at the end
+// to prevent index/file divergence if a mid-loop index save fails.
 func (r *FileMemoryCellRepository) DeleteExpired(ctx context.Context) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	now := time.Now()
 
-	// Get all cells
 	cellsDir := r.getCellsDir()
 	entries, err := os.ReadDir(cellsDir)
 	if err != nil {
@@ -578,13 +579,18 @@ func (r *FileMemoryCellRepository) DeleteExpired(ctx context.Context) (int, erro
 		return 0, fmt.Errorf("failed to read cells directory: %w", err)
 	}
 
-	count := 0
+	// Pass 1: identify expired cells without touching the index.
+	type expiredCell struct {
+		path string
+		cell memoryv2.MemoryCell
+	}
+	var toDelete []expiredCell
+
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
 
-		// Read cell
 		cellPath := filepath.Join(cellsDir, entry.Name())
 		data, err := os.ReadFile(cellPath)
 		if err != nil {
@@ -596,26 +602,34 @@ func (r *FileMemoryCellRepository) DeleteExpired(ctx context.Context) (int, erro
 			continue
 		}
 
-		// Check if expired
 		if cell.ExpiresAt != nil && cell.ExpiresAt.Before(now) {
-			// Delete cell
-			if err := os.Remove(cellPath); err != nil {
-				continue
-			}
+			toDelete = append(toDelete, expiredCell{path: cellPath, cell: cell})
+		}
+	}
 
-			// Update index
-			index, err := r.loadIndex()
-			if err != nil {
-				continue
-			}
+	if len(toDelete) == 0 {
+		return 0, nil
+	}
 
-			r.removeFromIndex(index, &cell)
+	// Pass 2: delete files, tracking which succeeded.
+	index, err := r.loadIndex()
+	if err != nil {
+		return 0, fmt.Errorf("failed to load index: %w", err)
+	}
 
-			if err := r.saveIndex(index); err != nil {
-				continue
-			}
+	count := 0
+	for _, ec := range toDelete {
+		if err := os.Remove(ec.path); err != nil {
+			continue
+		}
+		r.removeFromIndex(index, &ec.cell)
+		count++
+	}
 
-			count++
+	// Single index save for all deletions.
+	if count > 0 {
+		if err := r.saveIndex(index); err != nil {
+			return count, fmt.Errorf("cells deleted but failed to save index: %w", err)
 		}
 	}
 

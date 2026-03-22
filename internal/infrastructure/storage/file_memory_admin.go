@@ -31,15 +31,17 @@ func NewFileMemoryAdmin(
 
 // Stats returns overall memory system statistics.
 func (a *FileMemoryAdmin) Stats(ctx context.Context) (*cliadapter.MemoryStats, error) {
-	// Count cells via index
+	// Count cells via index — hold RLock for the entire read to avoid a TOCTOU race.
 	a.cellRepo.mu.RLock()
 	index, err := a.cellRepo.loadIndex()
+	cellCount := 0
+	if err == nil {
+		cellCount = len(index.BySalience)
+	}
 	a.cellRepo.mu.RUnlock()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load index: %w", err)
 	}
-
-	cellCount := len(index.BySalience)
 
 	// Count scenes
 	scenes, err := a.sceneRepo.List(ctx)
@@ -63,14 +65,18 @@ func (a *FileMemoryAdmin) Stats(ctx context.Context) (*cliadapter.MemoryStats, e
 
 // CountCellsByConversation counts memory cells for a specific conversation.
 func (a *FileMemoryAdmin) CountCellsByConversation(ctx context.Context, conversationID string) (int, error) {
+	// Hold RLock for the entire read to avoid a TOCTOU race.
 	a.cellRepo.mu.RLock()
 	index, err := a.cellRepo.loadIndex()
+	count := 0
+	if err == nil {
+		count = len(index.ByConvID[conversationID])
+	}
 	a.cellRepo.mu.RUnlock()
 	if err != nil {
 		return 0, fmt.Errorf("failed to load index: %w", err)
 	}
-
-	return len(index.ByConvID[conversationID]), nil
+	return count, nil
 }
 
 // DeleteCellsByConversation removes all memory cells for a conversation.
