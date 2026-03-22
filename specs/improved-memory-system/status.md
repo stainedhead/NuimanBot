@@ -1,7 +1,7 @@
 # Status: Improved Memory System
 
 **Last Updated:** 2026-03-22
-**Overall Progress:** 0% (0/7 phases complete)
+**Overall Progress:** 14% (1/7 phases complete)
 
 ---
 
@@ -13,15 +13,15 @@
 | Phase 2 | TLS Auto-Generation + Server Upgrades | Not Started | 0% |
 | Phase 3 | Web Admin Security Gap Fixes | Not Started | 0% |
 | Phase 4 | REST API Security Controls | Not Started | 0% |
-| Phase 5 | MCP Client — Transport + Protocol | Not Started | 0% |
+| Phase 5 | MCP Client — Transport + Protocol | Complete | 100% |
 | Phase 6 | MCP Client — Tool Bridge + Startup Integration | Not Started | 0% |
 | Phase 7 | Integration Testing (Ingatan end-to-end) | Not Started | 0% |
 
 ---
 
-## Current Phase: Not Started
+## Current Phase: Phase 5 Complete — Phase 6 Ready
 
-**Next Action:** Begin Phase 1 — Ingatan Bridge
+**Next Action:** Begin Phase 6 — MCP Tool Bridge + Startup Integration
 
 ---
 
@@ -71,15 +71,35 @@
 **Status:** Not Started | **Progress:** 0%
 
 ### Phase 5 — MCP Client Transport + Protocol
-- [ ] Task 5.1 — `mcp.json` loader + env substitution
-- [ ] Task 5.2 — `Transport` interface
-- [ ] Task 5.3 — HTTP transport implementation
-- [ ] Task 5.4 — stdio transport implementation
-- [ ] Task 5.5 — JSON-RPC client (`initialize`, `tools/list`, `tools/call`)
-- [ ] Task 5.6 — Code review + refactor (agent-driven)
-- [ ] Task 5.7 — Quality gate validation
+- [x] Task 5.1 — `mcp.json` loader + env substitution
+- [x] Task 5.2 — `Transport` interface
+- [x] Task 5.3 — HTTP transport implementation
+- [x] Task 5.4 — stdio transport implementation
+- [x] Task 5.5 — JSON-RPC client (`initialize`, `tools/list`, `tools/call`)
+- [x] Task 5.6 — Code review + refactor (full TDD cycle with Red/Green/Refactor)
+- [x] Task 5.7 — Quality gate validation (0 lint issues, all 41 tests pass with -race)
 
-**Status:** Not Started | **Progress:** 0%
+**Status:** Complete | **Progress:** 100%
+
+**Files Created:**
+- `internal/infrastructure/mcp/jsonrpc.go` — JSON-RPC 2.0 request/response types
+- `internal/infrastructure/mcp/transport.go` — Transport interface
+- `internal/infrastructure/mcp/config_loader.go` — mcp.json loader + env substitution
+- `internal/infrastructure/mcp/config_loader_test.go` — 11 tests
+- `internal/infrastructure/mcp/http_transport.go` — HTTP transport implementation
+- `internal/infrastructure/mcp/http_transport_test.go` — 9 tests
+- `internal/infrastructure/mcp/stdio_transport.go` — stdio transport implementation
+- `internal/infrastructure/mcp/stdio_transport_test.go` — 7 tests
+- `internal/infrastructure/mcp/client.go` — MCPClient with Initialize/ListTools/CallTool
+- `internal/infrastructure/mcp/client_test.go` — 12 tests (using mockTransport)
+
+**Notes:**
+- Request IDs use `sync/atomic` for thread safety in HTTP transport
+- stdio transport serializes calls with `sync.Mutex` (one request at a time)
+- Context cancellation propagated to both transports
+- JSON-RPC error responses mapped to Go errors
+- `initialized` guard enforced before ListTools/CallTool
+- Pre-existing lint issues in other packages are not related to Phase 5
 
 ### Phase 6 — MCP Tool Bridge + Startup Integration
 - [ ] Task 6.1 — `MCPToolAdapter` implementing `domain.Tool`
