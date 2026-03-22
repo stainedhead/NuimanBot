@@ -204,6 +204,16 @@ var (
 		},
 	)
 
+	// MemoryRecallExpiredCellsSkipped counts cells skipped during recall because
+	// their expires_at has passed. A steadily increasing value indicates expired cells
+	// are accumulating in the Ingatan backend (see R-08 and support_docs/ingatan-operations.md).
+	MemoryRecallExpiredCellsSkipped = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "memory_recall_expired_cells_skipped_total",
+			Help: "Total number of memory cells skipped during recall because they are expired",
+		},
+	)
+
 	// Rate Limiting Metrics
 	RateLimitExceeded = promauto.NewCounterVec(
 		prometheus.CounterOpts{

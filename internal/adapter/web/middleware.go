@@ -20,35 +20,63 @@ const (
 
 	// sanitizeMaxLength is the maximum input length passed to the security validator.
 	sanitizeMaxLength = 1024
+
+	// loginBucketEvictInterval is how often the background eviction goroutine runs.
+	loginBucketEvictInterval = 10 * time.Minute
+
+	// loginBucketIdleTimeout is the maximum time an IP bucket can be idle before eviction.
+	loginBucketIdleTimeout = 1 * time.Hour
 )
+
+// ipBucket pairs a token bucket with the last time it was accessed.
+type ipBucket struct {
+	bucket   *ratelimit.TokenBucket
+	lastUsed time.Time
+}
 
 // loginRateLimiterStore manages per-IP token buckets for login rate limiting.
 // It is safe for concurrent use.
 type loginRateLimiterStore struct {
 	mu      sync.Mutex
-	buckets map[string]*ratelimit.TokenBucket
+	buckets map[string]*ipBucket
 }
 
-// newLoginRateLimiterStore creates an empty per-IP rate limiter store.
+// newLoginRateLimiterStore creates an empty per-IP rate limiter store and starts
+// a background goroutine that periodically evicts idle buckets to prevent unbounded
+// memory growth from IPs that never return (e.g., port scanners).
 func newLoginRateLimiterStore() *loginRateLimiterStore {
-	return &loginRateLimiterStore{
-		buckets: make(map[string]*ratelimit.TokenBucket),
+	s := &loginRateLimiterStore{
+		buckets: make(map[string]*ipBucket),
 	}
+	// Run eviction on a fixed interval rather than per-request to avoid lock
+	// contention and to keep the eviction cost O(n) amortized over many requests.
+	go func() {
+		ticker := time.NewTicker(loginBucketEvictInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			s.evictIdle(loginBucketIdleTimeout)
+		}
+	}()
+	return s
 }
 
 // allow returns true when the given IP is allowed to attempt a login.
-// The first call for an IP creates a fresh bucket.
+// The first call for an IP creates a fresh bucket; subsequent calls stamp lastUsed.
 func (s *loginRateLimiterStore) allow(ip string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	bucket, ok := s.buckets[ip]
+	entry, ok := s.buckets[ip]
 	if !ok {
 		refillInterval := loginRateLimitWindow / time.Duration(loginRateLimitCapacity)
-		bucket = ratelimit.NewTokenBucket(loginRateLimitCapacity, refillInterval)
-		s.buckets[ip] = bucket
+		entry = &ipBucket{
+			bucket:   ratelimit.NewTokenBucket(loginRateLimitCapacity, refillInterval),
+			lastUsed: time.Now(),
+		}
+		s.buckets[ip] = entry
 	}
-	return bucket.Allow()
+	entry.lastUsed = time.Now()
+	return entry.bucket.Allow()
 }
 
 // reset removes the rate-limit bucket for the given IP, effectively resetting
@@ -57,6 +85,20 @@ func (s *loginRateLimiterStore) reset(ip string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.buckets, ip)
+}
+
+// evictIdle removes buckets that have not been used within maxIdleTime.
+// This prevents unbounded map growth from IPs that send a single login attempt
+// and never return (e.g., automated scanners).
+func (s *loginRateLimiterStore) evictIdle(maxIdleTime time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cutoff := time.Now().Add(-maxIdleTime)
+	for ip, entry := range s.buckets {
+		if entry.lastUsed.Before(cutoff) {
+			delete(s.buckets, ip)
+		}
+	}
 }
 
 // inputValidator is a package-level validator used for form value sanitization.
