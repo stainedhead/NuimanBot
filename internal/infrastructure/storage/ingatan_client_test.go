@@ -579,5 +579,65 @@ func TestIngatanHTTPClient_RefreshErrorDoesNotUpdateCache(t *testing.T) {
 	}
 }
 
+// TestIngatanHTTPClient_ConcurrentRefreshSerialised verifies that under concurrent
+// load with an already-expired token, exactly one token exchange is made to the
+// Ingatan auth endpoint. Without serialisation, multiple goroutines could each
+// observe needsRefresh()==true before any of them completes the refresh, resulting
+// in redundant token exchanges that can trigger auth-endpoint rate limiting.
+func TestIngatanHTTPClient_ConcurrentRefreshSerialised(t *testing.T) {
+	var tokenHits atomic.Int64
+
+	srv := newTestIngatanServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		tokenHits.Add(1)
+		// Return a valid token that expires far in the future so that the second
+		// goroutine to acquire refreshMu sees needsRefresh()==false and skips the call.
+		exp := time.Now().Add(24 * time.Hour).Format(time.RFC3339)
+		if err := json.NewEncoder(w).Encode(map[string]string{
+			"token":      "concurrent-jwt-token",
+			"expires_at": exp,
+		}); err != nil {
+			http.Error(w, "encode error", http.StatusInternalServerError)
+		}
+	})
+	mux := srv.Config.Handler.(*http.ServeMux)
+	mux.HandleFunc("/api/v1/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	client := newTestIngatanClient(srv.URL)
+
+	// Pre-fill the cache with an expired token so all 20 goroutines immediately
+	// see needsRefresh()==true before the first refresh completes.
+	client.tokenCache.mu.Lock()
+	client.tokenCache.token = "expired-token"
+	client.tokenCache.expiresAt = time.Now().Add(-1 * time.Hour)
+	client.tokenCache.mu.Unlock()
+
+	const goroutines = 20
+	var wg sync.WaitGroup
+	// start is closed to release all goroutines simultaneously.
+	start := make(chan struct{})
+
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start // wait for the gun
+			resp, err := client.Do(context.Background(), http.MethodGet, "/api/v1/health", nil)
+			if err != nil {
+				return
+			}
+			resp.Body.Close()
+		}()
+	}
+
+	close(start) // release all goroutines at once
+	wg.Wait()
+
+	if got := tokenHits.Load(); got != 1 {
+		t.Errorf("expected exactly 1 token exchange under concurrent load, got %d", got)
+	}
+}
+
 // Compile-time type assertion: *http.Transport satisfies http.RoundTripper.
 var _ http.RoundTripper = (*http.Transport)(nil)
