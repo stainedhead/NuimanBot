@@ -5,10 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"nuimanbot/internal/domain/memoryv2"
 )
+
+// maxSceneListLimit caps the Ingatan search TopK for scene listing.
+// Ingatan does not support pagination for this endpoint. If the number of scenes in a store
+// approaches this limit, List() will emit a warning indicating possible truncation.
+const maxSceneListLimit = 10_000
 
 // IngatanMemorySceneRepository implements memoryv2.MemorySceneRepository using the Ingatan REST API.
 // Scene memories are stored with tags ["_scene", scene_name] and metadata containing the scene name,
@@ -97,7 +103,7 @@ func (r *IngatanMemorySceneRepository) List(ctx context.Context) ([]*memoryv2.Me
 	payload, err := json.Marshal(ingatanSearchRequest{
 		Query: "_scene",
 		Mode:  "hybrid",
-		TopK:  1000,
+		TopK:  maxSceneListLimit,
 		Tags:  []string{"_scene"},
 	})
 	if err != nil {
@@ -134,6 +140,12 @@ func (r *IngatanMemorySceneRepository) List(ctx context.Context) ([]*memoryv2.Me
 		}
 		scenes = append(scenes, scene)
 	}
+
+	if len(scenes) == maxSceneListLimit {
+		slog.Warn("ingatan: scene list may be truncated — result count equals limit",
+			"count", len(scenes), "limit", maxSceneListLimit)
+	}
+
 	return scenes, nil
 }
 
