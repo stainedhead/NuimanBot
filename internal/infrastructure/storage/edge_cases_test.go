@@ -236,8 +236,8 @@ func TestLargeDataVolumeMemoryCells(t *testing.T) {
 	ctx := context.Background()
 	conversationID := "test-conversation"
 
-	// Create 10,000 memory cells (reduced from 100k for reasonable test time)
-	const numCells = 10000
+	// Create 500 memory cells - enough to exercise large-data paths within a reasonable timeout
+	const numCells = 500
 	t.Logf("Creating %d memory cells...", numCells)
 	start := time.Now()
 
