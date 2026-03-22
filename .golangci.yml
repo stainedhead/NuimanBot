@@ -49,7 +49,7 @@ issues:
   # Exclude specific patterns that are acceptable
   exclude-rules:
     # Allow unchecked errors in test files (focus on production code quality)
-    - path: _test\.go
+    - path: .*_test\.go
       linters:
         - errcheck
 
@@ -59,12 +59,12 @@ issues:
         - errcheck
 
     # Allow unused code in test files
-    - path: _test\.go
+    - path: .*_test\.go
       linters:
         - unused
 
     # Allow context.WithValue with string keys in tests (matches implementation)
-    - path: _test\.go
+    - path: .*_test\.go
       linters:
         - staticcheck
       text: "SA1029.*should not use built-in type"
@@ -74,3 +74,10 @@ issues:
         - staticcheck
       text: "SA9003.*empty branch"
       source: "// (Log|Best effort)"
+
+    # Allow unchecked defer resp.Body.Close() — idiomatic Go pattern for HTTP clients.
+    # The error from Body.Close is only meaningful when draining the body is needed;
+    # callers that check the status code first don't need the close error.
+    - linters:
+        - errcheck
+      text: "Error return value of .resp.Body.Close. is not checked"
