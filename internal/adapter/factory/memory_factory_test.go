@@ -1,6 +1,7 @@
 package factory_test
 
 import (
+	"strings"
 	"testing"
 
 	"nuimanbot/internal/adapter/factory"
@@ -105,5 +106,88 @@ func TestBuildMemoryRepositories_Ingatan_ValidConfig(t *testing.T) {
 	}
 	if _, ok := sceneRepo.(*storage.IngatanMemorySceneRepository); !ok {
 		t.Errorf("Expected *storage.IngatanMemorySceneRepository for ingatan, got %T", sceneRepo)
+	}
+}
+
+// TestBuildMemoryRepositories_StorePrefix_Invalid verifies that an invalid store_prefix
+// is rejected at startup before any client construction.
+func TestBuildMemoryRepositories_StorePrefix_Invalid(t *testing.T) {
+	cfg := &config.NuimanBotConfig{
+		Memory: config.MemoryConfig{
+			Backend: config.MemoryBackendIngatan,
+			Ingatan: config.IngatanConfig{
+				URL:         "http://127.0.0.1:19999",
+				APIKey:      domain.NewSecureStringFromString("test-key"),
+				StorePrefix: "My Bot!", // spaces and special chars — invalid
+			},
+		},
+	}
+
+	_, _, err := factory.BuildMemoryRepositories(cfg)
+	if err == nil {
+		t.Fatal("Expected error for invalid store_prefix, got nil")
+	}
+	if !strings.Contains(err.Error(), "store_prefix") {
+		t.Errorf("Expected error to contain %q, got: %v", "store_prefix", err)
+	}
+}
+
+// TestBuildMemoryRepositories_StorePrefix_ValidNuiman verifies that the default
+// prefix "nuiman" passes validation.
+func TestBuildMemoryRepositories_StorePrefix_ValidNuiman(t *testing.T) {
+	cfg := &config.NuimanBotConfig{
+		Memory: config.MemoryConfig{
+			Backend: config.MemoryBackendIngatan,
+			Ingatan: config.IngatanConfig{
+				URL:         "http://127.0.0.1:19999",
+				APIKey:      domain.NewSecureStringFromString("test-key"),
+				StorePrefix: "nuiman",
+			},
+		},
+	}
+
+	_, _, err := factory.BuildMemoryRepositories(cfg)
+	if err != nil {
+		t.Fatalf("Expected no error for valid prefix %q, got: %v", "nuiman", err)
+	}
+}
+
+// TestBuildMemoryRepositories_StorePrefix_Empty verifies that an empty store_prefix
+// is accepted (the factory will default to "nuiman").
+func TestBuildMemoryRepositories_StorePrefix_Empty(t *testing.T) {
+	cfg := &config.NuimanBotConfig{
+		Memory: config.MemoryConfig{
+			Backend: config.MemoryBackendIngatan,
+			Ingatan: config.IngatanConfig{
+				URL:         "http://127.0.0.1:19999",
+				APIKey:      domain.NewSecureStringFromString("test-key"),
+				StorePrefix: "", // empty — use default "nuiman"
+			},
+		},
+	}
+
+	_, _, err := factory.BuildMemoryRepositories(cfg)
+	if err != nil {
+		t.Fatalf("Expected no error for empty store_prefix (defaults to nuiman), got: %v", err)
+	}
+}
+
+// TestBuildMemoryRepositories_StorePrefix_ValidHyphenated verifies that a
+// hyphenated alphanumeric prefix passes validation.
+func TestBuildMemoryRepositories_StorePrefix_ValidHyphenated(t *testing.T) {
+	cfg := &config.NuimanBotConfig{
+		Memory: config.MemoryConfig{
+			Backend: config.MemoryBackendIngatan,
+			Ingatan: config.IngatanConfig{
+				URL:         "http://127.0.0.1:19999",
+				APIKey:      domain.NewSecureStringFromString("test-key"),
+				StorePrefix: "valid-prefix-123",
+			},
+		},
+	}
+
+	_, _, err := factory.BuildMemoryRepositories(cfg)
+	if err != nil {
+		t.Fatalf("Expected no error for valid prefix %q, got: %v", "valid-prefix-123", err)
 	}
 }

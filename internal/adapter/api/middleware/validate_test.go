@@ -117,3 +117,93 @@ func TestValidateMiddleware_MalformedJSON_Returns400(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
 }
+
+// TestValidateMiddleware_ArrayWithInjectionString_Returns400 ensures that injection
+// patterns inside top-level JSON array string elements are rejected.
+func TestValidateMiddleware_ArrayWithInjectionString_Returns400(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mw := middleware.Validate()(next)
+
+	body := []byte(`{"tags":["<script>alert(1)</script>"]}`)
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	mw.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+
+	var resp map[string]string
+	err := json.Unmarshal(rr.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	assert.Equal(t, "bad_request", resp["error"])
+}
+
+// TestValidateMiddleware_ArrayOfObjectsWithInjection_Returns400 ensures that injection
+// patterns inside objects nested within a JSON array are rejected.
+func TestValidateMiddleware_ArrayOfObjectsWithInjection_Returns400(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mw := middleware.Validate()(next)
+
+	body := []byte(`{"items":[{"desc":"<img src=x onerror=alert()>"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	mw.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+
+	var resp map[string]string
+	err := json.Unmarshal(rr.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	assert.Equal(t, "bad_request", resp["error"])
+}
+
+// TestValidateMiddleware_ArrayWithSafeStrings_PassesThrough ensures that safe string
+// values inside JSON arrays are not rejected.
+func TestValidateMiddleware_ArrayWithSafeStrings_PassesThrough(t *testing.T) {
+	called := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+	mw := middleware.Validate()(next)
+
+	body := []byte(`{"tags":["safe","also-safe"]}`)
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	mw.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.True(t, called, "next handler should have been called for safe input")
+}
+
+// TestValidateMiddleware_NestedArrayOfArrayOfMapWithInjection_Returns400 ensures that
+// injection patterns in deeply nested array-of-array-of-object structures are rejected.
+func TestValidateMiddleware_NestedArrayOfArrayOfMapWithInjection_Returns400(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mw := middleware.Validate()(next)
+
+	body := []byte(`{"matrix":[[{"k":"<script>"}]]}`)
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+
+	mw.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+
+	var resp map[string]string
+	err := json.Unmarshal(rr.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	assert.Equal(t, "bad_request", resp["error"])
+}

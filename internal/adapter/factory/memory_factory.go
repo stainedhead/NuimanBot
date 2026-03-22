@@ -4,11 +4,30 @@ package factory
 
 import (
 	"fmt"
+	"regexp"
 
 	"nuimanbot/internal/config"
 	"nuimanbot/internal/domain/memoryv2"
 	"nuimanbot/internal/infrastructure/storage"
 )
+
+// validStorePrefixRE matches valid Ingatan store prefixes: 2–31 lowercase
+// alphanumeric characters or hyphens, starting with a letter or digit.
+// Compiled once at package level.
+var validStorePrefixRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,30}$`)
+
+// validateStorePrefix returns nil if prefix is empty (caller will use the default)
+// or if it satisfies Ingatan store naming constraints. Returns a descriptive error
+// otherwise.
+func validateStorePrefix(prefix string) error {
+	if prefix == "" {
+		return nil // empty — factory will substitute default "nuiman"
+	}
+	if !validStorePrefixRE.MatchString(prefix) {
+		return fmt.Errorf("ingatan: store_prefix %q is invalid: must be 2–31 lowercase alphanumeric characters or hyphens, starting with a letter or digit", prefix)
+	}
+	return nil
+}
 
 // BuildMemoryRepositories selects and constructs memory repositories based on cfg.Memory.Backend.
 //
@@ -40,11 +59,16 @@ func buildBuiltinRepositories(cfg *config.NuimanBotConfig) (memoryv2.MemoryCellR
 }
 
 // buildIngatanRepositories creates Ingatan-backed memory repositories.
-// Returns an error if the Ingatan URL is not configured.
+// Returns an error if the Ingatan URL is not configured or if the store_prefix
+// does not satisfy Ingatan naming constraints.
 func buildIngatanRepositories(cfg *config.NuimanBotConfig) (memoryv2.MemoryCellRepository, memoryv2.MemorySceneRepository, error) {
 	ingatanCfg := cfg.Memory.Ingatan
 	if ingatanCfg.URL == "" {
 		return nil, nil, fmt.Errorf("ingatan backend selected but memory.ingatan.url is not configured")
+	}
+
+	if err := validateStorePrefix(ingatanCfg.StorePrefix); err != nil {
+		return nil, nil, err
 	}
 
 	prefix := ingatanCfg.StorePrefix

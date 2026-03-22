@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -290,5 +291,133 @@ func TestIngatanMemorySceneRepository_Delete_NotFound(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), memoryv2.ErrNotFound.Error()) {
 		t.Errorf("Expected ErrNotFound, got: %v", err)
+	}
+}
+
+// makeNSceneResults returns a search response containing n scene results.
+func makeNSceneResults(n int) map[string]interface{} {
+	results := make([]interface{}, n)
+	for i := range results {
+		results[i] = map[string]interface{}{
+			"memory": map[string]interface{}{
+				"id":         "ingatan-scene-id-000",
+				"store":      "test_scenes",
+				"content":    "Scene summary",
+				"tags":       []string{"_scene", "scene-name"},
+				"source":     "manual",
+				"source_ref": "",
+				"metadata": map[string]interface{}{
+					metaKeySceneName:   "scene-name",
+					metaKeyTokenCount:  float64(10),
+					metaKeyNuimanScene: "scene-name",
+				},
+				"created_at": time.Now().UTC().Format(time.RFC3339),
+				"updated_at": time.Now().UTC().Format(time.RFC3339),
+			},
+			"score": 0.99,
+		}
+	}
+	return map[string]interface{}{"results": results}
+}
+
+// captureSceneListLogs replaces the default slog handler with a capturing handler for the
+// duration of the test and returns the handler so callers can inspect logged records.
+func captureSceneListLogs(t *testing.T) *testLogHandler {
+	t.Helper()
+	handler := &testLogHandler{}
+	original := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(original) })
+	return handler
+}
+
+// TestIngatanMemorySceneRepository_List_TruncationWarning_ExactLimit verifies that
+// List() emits a slog.Warn containing "truncated" or "limit" when the number of returned
+// scenes equals maxSceneListLimit (R-11).
+func TestIngatanMemorySceneRepository_List_TruncationWarning_ExactLimit(t *testing.T) {
+	_, mux, client := newMockIngatan(t)
+	repo := NewIngatanMemorySceneRepository(client, "test")
+	handler := captureSceneListLogs(t)
+
+	mux.HandleFunc("/api/v1/stores/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/memories/search") {
+			_ = json.NewEncoder(w).Encode(makeNSceneResults(maxSceneListLimit))
+			return
+		}
+		http.NotFound(w, r)
+	})
+
+	scenes, err := repo.List(context.Background())
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	if len(scenes) != maxSceneListLimit {
+		t.Fatalf("Expected %d scenes, got %d", maxSceneListLimit, len(scenes))
+	}
+
+	found := false
+	for _, rec := range handler.records {
+		if rec.Level == slog.LevelWarn &&
+			(strings.Contains(rec.Message, "truncated") || strings.Contains(rec.Message, "limit")) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("Expected List() to emit a slog.Warn containing 'truncated' or 'limit' when result count equals maxSceneListLimit, but none was found")
+	}
+}
+
+// TestIngatanMemorySceneRepository_List_NoWarning_BelowLimit verifies that
+// List() does NOT emit a truncation warning when the result count is below maxSceneListLimit (R-11).
+func TestIngatanMemorySceneRepository_List_NoWarning_BelowLimit(t *testing.T) {
+	_, mux, client := newMockIngatan(t)
+	repo := NewIngatanMemorySceneRepository(client, "test")
+	handler := captureSceneListLogs(t)
+
+	mux.HandleFunc("/api/v1/stores/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/memories/search") {
+			_ = json.NewEncoder(w).Encode(makeNSceneResults(500))
+			return
+		}
+		http.NotFound(w, r)
+	})
+
+	if _, err := repo.List(context.Background()); err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+
+	for _, rec := range handler.records {
+		if rec.Level == slog.LevelWarn &&
+			(strings.Contains(rec.Message, "truncated") || strings.Contains(rec.Message, "limit")) {
+			t.Errorf("Expected no truncation warning for 500 scenes, but got: %s", rec.Message)
+		}
+	}
+}
+
+// TestIngatanMemorySceneRepository_List_NoWarning_Empty verifies that
+// List() does NOT emit a truncation warning when the result count is 0 (R-11).
+func TestIngatanMemorySceneRepository_List_NoWarning_Empty(t *testing.T) {
+	_, mux, client := newMockIngatan(t)
+	repo := NewIngatanMemorySceneRepository(client, "test")
+	handler := captureSceneListLogs(t)
+
+	mux.HandleFunc("/api/v1/stores/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/memories/search") {
+			_ = json.NewEncoder(w).Encode(makeNSceneResults(0))
+			return
+		}
+		http.NotFound(w, r)
+	})
+
+	if _, err := repo.List(context.Background()); err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+
+	for _, rec := range handler.records {
+		if rec.Level == slog.LevelWarn &&
+			(strings.Contains(rec.Message, "truncated") || strings.Contains(rec.Message, "limit")) {
+			t.Errorf("Expected no truncation warning for 0 scenes, but got: %s", rec.Message)
+		}
 	}
 }

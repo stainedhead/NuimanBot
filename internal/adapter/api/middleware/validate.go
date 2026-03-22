@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -61,6 +62,8 @@ func Validate() func(http.Handler) http.Handler {
 }
 
 // validateStringFields recursively validates all string values in the map using the validator.
+// It recurses into nested maps and arrays so that injection patterns cannot be hidden inside
+// JSON arrays at any depth.
 func validateStringFields(m map[string]interface{}, v *security.DefaultInputValidator) error {
 	for _, val := range m {
 		switch typed := val.(type) {
@@ -72,6 +75,33 @@ func validateStringFields(m map[string]interface{}, v *security.DefaultInputVali
 			if err := validateStringFields(typed, v); err != nil {
 				return err
 			}
+		case []interface{}:
+			for i, elem := range typed {
+				if err := validateElement(i, elem, v); err != nil {
+					return fmt.Errorf("array[%d]: %w", i, err)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// validateElement validates a single element from a JSON array. It handles strings,
+// nested maps, and nested arrays by recursing back into validateStringFields.
+func validateElement(i int, elem interface{}, v *security.DefaultInputValidator) error {
+	switch typedElem := elem.(type) {
+	case string:
+		if _, err := v.ValidateInput(context.Background(), typedElem, 1<<20); err != nil {
+			return err
+		}
+	case map[string]interface{}:
+		if err := validateStringFields(typedElem, v); err != nil {
+			return err
+		}
+	case []interface{}:
+		// Re-wrap nested array as a single-key map so validateStringFields can recurse into it.
+		if err := validateStringFields(map[string]interface{}{"_": typedElem}, v); err != nil {
+			return err
 		}
 	}
 	return nil

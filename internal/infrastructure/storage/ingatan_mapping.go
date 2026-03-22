@@ -3,6 +3,7 @@ package storage
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"time"
 
@@ -177,44 +178,63 @@ func memoryToScene(m ingatanMemory) (*memoryv2.MemoryScene, error) {
 	return scene, nil
 }
 
-// metaFloat64 extracts a float64 from a metadata map, handling both float64 and string types.
+// metaFloat64 extracts a float64 from a metadata map, handling float64, json.Number, and string
+// types.  Absent or nil values return 0 without a warning.  Unexpected non-nil types return 0
+// and emit a structured slog.Warn so operators can detect API contract changes.
 func metaFloat64(meta map[string]interface{}, key string) float64 {
 	v, ok := meta[key]
-	if !ok {
+	if !ok || v == nil {
 		return 0
 	}
-	switch val := v.(type) {
+	switch typed := v.(type) {
 	case float64:
-		return val
+		return typed
 	case json.Number:
-		f, _ := val.Float64()
-		return f
+		if f, err := typed.Float64(); err == nil {
+			return f
+		}
 	case string:
-		f, _ := strconv.ParseFloat(val, 64)
-		return f
-	default:
-		return 0
+		if f, err := strconv.ParseFloat(typed, 64); err == nil {
+			return f
+		}
 	}
+	logUnexpectedMetaType(key, v)
+	return 0
 }
 
-// metaInt extracts an int from a metadata map, handling float64, int, and string types.
+// metaInt extracts an int from a metadata map, handling int, float64, json.Number, and string
+// types.  Absent or nil values return 0 without a warning.  Unexpected non-nil types return 0
+// and emit a structured slog.Warn so operators can detect API contract changes.
 func metaInt(meta map[string]interface{}, key string) int {
 	v, ok := meta[key]
-	if !ok {
+	if !ok || v == nil {
 		return 0
 	}
-	switch val := v.(type) {
+	switch typed := v.(type) {
 	case int:
-		return val
+		return typed
 	case float64:
-		return int(val)
+		return int(typed)
 	case json.Number:
-		i, _ := val.Int64()
-		return int(i)
+		if i, err := typed.Int64(); err == nil {
+			return int(i)
+		}
 	case string:
-		i, _ := strconv.Atoi(val)
-		return i
-	default:
-		return 0
+		if i, err := strconv.Atoi(typed); err == nil {
+			return i
+		}
 	}
+	logUnexpectedMetaType(key, v)
+	return 0
+}
+
+// logUnexpectedMetaType emits a structured Warn log when a metadata field has a type that
+// none of the numeric extraction helpers can handle.  Callers use this to surface API
+// contract changes without panicking or silently corrupting domain values.
+func logUnexpectedMetaType(key string, v any) {
+	slog.Warn("ingatan: unexpected type for metadata field",
+		"key", key,
+		"type", fmt.Sprintf("%T", v),
+		"value", fmt.Sprintf("%v", v),
+	)
 }
