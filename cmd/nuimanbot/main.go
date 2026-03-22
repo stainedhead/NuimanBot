@@ -307,11 +307,12 @@ func main() {
 	var restServer *api.Server
 	if cfg.ExternalAPI.REST.Enabled {
 		jwtSecret := cfg.Security.EncryptionKey // Use app encryption key as JWT signing secret.
-		if jwtSecret == "" {
-			jwtSecret = "nuimanbot-default-jwt-secret-changeme"
-			slog.Warn("REST API JWT secret is empty — using insecure default; set security.encryption_key in config")
+		var err error
+		restServer, err = api.NewServer(cfg.ExternalAPI.REST, jwtSecret)
+		if err != nil {
+			slog.Error("REST API configuration error", "error", err)
+			os.Exit(1)
 		}
-		restServer = api.NewServer(cfg.ExternalAPI.REST, jwtSecret)
 		slog.Info("REST API server configured", "port", cfg.ExternalAPI.REST.Port)
 	}
 
