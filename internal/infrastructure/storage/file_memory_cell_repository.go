@@ -3,7 +3,6 @@ package storage
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"nuimanbot/internal/domain/memoryv2"
 	"os"
@@ -253,25 +252,20 @@ func (r *FileMemoryCellRepository) Create(ctx context.Context, cell *memoryv2.Me
 	return r.saveIndex(index)
 }
 
-// Get retrieves a cell by ID
-func (r *FileMemoryCellRepository) Get(ctx context.Context, id string) (*memoryv2.MemoryCell, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
+// readCell reads and parses a cell file without acquiring a lock.
+// Callers must hold at least a read lock.
+func (r *FileMemoryCellRepository) readCell(id string) (*memoryv2.MemoryCell, error) {
 	cellPath := r.getCellFile(id)
 
-	// Check if file exists
 	if _, err := os.Stat(cellPath); os.IsNotExist(err) {
-		return nil, errors.New("cell not found")
+		return nil, fmt.Errorf("%w: %s", memoryv2.ErrNotFound, id)
 	}
 
-	// Read file
 	data, err := os.ReadFile(cellPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read cell file: %w", err)
 	}
 
-	// Parse JSON
 	var cell memoryv2.MemoryCell
 	if err := json.Unmarshal(data, &cell); err != nil {
 		return nil, fmt.Errorf("failed to parse cell file: %w", err)
@@ -280,7 +274,15 @@ func (r *FileMemoryCellRepository) Get(ctx context.Context, id string) (*memoryv
 	return &cell, nil
 }
 
-// List retrieves cells matching the filter
+// Get retrieves a cell by ID.
+func (r *FileMemoryCellRepository) Get(ctx context.Context, id string) (*memoryv2.MemoryCell, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	return r.readCell(id)
+}
+
+// List retrieves cells matching the filter, applying all filter criteria.
 func (r *FileMemoryCellRepository) List(ctx context.Context, filter memoryv2.MemoryCellFilter) ([]*memoryv2.MemoryCell, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -290,29 +292,109 @@ func (r *FileMemoryCellRepository) List(ctx context.Context, filter memoryv2.Mem
 		return nil, err
 	}
 
-	// Get cell IDs matching filter
-	var cellIDs []string
-	if filter.ConversationID != "" {
-		cellIDs = index.ByConvID[filter.ConversationID]
-	} else {
-		// Get all cells
-		for scene, ids := range index.ByScene {
-			_ = scene
-			cellIDs = append(cellIDs, ids...)
+	// Collect candidate IDs using the most selective index first.
+	var candidateIDs []string
+	switch {
+	case filter.Scene != "":
+		candidateIDs = index.ByScene[filter.Scene]
+	case filter.ConversationID != "":
+		candidateIDs = index.ByConvID[filter.ConversationID]
+	default:
+		// No index restriction — collect all cell IDs.
+		seen := make(map[string]bool)
+		for _, ids := range index.ByScene {
+			for _, id := range ids {
+				if !seen[id] {
+					seen[id] = true
+					candidateIDs = append(candidateIDs, id)
+				}
+			}
 		}
 	}
 
-	// Load cells
-	cells := make([]*memoryv2.MemoryCell, 0, len(cellIDs))
-	for _, id := range cellIDs {
-		cell, err := r.Get(ctx, id)
+	now := time.Now()
+	cells := make([]*memoryv2.MemoryCell, 0, len(candidateIDs))
+
+	for _, id := range candidateIDs {
+		cell, err := r.readCell(id)
 		if err != nil {
-			continue // Skip cells that can't be loaded
+			continue // Skip unreadable cells
 		}
+
+		// Apply ConversationID filter (when Scene was the primary index).
+		if filter.ConversationID != "" && cell.ConversationID != filter.ConversationID {
+			continue
+		}
+
+		// Apply CellType filter.
+		if filter.CellType != nil && cell.CellType != *filter.CellType {
+			continue
+		}
+
+		// Apply MinSalience filter.
+		if filter.MinSalience != nil && cell.Salience < *filter.MinSalience {
+			continue
+		}
+
+		// Apply expiry filter.
+		if !filter.IncludeExpired && cell.ExpiresAt != nil && cell.ExpiresAt.Before(now) {
+			continue
+		}
+
 		cells = append(cells, cell)
 	}
 
+	// Apply Offset.
+	if filter.Offset > 0 {
+		if filter.Offset >= len(cells) {
+			return []*memoryv2.MemoryCell{}, nil
+		}
+		cells = cells[filter.Offset:]
+	}
+
+	// Apply Limit.
+	if filter.Limit > 0 && len(cells) > filter.Limit {
+		cells = cells[:filter.Limit]
+	}
+
 	return cells, nil
+}
+
+// Update persists changes to an existing cell, refreshing the search index.
+func (r *FileMemoryCellRepository) Update(ctx context.Context, cell *memoryv2.MemoryCell) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Validate cell.
+	if err := cell.Validate(); err != nil {
+		return fmt.Errorf("cell validation failed: %w", err)
+	}
+
+	// Load the current index so we can remove the old entry.
+	index, err := r.loadIndex()
+	if err != nil {
+		return err
+	}
+
+	// Load the existing cell to remove its old index entries.
+	existing, err := r.readCell(cell.ID)
+	if err != nil {
+		return err // propagates ErrNotFound
+	}
+	r.removeFromIndex(index, existing)
+
+	// Write the updated cell.
+	data, err := json.MarshalIndent(cell, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal cell: %w", err)
+	}
+	if err := r.writer.Write(r.getCellFile(cell.ID), data, 0644); err != nil {
+		return fmt.Errorf("failed to write cell file: %w", err)
+	}
+
+	// Re-index with updated values.
+	r.addToIndex(index, cell)
+	return r.saveIndex(index)
 }
 
 // Delete removes a cell by ID
@@ -321,21 +403,13 @@ func (r *FileMemoryCellRepository) Delete(ctx context.Context, id string) error 
 	defer r.mu.Unlock()
 
 	// Load cell first (to update index)
-	cellPath := r.getCellFile(id)
-	data, err := os.ReadFile(cellPath)
+	cell, err := r.readCell(id)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return errors.New("cell not found")
-		}
-		return fmt.Errorf("failed to read cell file: %w", err)
-	}
-
-	var cell memoryv2.MemoryCell
-	if err := json.Unmarshal(data, &cell); err != nil {
-		return fmt.Errorf("failed to parse cell file: %w", err)
+		return err
 	}
 
 	// Delete file
+	cellPath := r.getCellFile(id)
 	if err := os.Remove(cellPath); err != nil {
 		return fmt.Errorf("failed to delete cell file: %w", err)
 	}
@@ -346,7 +420,7 @@ func (r *FileMemoryCellRepository) Delete(ctx context.Context, id string) error 
 		return err
 	}
 
-	r.removeFromIndex(index, &cell)
+	r.removeFromIndex(index, cell)
 
 	return r.saveIndex(index)
 }
@@ -393,10 +467,10 @@ func (r *FileMemoryCellRepository) SearchFTS(ctx context.Context, query string, 
 	// Load cells up to limit
 	cells := make([]*memoryv2.MemoryCell, 0, limit)
 	for i, sc := range scoredCells {
-		if i >= limit {
+		if limit > 0 && i >= limit {
 			break
 		}
-		cell, err := r.Get(ctx, sc.id)
+		cell, err := r.readCell(sc.id)
 		if err != nil {
 			continue
 		}
@@ -406,7 +480,8 @@ func (r *FileMemoryCellRepository) SearchFTS(ctx context.Context, query string, 
 	return cells, nil
 }
 
-// GetByScene retrieves cells for a specific scene
+// GetByScene retrieves cells for a specific scene ordered by salience descending.
+// limit=0 means no limit.
 func (r *FileMemoryCellRepository) GetByScene(ctx context.Context, scene string, limit int) ([]*memoryv2.MemoryCell, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -418,30 +493,29 @@ func (r *FileMemoryCellRepository) GetByScene(ctx context.Context, scene string,
 
 	cellIDs := index.ByScene[scene]
 
-	// Load cells
 	cells := make([]*memoryv2.MemoryCell, 0, len(cellIDs))
 	for _, id := range cellIDs {
-		cell, err := r.Get(ctx, id)
+		cell, err := r.readCell(id)
 		if err != nil {
 			continue
 		}
 		cells = append(cells, cell)
 	}
 
-	// Sort by salience descending
 	sort.Slice(cells, func(i, j int) bool {
 		return cells[i].Salience > cells[j].Salience
 	})
 
-	// Apply limit
-	if len(cells) > limit {
+	if limit > 0 && len(cells) > limit {
 		cells = cells[:limit]
 	}
 
 	return cells, nil
 }
 
-// GetHighSalience retrieves cells above a salience threshold
+// GetHighSalience retrieves cells above a salience threshold ordered by salience descending.
+// When conversationID is empty, cells from all conversations are searched (global fallback).
+// limit=0 means no limit.
 func (r *FileMemoryCellRepository) GetHighSalience(ctx context.Context, conversationID string, threshold float64, limit int) ([]*memoryv2.MemoryCell, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -451,31 +525,36 @@ func (r *FileMemoryCellRepository) GetHighSalience(ctx context.Context, conversa
 		return nil, err
 	}
 
-	// Get cells for conversation
-	cellIDs := index.ByConvID[conversationID]
+	// Determine candidate IDs: conversation-scoped or global.
+	var candidateIDs []string
+	if conversationID != "" {
+		candidateIDs = index.ByConvID[conversationID]
+	} else {
+		// Global: collect all cell IDs that meet the salience threshold.
+		for id := range index.BySalience {
+			candidateIDs = append(candidateIDs, id)
+		}
+	}
 
-	// Filter and load cells above threshold
-	cells := make([]*memoryv2.MemoryCell, 0, len(cellIDs))
-	for _, id := range cellIDs {
+	cells := make([]*memoryv2.MemoryCell, 0, len(candidateIDs))
+	for _, id := range candidateIDs {
 		salience, found := index.BySalience[id]
 		if !found || salience < threshold {
 			continue
 		}
 
-		cell, err := r.Get(ctx, id)
+		cell, err := r.readCell(id)
 		if err != nil {
 			continue
 		}
 		cells = append(cells, cell)
 	}
 
-	// Sort by salience descending
 	sort.Slice(cells, func(i, j int) bool {
 		return cells[i].Salience > cells[j].Salience
 	})
 
-	// Apply limit
-	if len(cells) > limit {
+	if limit > 0 && len(cells) > limit {
 		cells = cells[:limit]
 	}
 
