@@ -36,6 +36,9 @@ dist/
 *.pem
 *.key
 
+# TLS certificates (auto-generated, never committed)
+data/certs/
+
 # Database files
 *.db
 *.db-shm

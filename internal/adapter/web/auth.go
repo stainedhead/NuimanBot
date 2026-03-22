@@ -27,6 +27,7 @@ type AuthService struct {
 	csrfTokens     map[string]bool
 	mu             sync.RWMutex
 	sessionTimeout time.Duration
+	secureCookies  bool // set to true when running under TLS
 }
 
 // AuthUser represents an authenticated user
@@ -327,7 +328,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		// Create session
 		sessionID := s.auth.createSessionWithFlags(username, user.Role, forceChange)
 
-		// Set session cookie
+		// Set session cookie — Secure flag is enabled when running under TLS.
 		http.SetCookie(w, &http.Cookie{
 			Name:     sessionCookieName,
 			Value:    sessionID,
@@ -335,7 +336,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			MaxAge:   int(sessionTimeout.Seconds()),
 			HttpOnly: true,
 			SameSite: http.SameSiteStrictMode,
-			Secure:   false, // Set to true in production with HTTPS
+			Secure:   s.auth.isSecureCookies(),
 		})
 
 		// Redirect default-credential users to change-password page.
@@ -530,3 +531,18 @@ const (
 	// Authentication always uses the stored hash from AddUser.
 	defaultAdminPasswordHash = "$2a$10$Y6HD25IiXnjpqGnkUrK02uZBvmdpzv6vB3eGFCcEeIn1jSZlsrd2e"
 )
+
+// setSecureCookies enables or disables the Secure flag on session cookies.
+// It should be called with true when the server is running under TLS.
+func (a *AuthService) setSecureCookies(secure bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.secureCookies = secure
+}
+
+// isSecureCookies returns whether the Secure flag should be set on session cookies.
+func (a *AuthService) isSecureCookies() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.secureCookies
+}
