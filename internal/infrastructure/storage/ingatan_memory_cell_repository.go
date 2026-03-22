@@ -113,74 +113,18 @@ func (r *IngatanMemoryCellRepository) ensureStore(ctx context.Context, storeName
 	return nil
 }
 
-// Get retrieves a MemoryCell by its nuiman_cell_id.
-// It searches by metadata filter since Ingatan stores cells by its own UUID.
-// Returns ErrNotFound if no cell matches.
-func (r *IngatanMemoryCellRepository) Get(ctx context.Context, id string) (*memoryv2.MemoryCell, error) {
-	// Search across all stores is not supported; we need to know the store.
-	// Use a metadata search via FTS with the nuiman_cell_id as query.
-	// This is a best-effort approach since Ingatan doesn't support direct metadata queries.
-	// We search all "known" stores — in practice, the ID contains enough info to retrieve.
-	// For simplicity, we search using the ID as the query which leverages keyword matching.
-	results, err := r.searchByMetaID(ctx, id)
-	if err != nil {
-		return nil, fmt.Errorf("ingatan: get: %w", err)
-	}
-	if len(results) == 0 {
-		return nil, fmt.Errorf("ingatan: get: %w", memoryv2.ErrNotFound)
-	}
-	return results[0], nil
-}
-
-// searchByMetaID searches for cells by nuiman_cell_id across a generic store.
-// Since we don't know the exact store, we use a placeholder approach.
-func (r *IngatanMemoryCellRepository) searchByMetaID(ctx context.Context, cellID string) ([]*memoryv2.MemoryCell, error) {
-	// Build a search request using the cell ID as query to leverage BM25 keyword matching.
-	payload, err := json.Marshal(ingatanSearchRequest{
-		Query: cellID,
-		Mode:  "hybrid",
-		TopK:  5,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("search by meta id: marshal: %w", err)
-	}
-
-	// Use a default store — in production, the caller should use List or SearchFTS.
-	// For Get by ID, we need to try the store derived from a known conversation ID.
-	// Since Ingatan stores are per-conversation, we search with a wildcard-like approach.
-	// Pragmatically, we return a not-found and let the caller handle it.
-	// A proper implementation would require knowing the conversationID.
-	// For now we search in a "global" search endpoint if available or return not found.
-	storeName := storeFor(r.storePrefix, cellID) // use cellID as conversationID proxy
-	resp, err := r.client.Do(ctx, http.MethodPost, "/api/v1/stores/"+storeName+"/memories/search", bytes.NewReader(payload))
-	if err != nil {
-		return nil, fmt.Errorf("search by meta id: %w", err)
-	}
-	defer resp.Body.Close() //nolint:errcheck // response body close is idiomatic Go
-
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, nil
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("search by meta id: unexpected status %d", resp.StatusCode)
-	}
-
-	var searchResp ingatanSearchResponse
-	if err := json.NewDecoder(resp.Body).Decode(&searchResp); err != nil {
-		return nil, fmt.Errorf("search by meta id: decode: %w", err)
-	}
-
-	cells := make([]*memoryv2.MemoryCell, 0, len(searchResp.Results))
-	for _, result := range searchResp.Results {
-		if metaCellID, ok := result.Memory.Metadata[metaKeyCellID].(string); ok && metaCellID == cellID {
-			cell, err := memoryToCell(result.Memory)
-			if err != nil {
-				continue
-			}
-			cells = append(cells, cell)
-		}
-	}
-	return cells, nil
+// Get is not supported by the Ingatan backend.
+//
+// Ingatan stores are partitioned per conversation: a cell can only be retrieved from the
+// store keyed to its conversationID. Without that context, the correct store cannot be
+// determined and any search would always target the wrong partition.
+//
+// Callers that need to fetch a cell by ID must use
+// List(ctx, MemoryCellFilter{ConversationID: "..."}) instead.
+// See ADR-2 in specs/post-memory-design-review/implementation-notes.md.
+func (r *IngatanMemoryCellRepository) Get(_ context.Context, id string) (*memoryv2.MemoryCell, error) {
+	return nil, fmt.Errorf("ingatan: get %q: %w: requires conversation context — use List with ConversationID filter",
+		id, memoryv2.ErrNotFound)
 }
 
 // List retrieves cells matching the provided filter.
