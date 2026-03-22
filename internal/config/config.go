@@ -184,6 +184,15 @@ type MemoryQMDConfig struct {
 	Limits               MemoryQMDLimitsConfig   `yaml:"limits"`
 }
 
+// TLSConfig holds TLS configuration for HTTP servers.
+type TLSConfig struct {
+	Enabled      bool     `yaml:"enabled"`
+	AutoGenerate bool     `yaml:"auto_generate"` // default: true — generate cert if absent
+	CertFile     string   `yaml:"cert_file"`     // e.g. "data/certs/server.crt"
+	KeyFile      string   `yaml:"key_file"`      // e.g. "data/certs/server.key"
+	Hosts        []string `yaml:"hosts"`         // default: ["localhost"]
+}
+
 // MemoryConfig defines the configuration for the agent's long-term memory.
 type MemoryConfig struct {
 	Backend   MemoryBackend       `yaml:"backend"`
