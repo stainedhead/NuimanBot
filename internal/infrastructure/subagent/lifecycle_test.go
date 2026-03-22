@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"nuimanbot/internal/domain"
+	"sync"
 	"testing"
 	"time"
 )
@@ -399,10 +400,13 @@ func TestLifecycleManager_MonitoringHook(t *testing.T) {
 
 	manager := NewLifecycleManager(executor)
 
-	// Track hook calls
+	// Track hook calls — mu protects hookCalls from the concurrent hook goroutine.
+	var mu sync.Mutex
 	var hookCalls []string
 	hook := func(subagentID string, status domain.SubagentStatus) {
+		mu.Lock()
 		hookCalls = append(hookCalls, subagentID+":"+string(status))
+		mu.Unlock()
 	}
 
 	manager.SetMonitoringHook(hook)
@@ -430,14 +434,19 @@ func TestLifecycleManager_MonitoringHook(t *testing.T) {
 	// Wait for completion
 	time.Sleep(200 * time.Millisecond)
 
+	mu.Lock()
+	calls := make([]string, len(hookCalls))
+	copy(calls, hookCalls)
+	mu.Unlock()
+
 	// Hook should have been called at least once
-	if len(hookCalls) == 0 {
+	if len(calls) == 0 {
 		t.Error("Monitoring hook was not called")
 	}
 
 	// Should have called with test-hook ID
 	found := false
-	for _, call := range hookCalls {
+	for _, call := range calls {
 		if call == "test-hook:running" || call == "test-hook:complete" {
 			found = true
 			break
@@ -445,7 +454,7 @@ func TestLifecycleManager_MonitoringHook(t *testing.T) {
 	}
 
 	if !found {
-		t.Errorf("Hook calls = %v, expected test-hook:running or test-hook:complete", hookCalls)
+		t.Errorf("Hook calls = %v, expected test-hook:running or test-hook:complete", calls)
 	}
 }
 
