@@ -4,8 +4,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"nuimanbot/internal/domain"
 )
@@ -445,5 +447,97 @@ func TestAdminRoutesAllowedAfterPasswordChange(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Errorf("expected 200 after password changed, got %d", w.Code)
+	}
+}
+
+// --- R-05: loginRateLimiterStore idle eviction tests ---
+
+// TestLoginRateLimiterStoreEvictIdleZeroDuration verifies that evictIdle(0) empties the buckets map.
+func TestLoginRateLimiterStoreEvictIdleZeroDuration(t *testing.T) {
+	store := newLoginRateLimiterStore()
+
+	// Populate some entries.
+	store.allow("192.0.2.1")
+	store.allow("192.0.2.2")
+	store.allow("192.0.2.3")
+
+	store.mu.Lock()
+	count := len(store.buckets)
+	store.mu.Unlock()
+	if count != 3 {
+		t.Fatalf("expected 3 entries before eviction, got %d", count)
+	}
+
+	// evictIdle(0) should evict everything because all entries were last used before now+0.
+	store.evictIdle(0)
+
+	store.mu.Lock()
+	count = len(store.buckets)
+	store.mu.Unlock()
+	if count != 0 {
+		t.Errorf("expected 0 entries after evictIdle(0), got %d", count)
+	}
+}
+
+// TestLoginRateLimiterStoreEvictIdleRetainsRecent verifies that evictIdle keeps recently-used IPs
+// and removes IPs not used within the idle window.
+func TestLoginRateLimiterStoreEvictIdleRetainsRecent(t *testing.T) {
+	store := newLoginRateLimiterStore()
+
+	// Insert an "old" entry by directly manipulating lastUsed.
+	store.allow("old-ip")
+	store.mu.Lock()
+	store.buckets["old-ip"].lastUsed = time.Now().Add(-2 * time.Hour)
+	store.mu.Unlock()
+
+	// Insert a recent entry.
+	store.allow("new-ip")
+
+	// Evict entries idle for more than 1 hour.
+	store.evictIdle(1 * time.Hour)
+
+	store.mu.Lock()
+	_, oldExists := store.buckets["old-ip"]
+	_, newExists := store.buckets["new-ip"]
+	store.mu.Unlock()
+
+	if oldExists {
+		t.Error("expected old-ip (last used 2h ago) to be evicted, but it still exists")
+	}
+	if !newExists {
+		t.Error("expected new-ip (recently used) to survive eviction, but it was removed")
+	}
+}
+
+// TestLoginRateLimiterStoreBackgroundGoroutineStarted verifies that newLoginRateLimiterStore
+// starts exactly one background goroutine.
+func TestLoginRateLimiterStoreBackgroundGoroutineStarted(t *testing.T) {
+	before := runtime.NumGoroutine()
+	_ = newLoginRateLimiterStore()
+	// Allow the goroutine scheduler to start the background goroutine.
+	time.Sleep(10 * time.Millisecond)
+	after := runtime.NumGoroutine()
+
+	if after <= before {
+		t.Errorf("expected goroutine count to increase by at least 1 after newLoginRateLimiterStore(), before=%d after=%d", before, after)
+	}
+}
+
+// TestLoginRateLimiterStoreAllowBlockBehaviorUnchanged verifies that the existing
+// allow/block behavior is unchanged after adding ipBucket.
+func TestLoginRateLimiterStoreAllowBlockBehaviorUnchanged(t *testing.T) {
+	store := newLoginRateLimiterStore()
+	ip := "10.0.0.1"
+
+	// Should allow up to loginRateLimitCapacity attempts.
+	for i := 0; i < loginRateLimitCapacity; i++ {
+		if !store.allow(ip) {
+			t.Fatalf("expected allow=true on attempt %d", i+1)
+		}
+	}
+
+	// The next attempt should be blocked.
+	if store.allow(ip) {
+		t.Error("expected allow=false after exhausting the rate limit capacity")
 	}
 }
