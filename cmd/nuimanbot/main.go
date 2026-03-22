@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"nuimanbot/internal/adapter/api"
 	cliadapter "nuimanbot/internal/adapter/cli"
 	"nuimanbot/internal/adapter/gateway/cli"
 	"nuimanbot/internal/adapter/gateway/slack"
@@ -71,6 +72,7 @@ type application struct {
 	ToolExecutionService *tool.Service
 	HealthServer         *health.Server
 	WebServer            *web.Server
+	RESTServer           *api.Server                    // REST API server (optional)
 	MemoryCellRepo       memoryv2.MemoryCellRepository  // Memory v2 cell repository
 	MemorySceneRepo      memoryv2.MemorySceneRepository // Memory v2 scene repository
 	MemoryAdmin          cliadapter.MemoryAdmin         // Optional admin operations for memory CLI
@@ -284,6 +286,18 @@ func main() {
 		memoryAdmin = storage.NewFileMemoryAdmin(fileRepos.MemoryCellFile, fileRepos.MemorySceneFile, storagePath)
 	}
 
+	// Build REST API server if enabled.
+	var restServer *api.Server
+	if cfg.ExternalAPI.REST.Enabled {
+		jwtSecret := cfg.Security.EncryptionKey // Use app encryption key as JWT signing secret.
+		if jwtSecret == "" {
+			jwtSecret = "nuimanbot-default-jwt-secret-changeme"
+			slog.Warn("REST API JWT secret is empty — using insecure default; set security.encryption_key in config")
+		}
+		restServer = api.NewServer(cfg.ExternalAPI.REST, jwtSecret)
+		slog.Info("REST API server configured", "port", cfg.ExternalAPI.REST.Port)
+	}
+
 	app := &application{
 		Config:               cfg,
 		ConfigManager:        configManager,
@@ -295,6 +309,7 @@ func main() {
 		ChatService:          chatService,
 		ToolExecutionService: toolExecutionService,
 		HealthServer:         healthServer,
+		RESTServer:           restServer,
 		MemoryCellRepo:       memoryCellRepo,
 		MemorySceneRepo:      memorySceneRepo,
 		MemoryAdmin:          memoryAdmin,
@@ -748,6 +763,27 @@ func (app *application) Run(ctx context.Context) error {
 				if err := app.WebServer.Stop(); err != nil {
 					slog.Error("Failed to stop Web Admin UI", "error", err)
 				}
+			}
+		}()
+	}
+
+	// Start REST API server if configured.
+	if app.RESTServer != nil {
+		restAddr := fmt.Sprintf(":%d", app.Config.ExternalAPI.REST.Port)
+		if app.Config.ExternalAPI.REST.Port == 0 {
+			restAddr = ":8082"
+		}
+		go func() {
+			slog.Info("Starting REST API server", "addr", restAddr)
+			if err := app.RESTServer.Start(restAddr); err != nil && err != http.ErrServerClosed {
+				slog.Error("REST API server error", "error", err)
+			}
+		}()
+		defer func() {
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer shutdownCancel()
+			if err := app.RESTServer.Shutdown(shutdownCtx); err != nil {
+				slog.Error("Failed to stop REST API server", "error", err)
 			}
 		}()
 	}
