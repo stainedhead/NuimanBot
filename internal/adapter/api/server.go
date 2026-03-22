@@ -28,6 +28,10 @@ const (
 
 	// restBodyLimitBytes is the maximum allowed request body size (1 MiB).
 	restBodyLimitBytes = 1 << 20
+
+	// minJWTSecretLength is the minimum acceptable byte length for the JWT signing secret.
+	// HS256 requires at least 256 bits (32 bytes) of key material to be cryptographically sound.
+	minJWTSecretLength = 32
 )
 
 // Server is the NuimanBot REST API server.
@@ -48,7 +52,16 @@ type Server struct {
 // NewServer creates a new REST API Server.
 // cfg provides the API key used by the auth endpoint.
 // jwtSecret is the HS256 signing secret for issued JWTs.
-func NewServer(cfg config.ExternalAPIRestConfig, jwtSecret string) *Server {
+// It returns an error if jwtSecret is shorter than minJWTSecretLength bytes.
+func NewServer(cfg config.ExternalAPIRestConfig, jwtSecret string) (*Server, error) {
+	if len(jwtSecret) < minJWTSecretLength {
+		return nil, fmt.Errorf(
+			"api server: jwt secret must be at least %d bytes, got %d; "+
+				"set security.encryption_key to a sufficiently random value",
+			minJWTSecretLength, len(jwtSecret),
+		)
+	}
+
 	mux := http.NewServeMux()
 
 	// Auth endpoint: body limit + validate only (no JWT required).
@@ -89,7 +102,7 @@ func NewServer(cfg config.ExternalAPIRestConfig, jwtSecret string) *Server {
 		IdleTimeout:  restIdleTimeout,
 	}
 
-	return &Server{httpServer: httpServer}
+	return &Server{httpServer: httpServer}, nil
 }
 
 // Start listens on addr and serves requests. It blocks until the server stops.

@@ -464,5 +464,120 @@ func TestIngatanHTTPClient_TLSSkipVerifyNoPanic(t *testing.T) {
 	})
 }
 
+// TestIngatanHTTPClient_RefreshRejectsEmptyToken verifies that refresh() returns an error
+// containing "empty token" when the server returns an empty token string.
+func TestIngatanHTTPClient_RefreshRejectsEmptyToken(t *testing.T) {
+	srv := newTestIngatanServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		if err := json.NewEncoder(w).Encode(map[string]string{
+			"token":      "",
+			"expires_at": "2099-01-01T00:00:00Z",
+		}); err != nil {
+			http.Error(w, "encode error", http.StatusInternalServerError)
+		}
+	})
+
+	client := newTestIngatanClient(srv.URL)
+
+	err := client.refresh(context.Background())
+	if err == nil {
+		t.Fatal("Expected error from refresh() when server returns empty token, got nil")
+	}
+	if !strings.Contains(err.Error(), "empty token") {
+		t.Errorf("Expected error to contain %q, got %q", "empty token", err.Error())
+	}
+}
+
+// TestIngatanHTTPClient_RefreshRejectsAlreadyExpiredToken verifies that refresh() returns
+// an error containing "already-expired" when the server returns an expires_at in the past.
+func TestIngatanHTTPClient_RefreshRejectsAlreadyExpiredToken(t *testing.T) {
+	srv := newTestIngatanServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		if err := json.NewEncoder(w).Encode(map[string]string{
+			"token":      "abc",
+			"expires_at": "1970-01-01T00:00:00Z",
+		}); err != nil {
+			http.Error(w, "encode error", http.StatusInternalServerError)
+		}
+	})
+
+	client := newTestIngatanClient(srv.URL)
+
+	err := client.refresh(context.Background())
+	if err == nil {
+		t.Fatal("Expected error from refresh() when server returns already-expired token, got nil")
+	}
+	if !strings.Contains(err.Error(), "already-expired") {
+		t.Errorf("Expected error to contain %q, got %q", "already-expired", err.Error())
+	}
+}
+
+// TestIngatanHTTPClient_RefreshErrorDoesNotUpdateCache verifies that when refresh() returns
+// an error (empty token or past expiry), the token cache is NOT updated — so subsequent
+// calls to needsRefresh() still return true (triggering a new refresh attempt).
+func TestIngatanHTTPClient_RefreshErrorDoesNotUpdateCache(t *testing.T) {
+	tests := []struct {
+		name    string
+		handler http.HandlerFunc
+	}{
+		{
+			name: "empty token does not update cache",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				if err := json.NewEncoder(w).Encode(map[string]string{
+					"token":      "",
+					"expires_at": "2099-01-01T00:00:00Z",
+				}); err != nil {
+					http.Error(w, "encode error", http.StatusInternalServerError)
+				}
+			},
+		},
+		{
+			name: "past expiry does not update cache",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				if err := json.NewEncoder(w).Encode(map[string]string{
+					"token":      "abc",
+					"expires_at": "1970-01-01T00:00:00Z",
+				}); err != nil {
+					http.Error(w, "encode error", http.StatusInternalServerError)
+				}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newTestIngatanServer(t, tc.handler)
+			client := newTestIngatanClient(srv.URL)
+
+			// Capture cache state before the (expected-to-fail) refresh.
+			client.tokenCache.mu.RLock()
+			tokenBefore := client.tokenCache.token
+			expiryBefore := client.tokenCache.expiresAt
+			client.tokenCache.mu.RUnlock()
+
+			err := client.refresh(context.Background())
+			if err == nil {
+				t.Fatal("Expected refresh() to return an error, got nil")
+			}
+
+			// Cache must be unchanged.
+			client.tokenCache.mu.RLock()
+			tokenAfter := client.tokenCache.token
+			expiryAfter := client.tokenCache.expiresAt
+			client.tokenCache.mu.RUnlock()
+
+			if tokenAfter != tokenBefore {
+				t.Errorf("Token cache was updated on error: before=%q after=%q", tokenBefore, tokenAfter)
+			}
+			if !expiryAfter.Equal(expiryBefore) {
+				t.Errorf("ExpiresAt cache was updated on error: before=%v after=%v", expiryBefore, expiryAfter)
+			}
+
+			// Cache must still report needsRefresh() == true.
+			if !client.tokenCache.needsRefresh() {
+				t.Error("Expected needsRefresh() == true after failed refresh, but it returned false")
+			}
+		})
+	}
+}
+
 // Compile-time type assertion: *http.Transport satisfies http.RoundTripper.
 var _ http.RoundTripper = (*http.Transport)(nil)

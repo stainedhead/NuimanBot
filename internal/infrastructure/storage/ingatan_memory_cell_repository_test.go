@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -196,70 +197,65 @@ func TestIngatanMemoryCellRepository_Create_AutoCreateStore(t *testing.T) {
 
 // --- Get ---
 
-func TestIngatanMemoryCellRepository_Get_Success(t *testing.T) {
-	_, mux, client := newMockIngatan(t)
+// TestIngatanMemoryCellRepository_Get_ReturnsErrNotFoundWithConversationContext verifies
+// that Get always returns an ErrNotFound-wrapped error indicating the caller must use
+// List with a ConversationID filter instead. See R-02 and ADR-2.
+func TestIngatanMemoryCellRepository_Get_ReturnsErrNotFoundWithConversationContext(t *testing.T) {
+	_, _, client := newMockIngatan(t)
 	repo := NewIngatanMemoryCellRepository(client, "test")
-	cell := sampleCell(t)
 
-	// Get uses searchByMetaID which derives the store from the cellID itself.
-	// Register a wildcard handler for all /api/v1/stores/*/memories/search paths.
-	mux.HandleFunc("/api/v1/stores/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/memories/search") {
-			var body map[string]interface{}
-			b, _ := io.ReadAll(r.Body)
-			_ = json.Unmarshal(b, &body)
-			// Return the cell if the query matches the cell ID.
-			if q, _ := body["query"].(string); q == cell.ID {
-				result := map[string]interface{}{
-					"results": []interface{}{
-						map[string]interface{}{
-							"memory": ingatanMemoryResponse(cell),
-							"score":  0.99,
-						},
-					},
-				}
-				_ = json.NewEncoder(w).Encode(result)
-				return
-			}
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{"results": []interface{}{}})
-			return
-		}
-		http.NotFound(w, r)
-	})
+	cell, err := repo.Get(context.Background(), "some-uuid")
 
-	got, err := repo.Get(context.Background(), cell.ID)
-	if err != nil {
-		t.Fatalf("Get failed: %v", err)
+	if cell != nil {
+		t.Errorf("Expected nil cell, got %v", cell)
 	}
-	if got.ID != cell.ID {
-		t.Errorf("Expected cell ID %q, got %q", cell.ID, got.ID)
+	if err == nil {
+		t.Fatal("Expected non-nil error, got nil")
 	}
-	if got.Content != cell.Content {
-		t.Errorf("Expected cell Content %q, got %q", cell.Content, got.Content)
+	if !errors.Is(err, memoryv2.ErrNotFound) {
+		t.Errorf("Expected errors.Is(err, memoryv2.ErrNotFound) == true, got false; error: %v", err)
 	}
-	if got.Scene != cell.Scene {
-		t.Errorf("Expected cell Scene %q, got %q", cell.Scene, got.Scene)
+	if !strings.Contains(err.Error(), "conversation context") {
+		t.Errorf("Expected error message to contain %q, got: %v", "conversation context", err)
 	}
 }
 
-func TestIngatanMemoryCellRepository_Get_NotFound(t *testing.T) {
-	_, mux, client := newMockIngatan(t)
+// TestIngatanMemoryCellRepository_Get_AlwaysUnsupported verifies that Get makes no HTTP
+// calls and returns the documented ErrNotFound-wrapped error for any input.
+// Get by cell ID alone is not supported; callers must use List with ConversationID.
+func TestIngatanMemoryCellRepository_Get_AlwaysUnsupported(t *testing.T) {
+	_, _, client := newMockIngatan(t)
 	repo := NewIngatanMemoryCellRepository(client, "test")
+	cell := sampleCell(t)
 
-	mux.HandleFunc("/api/v1/stores/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/search") {
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{"results": []interface{}{}})
-			return
-		}
-		http.NotFound(w, r)
-	})
+	// No HTTP routes registered — any HTTP call would panic/fail the test.
+	got, err := repo.Get(context.Background(), cell.ID)
+	if got != nil {
+		t.Errorf("Expected nil cell, got %v", got)
+	}
+	if err == nil {
+		t.Fatal("Expected non-nil error, got nil")
+	}
+	if !errors.Is(err, memoryv2.ErrNotFound) {
+		t.Errorf("Expected errors.Is(err, ErrNotFound) == true; error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "conversation context") {
+		t.Errorf("Expected error to contain 'conversation context'; got: %v", err)
+	}
+}
+
+// TestIngatanMemoryCellRepository_Get_NotFound verifies that Get returns ErrNotFound
+// without making any network calls, regardless of what the server would return.
+func TestIngatanMemoryCellRepository_Get_NotFound(t *testing.T) {
+	_, _, client := newMockIngatan(t)
+	repo := NewIngatanMemoryCellRepository(client, "test")
 
 	_, err := repo.Get(context.Background(), "nonexistent-id")
 	if err == nil {
 		t.Fatal("Expected ErrNotFound, got nil")
 	}
-	if !strings.Contains(err.Error(), memoryv2.ErrNotFound.Error()) {
-		t.Errorf("Expected ErrNotFound in error, got: %v", err)
+	if !errors.Is(err, memoryv2.ErrNotFound) {
+		t.Errorf("Expected errors.Is(err, ErrNotFound) == true; error: %v", err)
 	}
 }
 

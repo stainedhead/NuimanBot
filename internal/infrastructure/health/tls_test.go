@@ -80,8 +80,6 @@ func TestHealthServer_StartTLS_RejectsPlainHTTP(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	// Plain HTTP client should fail to communicate meaningfully with a TLS server.
-	// The TLS server may return a garbled response or close the connection —
-	// either an error or a non-2xx status is acceptable.
 	resp, err := http.Get("http://" + addr + "/health")
 	if err == nil {
 		defer resp.Body.Close()
@@ -90,6 +88,39 @@ func TestHealthServer_StartTLS_RejectsPlainHTTP(t *testing.T) {
 		}
 	}
 	// An error is also acceptable (connection reset, EOF, etc.)
+}
+
+// TestHealthServer_StartTLS_AlreadyBoundPort verifies that StartTLS returns a non-nil
+// error immediately when the target address is already in use (R-14 fix).
+func TestHealthServer_StartTLS_AlreadyBoundPort(t *testing.T) {
+	// Bind a real TCP listener to a random free port to occupy it.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to acquire a free port: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := ln.Close(); err != nil {
+			t.Logf("cleanup: close listener: %v", err)
+		}
+	})
+
+	addr := ln.Addr().String()
+
+	dir := t.TempDir()
+	cfg := config.TLSConfig{
+		Enabled:      true,
+		AutoGenerate: true,
+		CertFile:     filepath.Join(dir, "server.crt"),
+		KeyFile:      filepath.Join(dir, "server.key"),
+		Hosts:        []string{"localhost"},
+	}
+
+	s := health.NewServer(nil, nil, "")
+	gotErr := s.StartTLS(addr, cfg)
+
+	if gotErr == nil {
+		t.Fatal("StartTLS: expected a non-nil error when port is already in use, got nil")
+	}
 }
 
 // freePort finds an available TCP port on localhost.
