@@ -141,7 +141,7 @@ func (r *FileConversationRepository) loadMessages(userID, convID string) ([]doma
 	if err != nil {
 		return nil, fmt.Errorf("failed to open messages file: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// Read messages line by line
 	var messages []domain.StoredMessage
@@ -178,7 +178,7 @@ func (r *FileConversationRepository) SaveConversation(ctx context.Context, conv 
 	if err != nil {
 		return fmt.Errorf("failed to create messages file: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	writer := bufio.NewWriter(file)
 	for _, msg := range conv.Messages {
@@ -354,7 +354,7 @@ func (r *FileConversationRepository) AppendMessage(ctx context.Context, convID s
 	if err != nil {
 		return fmt.Errorf("failed to open messages file: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	data, err := json.Marshal(message)
 	if err != nil {

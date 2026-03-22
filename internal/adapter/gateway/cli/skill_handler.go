@@ -53,7 +53,7 @@ func (h *SkillHandler) Execute(ctx context.Context, skillName string, args []str
 	}
 
 	// Display skill activation
-	fmt.Fprintf(h.output, "[Skill activated: %s]\n", skillName)
+	_, _ = fmt.Fprintf(h.output, "[Skill activated: %s]\n", skillName)
 
 	// Phase 7: If message handler is available, process through chat service
 	if h.messageHandler != nil {
@@ -81,15 +81,15 @@ func (h *SkillHandler) Execute(ctx context.Context, skillName string, args []str
 	}
 
 	// Phase 5 fallback: Display only (for testing without chat service)
-	fmt.Fprintf(h.output, "\nPrompt:\n%s\n", rendered.Prompt)
+	_, _ = fmt.Fprintf(h.output, "\nPrompt:\n%s\n", rendered.Prompt)
 
 	if len(rendered.AllowedTools) > 0 {
-		fmt.Fprintf(h.output, "\nAllowed tools: %s\n", strings.Join(rendered.AllowedTools, ", "))
+		_, _ = fmt.Fprintf(h.output, "\nAllowed tools: %s\n", strings.Join(rendered.AllowedTools, ", "))
 	} else {
-		fmt.Fprintf(h.output, "\nAllowed tools: all\n")
+		_, _ = fmt.Fprintf(h.output, "\nAllowed tools: all\n")
 	}
 
-	fmt.Fprintf(h.output, "\n[Note: Chat integration not configured. Skill prompt displayed above.]\n")
+	_, _ = fmt.Fprintf(h.output, "\n[Note: Chat integration not configured. Skill prompt displayed above.]\n")
 
 	return nil
 }

@@ -85,14 +85,14 @@ func (s *Server) handleBotCreate(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == http.MethodGet {
 		// Show create form
-		w.Write([]byte("<html><body><h1>Create Bot</h1><p>Bot creation form (simplified for testing)</p></body></html>"))
+		_, _ = w.Write([]byte("<html><body><h1>Create Bot</h1><p>Bot creation form (simplified for testing)</p></body></html>"))
 		return
 	}
 
 	if r.Method == http.MethodPost {
-		// Simplified bot creation for testing
-		botID := r.FormValue("botID")
-		name := r.FormValue("name")
+		// Sanitize all form inputs before processing.
+		botID := sanitizedFormValue(r, "botID")
+		name := sanitizedFormValue(r, "name")
 
 		bot := &BotConfig{
 			ID:       botID,
@@ -135,14 +135,14 @@ func (s *Server) handleBotEdit(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == http.MethodGet {
 		// Simplified edit form for testing
-		w.Write([]byte("<html><body><h1>Edit Bot</h1><p>Bot edit form for " + botID + "</p></body></html>"))
+		_, _ = w.Write([]byte("<html><body><h1>Edit Bot</h1><p>Bot edit form for " + botID + "</p></body></html>"))
 		return
 	}
 
 	if r.Method == http.MethodPost {
-		// Simplified update for testing
+		// Sanitize all form inputs before processing.
 		updates := map[string]interface{}{
-			"name": r.FormValue("name"),
+			"name": sanitizedFormValue(r, "name"),
 		}
 
 		if s.botService != nil {

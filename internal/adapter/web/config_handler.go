@@ -36,7 +36,7 @@ func (s *Server) handleLLMConfig(w http.ResponseWriter, r *http.Request) {
 </html>`
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(html))
+	_, _ = w.Write([]byte(html))
 }
 
 // handleServerConfig displays server configuration page
@@ -71,7 +71,7 @@ func (s *Server) handleServerConfig(w http.ResponseWriter, r *http.Request) {
 </html>`
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(html))
+	_, _ = w.Write([]byte(html))
 }
 
 // handleLogs displays activity log viewer
@@ -106,7 +106,7 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 </html>`
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(html))
+	_, _ = w.Write([]byte(html))
 }
 
 // handleAdminIndex redirects to dashboard

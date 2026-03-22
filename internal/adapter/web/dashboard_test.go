@@ -33,7 +33,9 @@ func TestDashboardPageWithAuth(t *testing.T) {
 	auth := server.auth
 
 	// Create a test user and session
-	auth.AddUser("admin", "password", "admin")
+	if err := auth.AddUser("admin", "password", "admin"); err != nil {
+		t.Fatalf("AddUser failed: %v", err)
+	}
 	sessionID := auth.CreateSession("admin", "admin")
 
 	// Request with valid session should show dashboard
@@ -75,7 +77,9 @@ func TestDashboardServerStats(t *testing.T) {
 	auth := server.auth
 
 	// Create a test user and session
-	auth.AddUser("admin", "password", "admin")
+	if err := auth.AddUser("admin", "password", "admin"); err != nil {
+		t.Fatalf("AddUser failed: %v", err)
+	}
 	sessionID := auth.CreateSession("admin", "admin")
 
 	// Request dashboard
@@ -106,7 +110,9 @@ func TestDashboardReloadConfig(t *testing.T) {
 	auth := server.auth
 
 	// Create a test user and session
-	auth.AddUser("admin", "password", "admin")
+	if err := auth.AddUser("admin", "password", "admin"); err != nil {
+		t.Fatalf("AddUser failed: %v", err)
+	}
 	sessionID := auth.CreateSession("admin", "admin")
 
 	// Request config reload

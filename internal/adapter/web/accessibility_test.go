@@ -38,7 +38,9 @@ func TestDashboardResponsiveClasses(t *testing.T) {
 	server := NewServer(":0")
 	auth := server.auth
 
-	auth.AddUser("admin", "password", "admin")
+	if err := auth.AddUser("admin", "password", "admin"); err != nil {
+		t.Fatalf("AddUser failed: %v", err)
+	}
 	sessionID := auth.CreateSession("admin", "admin")
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/dashboard", nil)
@@ -73,7 +75,9 @@ func TestUsersPageResponsive(t *testing.T) {
 	auth := server.auth
 	server.SetProfileService(NewMockProfileService())
 
-	auth.AddUser("admin", "password", "admin")
+	if err := auth.AddUser("admin", "password", "admin"); err != nil {
+		t.Fatalf("AddUser failed: %v", err)
+	}
 	sessionID := auth.CreateSession("admin", "admin")
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/users", nil)
@@ -103,7 +107,9 @@ func TestKeyboardNavigation(t *testing.T) {
 	auth := server.auth
 	server.SetProfileService(NewMockProfileService())
 
-	auth.AddUser("admin", "password", "admin")
+	if err := auth.AddUser("admin", "password", "admin"); err != nil {
+		t.Fatalf("AddUser failed: %v", err)
+	}
 	sessionID := auth.CreateSession("admin", "admin")
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/users", nil)

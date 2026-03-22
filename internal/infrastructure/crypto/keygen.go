@@ -56,7 +56,7 @@ func SaveEncryptionKeyToEnv(envPath string, key []byte) error {
 	if err != nil {
 		return fmt.Errorf("failed to open .env file: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	_, err = f.WriteString(content.String())
 	if err != nil {

@@ -83,16 +83,20 @@ func TestBotsPageWithAuth(t *testing.T) {
 	server.SetBotService(botService)
 
 	// Create test user and session
-	auth.AddUser("admin", "password", "admin")
+	if err := auth.AddUser("admin", "password", "admin"); err != nil {
+		t.Fatalf("AddUser failed: %v", err)
+	}
 	sessionID := auth.CreateSession("admin", "admin")
 
 	// Add a test bot
-	botService.CreateBot(context.Background(), &BotConfig{
+	if err := botService.CreateBot(context.Background(), &BotConfig{
 		ID:       "bot1",
 		Name:     "Test Bot",
 		Platform: domain.PlatformSlack,
 		Enabled:  true,
-	})
+	}); err != nil {
+		t.Fatalf("CreateBot failed: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/bots", nil)
 	req.AddCookie(&http.Cookie{
@@ -120,15 +124,19 @@ func TestBotDelete(t *testing.T) {
 	botService := NewMockBotService()
 	server.SetBotService(botService)
 
-	auth.AddUser("admin", "password", "admin")
+	if err := auth.AddUser("admin", "password", "admin"); err != nil {
+		t.Fatalf("AddUser failed: %v", err)
+	}
 	sessionID := auth.CreateSession("admin", "admin")
 
 	// Create a test bot
-	botService.CreateBot(context.Background(), &BotConfig{
+	if err := botService.CreateBot(context.Background(), &BotConfig{
 		ID:       "deletebot",
 		Name:     "Delete Me",
 		Platform: domain.PlatformSlack,
-	})
+	}); err != nil {
+		t.Fatalf("CreateBot failed: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodPost, "/admin/bots/deletebot/delete", nil)
 	req.AddCookie(&http.Cookie{
