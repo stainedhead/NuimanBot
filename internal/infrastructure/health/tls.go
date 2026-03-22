@@ -1,6 +1,9 @@
 package health
 
 import (
+	"crypto/tls"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -10,12 +13,20 @@ import (
 )
 
 // StartTLS starts the health check server over HTTPS on the specified address.
-// It uses LoadOrGenerateCert to obtain a TLS certificate per the TLSConfig.
+// It creates the TLS listener synchronously so that any bind or certificate
+// error is returned immediately to the caller, rather than being swallowed
+// inside a goroutine. The server then serves requests in a background goroutine.
 // Shutdown semantics are identical to Start: call Stop() to gracefully shut down.
 func (s *Server) StartTLS(addr string, cfg config.TLSConfig) error {
 	tlsCfg, err := crypto.BuildTLSConfig(cfg)
 	if err != nil {
-		return err
+		return fmt.Errorf("health: tls: build config: %w", err)
+	}
+
+	// Create the listener synchronously so bind errors surface to the caller immediately.
+	ln, err := tls.Listen("tcp", addr, tlsCfg)
+	if err != nil {
+		return fmt.Errorf("health: tls: listen %s: %w", addr, err)
 	}
 
 	mux := http.NewServeMux()
@@ -33,8 +44,8 @@ func (s *Server) StartTLS(addr string, cfg config.TLSConfig) error {
 	slog.Info("Starting health check server (TLS)", "addr", addr)
 
 	go func() {
-		if err := s.server.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
-			slog.Error("Health check TLS server error", "error", err)
+		if err := s.server.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("health TLS server stopped unexpectedly", "error", err)
 		}
 	}()
 
