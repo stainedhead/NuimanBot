@@ -137,6 +137,23 @@ type tokenExchangeResponse struct {
 	ExpiresAt string `json:"expires_at"`
 }
 
+// validateTokenResponse validates a tokenExchangeResponse from the Ingatan auth endpoint.
+// It returns the parsed expiry time and an error if the response is unusable.
+// All errors are prefixed with "ingatan: token exchange: ".
+func validateTokenResponse(resp tokenExchangeResponse) (time.Time, error) {
+	expiresAt, err := time.Parse(time.RFC3339, resp.ExpiresAt)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("ingatan: token exchange: parse expires_at %q: %w", resp.ExpiresAt, err)
+	}
+	if resp.Token == "" {
+		return time.Time{}, fmt.Errorf("ingatan: token exchange: server returned empty token")
+	}
+	if !expiresAt.After(time.Now()) {
+		return time.Time{}, fmt.Errorf("ingatan: token exchange: server returned already-expired token (expires_at=%s)", resp.ExpiresAt)
+	}
+	return expiresAt, nil
+}
+
 // refresh exchanges the API key for a fresh JWT and stores it in the token cache.
 func (c *IngatanHTTPClient) refresh(ctx context.Context) error {
 	payload, err := json.Marshal(tokenExchangeRequest{APIKey: c.apiKey})
@@ -166,9 +183,9 @@ func (c *IngatanHTTPClient) refresh(ctx context.Context) error {
 		return fmt.Errorf("ingatan: token exchange: decode response: %w", err)
 	}
 
-	expiresAt, err := time.Parse(time.RFC3339, tokenResp.ExpiresAt)
+	expiresAt, err := validateTokenResponse(tokenResp)
 	if err != nil {
-		return fmt.Errorf("ingatan: token exchange: parse expires_at %q: %w", tokenResp.ExpiresAt, err)
+		return err
 	}
 
 	c.tokenCache.mu.Lock()
