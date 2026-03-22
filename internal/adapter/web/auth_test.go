@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -209,6 +210,34 @@ func TestSessionExpiry(t *testing.T) {
 	// Session should be expired
 	if auth.ValidateSession(sessionID) {
 		t.Error("session should be expired")
+	}
+}
+
+// TestSessionCleanupGoroutineCount verifies that creating multiple sessions does not
+// spawn a new goroutine per session. The cleanup loop must be a single background
+// goroutine started once at AuthService construction, not per CreateSession call.
+func TestSessionCleanupGoroutineCount(t *testing.T) {
+	// Use a fresh auth service so its goroutines are isolated.
+	auth := NewAuthService()
+
+	// Give the background goroutine (if any) time to start before taking baseline.
+	time.Sleep(20 * time.Millisecond)
+	baseline := runtime.NumGoroutine()
+
+	// Create 10 sessions — should not spawn 10 additional cleanup goroutines.
+	for i := 0; i < 10; i++ {
+		auth.CreateSession("user", "admin")
+	}
+
+	// Measure goroutine count immediately after creating sessions (before any can exit).
+	after := runtime.NumGoroutine()
+
+	delta := after - baseline
+	// Allow a tolerance of 3 for GC/runtime variance; the cleanup loop itself is
+	// already counted in the baseline (started in NewAuthService). 10 per-session
+	// goroutines would produce delta=10, which exceeds this threshold.
+	if delta > 3 {
+		t.Errorf("goroutine count increased by %d after creating 10 sessions (baseline=%d, after=%d); expected delta <= 3", delta, baseline, after)
 	}
 }
 
