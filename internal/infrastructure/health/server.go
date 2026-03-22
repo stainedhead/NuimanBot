@@ -186,10 +186,12 @@ func (s *Server) Readiness(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"status": status,
 		"checks": checks,
-	})
+	}); err != nil {
+		slog.Error("Failed to encode health response", "error", err)
+	}
 }
 
 // Version returns version information about the application.
@@ -200,9 +202,11 @@ func (s *Server) Version(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
+	if err := json.NewEncoder(w).Encode(map[string]string{
 		"version": version,
-	})
+	}); err != nil {
+		slog.Error("Failed to encode version response", "error", err)
+	}
 }
 
 // RegisterRoutes registers health check and metrics routes on the provided mux.

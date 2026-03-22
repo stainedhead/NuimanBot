@@ -188,7 +188,7 @@ func (c *Client) Stream(ctx context.Context, provider domain.LLMProvider, req *d
 	// Check status code
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body) //nolint:errcheck // Best effort read for error message
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil, fmt.Errorf("Ollama API returned status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 

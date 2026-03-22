@@ -43,13 +43,13 @@ func (w *AtomicFileWriter) Write(targetPath string, content []byte, perm os.File
 
 	// Write content to temp file
 	if _, err := tmpFile.Write(content); err != nil {
-		tmpFile.Close()
+		_ = tmpFile.Close()
 		return fmt.Errorf("failed to write temp file: %w", err)
 	}
 
 	// Sync to ensure data is written to disk
 	if err := tmpFile.Sync(); err != nil {
-		tmpFile.Close()
+		_ = tmpFile.Close()
 		return fmt.Errorf("failed to sync temp file: %w", err)
 	}
 
@@ -105,7 +105,7 @@ func (l *FileLock) Lock() error {
 
 	// Acquire exclusive lock (blocking)
 	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
-		file.Close()
+		_ = file.Close()
 		return fmt.Errorf("failed to acquire lock: %w", err)
 	}
 
@@ -131,7 +131,7 @@ func (l *FileLock) TryLock() (bool, error) {
 	// Try to acquire exclusive lock (non-blocking)
 	err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 	if err != nil {
-		file.Close()
+		_ = file.Close()
 		if err == syscall.EWOULDBLOCK {
 			return false, nil // Lock already held by another process
 		}

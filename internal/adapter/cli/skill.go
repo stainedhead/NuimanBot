@@ -114,8 +114,8 @@ func (c *SkillCommand) executeAsSubagent(ctx context.Context, skill *domain.Skil
 	}
 
 	// Display notification
-	fmt.Fprintf(c.output, "Started subagent: %s (ID: %s)\n", skill.Name, subagentCtx.ID)
-	fmt.Fprintf(c.output, "Use /subagent-status %s to check progress\n", subagentCtx.ID)
+	_, _ = fmt.Fprintf(c.output, "Started subagent: %s (ID: %s)\n", skill.Name, subagentCtx.ID)
+	_, _ = fmt.Fprintf(c.output, "Use /subagent-status %s to check progress\n", subagentCtx.ID)
 
 	return rendered, nil
 }
@@ -138,18 +138,18 @@ func (c *SkillCommand) ListRunningSubagents(ctx context.Context) error {
 	running := c.lifecycle.ListRunning(ctx)
 
 	if len(running) == 0 {
-		fmt.Fprintln(c.output, "No running subagents.")
+		_, _ = fmt.Fprintln(c.output, "No running subagents.")
 		return nil
 	}
 
-	fmt.Fprintf(c.output, "Running subagents (%d):\n", len(running))
+	_, _ = fmt.Fprintf(c.output, "Running subagents (%d):\n", len(running))
 	for _, id := range running {
 		status, err := c.lifecycle.GetStatus(ctx, id)
 		if err != nil {
-			fmt.Fprintf(c.output, "  %s (error getting status)\n", id)
+			_, _ = fmt.Fprintf(c.output, "  %s (error getting status)\n", id)
 			continue
 		}
-		fmt.Fprintf(c.output, "  %s - %s\n", id, status.Status)
+		_, _ = fmt.Fprintf(c.output, "  %s - %s\n", id, status.Status)
 	}
 
 	return nil
@@ -161,13 +161,13 @@ func (c *SkillCommand) List(ctx context.Context) error {
 	catalog := c.registry.UserInvocableCatalog()
 
 	if len(catalog) == 0 {
-		fmt.Fprintln(c.output, "No user-invocable skills found.")
+		_, _ = fmt.Fprintln(c.output, "No user-invocable skills found.")
 		return nil
 	}
 
-	fmt.Fprintln(c.output, "Available skills:")
+	_, _ = fmt.Fprintln(c.output, "Available skills:")
 	for _, entry := range catalog {
-		fmt.Fprintf(c.output, "  /%s - %s\n", entry.Name, entry.Description)
+		_, _ = fmt.Fprintf(c.output, "  /%s - %s\n", entry.Name, entry.Description)
 	}
 
 	return nil
@@ -181,19 +181,19 @@ func (c *SkillCommand) Describe(ctx context.Context, skillName string) error {
 		return err
 	}
 
-	fmt.Fprintf(c.output, "Skill: %s\n", skill.Name)
-	fmt.Fprintf(c.output, "Description: %s\n", skill.Description)
-	fmt.Fprintf(c.output, "Scope: %s\n", skill.Scope)
-	fmt.Fprintf(c.output, "User-invocable: %t\n", skill.CanBeInvokedByUser())
-	fmt.Fprintf(c.output, "Model-invocable: %t\n", skill.CanBeSelectedByModel())
+	_, _ = fmt.Fprintf(c.output, "Skill: %s\n", skill.Name)
+	_, _ = fmt.Fprintf(c.output, "Description: %s\n", skill.Description)
+	_, _ = fmt.Fprintf(c.output, "Scope: %s\n", skill.Scope)
+	_, _ = fmt.Fprintf(c.output, "User-invocable: %t\n", skill.CanBeInvokedByUser())
+	_, _ = fmt.Fprintf(c.output, "Model-invocable: %t\n", skill.CanBeSelectedByModel())
 
 	if len(skill.AllowedTools()) > 0 {
-		fmt.Fprintf(c.output, "Allowed tools: %s\n", strings.Join(skill.AllowedTools(), ", "))
+		_, _ = fmt.Fprintf(c.output, "Allowed tools: %s\n", strings.Join(skill.AllowedTools(), ", "))
 	} else {
-		fmt.Fprintln(c.output, "Allowed tools: all")
+		_, _ = fmt.Fprintln(c.output, "Allowed tools: all")
 	}
 
-	fmt.Fprintf(c.output, "\nBody:\n%s\n", skill.BodyMD)
+	_, _ = fmt.Fprintf(c.output, "\nBody:\n%s\n", skill.BodyMD)
 
 	return nil
 }

@@ -47,7 +47,7 @@ func (r *FileAuditRepository) Append(ctx context.Context, entry *domain.AuditEve
 	if err != nil {
 		return fmt.Errorf("failed to open audit file: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// Marshal entry to JSON
 	data, err := json.Marshal(entry)
@@ -81,7 +81,7 @@ func (r *FileAuditRepository) Query(ctx context.Context, filter domain.AuditFilt
 	if err != nil {
 		return nil, fmt.Errorf("failed to open audit file: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// Read all entries (streaming approach)
 	var events []*domain.AuditEvent

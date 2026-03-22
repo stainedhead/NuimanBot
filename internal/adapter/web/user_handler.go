@@ -93,12 +93,12 @@ func (s *Server) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodPost {
-		// Process form submission
-		userID := r.FormValue("userID")
-		firstName := r.FormValue("firstName")
-		lastName := r.FormValue("lastName")
-		email := r.FormValue("primaryEmail")
-		role := r.FormValue("role")
+		// Sanitize all form inputs before processing.
+		userID := sanitizedFormValue(r, "userID")
+		firstName := sanitizedFormValue(r, "firstName")
+		lastName := sanitizedFormValue(r, "lastName")
+		email := sanitizedFormValue(r, "primaryEmail")
+		role := sanitizedFormValue(r, "role")
 
 		// Create user profile
 		profile := &domain.UserProfile{
@@ -173,12 +173,12 @@ func (s *Server) handleUserEdit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodPost {
-		// Process form submission
+		// Sanitize all form inputs before processing.
 		updates := map[string]interface{}{
-			"firstName":    r.FormValue("firstName"),
-			"lastName":     r.FormValue("lastName"),
-			"primaryEmail": r.FormValue("primaryEmail"),
-			"role":         r.FormValue("role"),
+			"firstName":    sanitizedFormValue(r, "firstName"),
+			"lastName":     sanitizedFormValue(r, "lastName"),
+			"primaryEmail": sanitizedFormValue(r, "primaryEmail"),
+			"role":         sanitizedFormValue(r, "role"),
 		}
 
 		if s.profileService != nil {

@@ -38,11 +38,12 @@ type AuthUser struct {
 
 // Session represents a user session
 type Session struct {
-	ID        string
-	Username  string
-	Role      string
-	CreatedAt time.Time
-	ExpiresAt time.Time
+	ID                  string
+	Username            string
+	Role                string
+	CreatedAt           time.Time
+	ExpiresAt           time.Time
+	ForcePasswordChange bool // set when user must change default credentials
 }
 
 // NewAuthService creates a new authentication service
@@ -234,7 +235,8 @@ func (s *Server) RequireAuth(next http.Handler) http.Handler {
 	})
 }
 
-// handleLogin handles login page and authentication
+// handleLogin handles login page and authentication.
+// It enforces per-IP rate limiting on POST requests and detects default credentials.
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		// Show login form
@@ -257,10 +259,18 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodPost {
-		// Process login
-		username := r.FormValue("username")
-		password := r.FormValue("password")
-		csrfToken := r.FormValue("csrf_token")
+		clientIP := extractRemoteIP(r)
+
+		// Check rate limit before processing credentials.
+		if s.loginLimiter != nil && !s.loginLimiter.allow(clientIP) {
+			http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+			return
+		}
+
+		// Sanitize form inputs before processing.
+		username := sanitizedFormValue(r, "username")
+		password := sanitizedFormValue(r, "password")
+		csrfToken := r.FormValue("csrf_token") // CSRF token is validated, not sanitized for injection
 
 		// Validate CSRF token
 		if s.auth != nil && !s.auth.ValidateCSRFToken(csrfToken) {
@@ -275,7 +285,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 				Error:     "Invalid request. Please try again.",
 			}
 			w.WriteHeader(http.StatusUnauthorized)
-			s.templates.ExecuteTemplate(w, "login.html", data)
+			if err := s.templates.ExecuteTemplate(w, "login.html", data); err != nil {
+				slog.Error("Failed to render login template", "error", err)
+			}
 			return
 		}
 
@@ -291,8 +303,15 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 				Error:     "Invalid username or password",
 			}
 			w.WriteHeader(http.StatusUnauthorized)
-			s.templates.ExecuteTemplate(w, "login.html", data)
+			if err := s.templates.ExecuteTemplate(w, "login.html", data); err != nil {
+				slog.Error("Failed to render login template", "error", err)
+			}
 			return
+		}
+
+		// Credentials are valid — reset the rate-limit bucket for this IP.
+		if s.loginLimiter != nil {
+			s.loginLimiter.reset(clientIP)
 		}
 
 		// Get user role
@@ -302,8 +321,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Detect default credentials using constant-time comparison (via bcrypt).
+		forceChange := s.auth.isDefaultCredentials(username, password)
+
 		// Create session
-		sessionID := s.auth.CreateSession(username, user.Role)
+		sessionID := s.auth.createSessionWithFlags(username, user.Role, forceChange)
 
 		// Set session cookie
 		http.SetCookie(w, &http.Cookie{
@@ -315,6 +337,12 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			SameSite: http.SameSiteStrictMode,
 			Secure:   false, // Set to true in production with HTTPS
 		})
+
+		// Redirect default-credential users to change-password page.
+		if forceChange {
+			http.Redirect(w, r, "/admin/change-password", http.StatusFound)
+			return
+		}
 
 		// Redirect to dashboard
 		http.Redirect(w, r, "/admin/dashboard", http.StatusFound)
@@ -351,6 +379,59 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/admin/login", http.StatusFound)
 }
 
+// handleChangePassword handles the forced password change page.
+// On GET, it renders a simple form. On POST, it updates the password and clears
+// the ForcePasswordChange flag so the user can proceed.
+func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		html := `<!DOCTYPE html><html><head><title>Change Password</title></head>` +
+			`<body><h1>Change Your Password</h1>` +
+			`<form method="POST"><input type="password" name="new_password" placeholder="New password" required>` +
+			`<button type="submit">Change Password</button></form></body></html>`
+		if _, err := w.Write([]byte(html)); err != nil {
+			slog.Error("Failed to write change-password page", "error", err)
+		}
+		return
+	}
+
+	if r.Method == http.MethodPost {
+		newPassword := sanitizedFormValue(r, "new_password")
+		if newPassword == "" {
+			http.Error(w, "Password required", http.StatusBadRequest)
+			return
+		}
+
+		// Get current session
+		cookie, err := r.Cookie(sessionCookieName)
+		if err != nil || cookie.Value == "" {
+			http.Redirect(w, r, "/admin/login", http.StatusFound)
+			return
+		}
+
+		session := s.auth.GetSession(cookie.Value)
+		if session == nil {
+			http.Redirect(w, r, "/admin/login", http.StatusFound)
+			return
+		}
+
+		// Update the user's password
+		if updateErr := s.auth.UpdatePassword(session.Username, newPassword); updateErr != nil {
+			slog.Error("Failed to update password", "error", updateErr)
+			http.Error(w, "Failed to update password", http.StatusInternalServerError)
+			return
+		}
+
+		// Clear the force-change flag on the session
+		s.auth.ClearForcePasswordChange(cookie.Value)
+
+		http.Redirect(w, r, "/admin/dashboard", http.StatusFound)
+		return
+	}
+
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+}
+
 // getCurrentUser extracts current user from request context
 func (s *Server) getCurrentUser(r *http.Request) *User {
 	cookie, err := r.Cookie(sessionCookieName)
@@ -374,5 +455,78 @@ func (s *Server) getCurrentUser(r *http.Request) *User {
 	}
 }
 
-// Note: comparePasswords and constantTimeCompare are defined but not currently used.
-// They are kept for future security enhancements and consistent-time comparisons.
+// UpdatePassword updates the stored password hash for a user.
+func (a *AuthService) UpdatePassword(username, newPassword string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	user, exists := a.users[username]
+	if !exists {
+		return fmt.Errorf("web: update password: user %q not found", username)
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcryptCost)
+	if err != nil {
+		return fmt.Errorf("web: update password: hash: %w", err)
+	}
+
+	user.PasswordHash = string(hash)
+	return nil
+}
+
+// ClearForcePasswordChange removes the ForcePasswordChange flag from the session.
+func (a *AuthService) ClearForcePasswordChange(sessionID string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if session, ok := a.sessions[sessionID]; ok {
+		session.ForcePasswordChange = false
+	}
+}
+
+// createSessionWithFlags creates a new session, optionally setting the
+// ForcePasswordChange flag for accounts using default credentials.
+func (a *AuthService) createSessionWithFlags(username, role string, forcePasswordChange bool) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	sessionID := generateRandomString(sessionIDLength)
+
+	session := &Session{
+		ID:                  sessionID,
+		Username:            username,
+		Role:                role,
+		CreatedAt:           time.Now(),
+		ExpiresAt:           time.Now().Add(a.sessionTimeout),
+		ForcePasswordChange: forcePasswordChange,
+	}
+
+	a.sessions[sessionID] = session
+
+	go a.cleanupExpiredSessions()
+
+	return sessionID
+}
+
+// isDefaultCredentials reports whether the supplied plaintext password matches
+// the default "admin" password for the "admin" user.
+// Detection uses bcrypt.CompareHashAndPassword for constant-time comparison,
+// preventing timing-based enumeration of whether a password matches "admin".
+func (a *AuthService) isDefaultCredentials(username, password string) bool {
+	if username != defaultAdminUsername {
+		return false
+	}
+	// Use bcrypt to verify against the known default password hash.
+	// This is constant-time by design.
+	return bcrypt.CompareHashAndPassword([]byte(defaultAdminPasswordHash), []byte(password)) == nil
+}
+
+const (
+	// defaultAdminUsername is the well-known default administrator account name.
+	defaultAdminUsername = "admin"
+
+	// defaultAdminPasswordHash is the bcrypt hash of the literal string "admin".
+	// Cost 10 keeps the hash stable for detection purposes only (not for authentication).
+	// Authentication always uses the stored hash from AddUser.
+	defaultAdminPasswordHash = "$2a$10$Y6HD25IiXnjpqGnkUrK02uZBvmdpzv6vB3eGFCcEeIn1jSZlsrd2e"
+)

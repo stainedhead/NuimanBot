@@ -113,17 +113,21 @@ func TestUsersPageWithAuth(t *testing.T) {
 	server.SetProfileService(profileService)
 
 	// Create test user and session
-	auth.AddUser("admin", "password", "admin")
+	if err := auth.AddUser("admin", "password", "admin"); err != nil {
+		t.Fatalf("AddUser failed: %v", err)
+	}
 	sessionID := auth.CreateSession("admin", "admin")
 
 	// Add some test profiles
-	profileService.CreateProfile(context.Background(), &domain.UserProfile{
+	if err := profileService.CreateProfile(context.Background(), &domain.UserProfile{
 		UserID:       "user1",
 		FirstName:    "John",
 		LastName:     "Doe",
 		PrimaryEmail: "john@example.com",
 		Role:         domain.RoleUser,
-	})
+	}); err != nil {
+		t.Fatalf("CreateProfile failed: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/users", nil)
 	req.AddCookie(&http.Cookie{
@@ -150,7 +154,9 @@ func TestUserCreateForm(t *testing.T) {
 	auth := server.auth
 	server.SetProfileService(NewMockProfileService())
 
-	auth.AddUser("admin", "password", "admin")
+	if err := auth.AddUser("admin", "password", "admin"); err != nil {
+		t.Fatalf("AddUser failed: %v", err)
+	}
 	sessionID := auth.CreateSession("admin", "admin")
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/users/create", nil)
@@ -182,7 +188,9 @@ func TestUserCreateSubmit(t *testing.T) {
 	profileService := NewMockProfileService()
 	server.SetProfileService(profileService)
 
-	auth.AddUser("admin", "password", "admin")
+	if err := auth.AddUser("admin", "password", "admin"); err != nil {
+		t.Fatalf("AddUser failed: %v", err)
+	}
 	sessionID := auth.CreateSession("admin", "admin")
 
 	// Create form data
@@ -224,16 +232,20 @@ func TestUserDelete(t *testing.T) {
 	profileService := NewMockProfileService()
 	server.SetProfileService(profileService)
 
-	auth.AddUser("admin", "password", "admin")
+	if err := auth.AddUser("admin", "password", "admin"); err != nil {
+		t.Fatalf("AddUser failed: %v", err)
+	}
 	sessionID := auth.CreateSession("admin", "admin")
 
 	// Create a test user
-	profileService.CreateProfile(context.Background(), &domain.UserProfile{
+	if err := profileService.CreateProfile(context.Background(), &domain.UserProfile{
 		UserID:       "deleteuser",
 		FirstName:    "Delete",
 		LastName:     "Me",
 		PrimaryEmail: "delete@example.com",
-	})
+	}); err != nil {
+		t.Fatalf("CreateProfile failed: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodPost, "/admin/users/deleteuser/delete", nil)
 	req.AddCookie(&http.Cookie{

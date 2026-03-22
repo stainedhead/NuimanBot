@@ -34,7 +34,9 @@ func TestLoginWithValidCredentials(t *testing.T) {
 	auth := server.auth // Use server's auth service
 
 	// Add a test user
-	auth.AddUser("admin", "password123", "admin")
+	if err := auth.AddUser("admin", "password123", "admin"); err != nil {
+		t.Fatalf("AddUser failed: %v", err)
+	}
 
 	// Generate CSRF token
 	csrfToken := auth.GenerateCSRFToken()
@@ -78,7 +80,9 @@ func TestLoginWithInvalidCredentials(t *testing.T) {
 	auth := server.auth // Use server's auth service
 
 	// Add a test user
-	auth.AddUser("admin", "password123", "admin")
+	if err := auth.AddUser("admin", "password123", "admin"); err != nil {
+		t.Fatalf("AddUser failed: %v", err)
+	}
 
 	// Generate CSRF token
 	csrfToken := auth.GenerateCSRFToken()
@@ -141,7 +145,7 @@ func TestSessionValidation(t *testing.T) {
 	// Create protected handler
 	protected := server.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("protected content"))
+		_, _ = w.Write([]byte("protected content"))
 	}))
 
 	tests := []struct {

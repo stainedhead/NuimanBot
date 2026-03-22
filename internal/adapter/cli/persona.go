@@ -77,11 +77,11 @@ func (c *PersonaCommand) Init(ctx context.Context, userID string) error {
 	}
 
 	// Write success message
-	fmt.Fprintf(c.output, "✓ Persona files initialized successfully for user: %s\n", userID)
-	fmt.Fprintf(c.output, "  - SOUL.md: Agent persona and communication style\n")
-	fmt.Fprintf(c.output, "  - USER.md: Your preferences and context\n")
-	fmt.Fprintf(c.output, "  - RULES.md: Hard rules and restrictions\n")
-	fmt.Fprintf(c.output, "\nYou can now customize these files to personalize your AI assistant.\n")
+	_, _ = fmt.Fprintf(c.output, "✓ Persona files initialized successfully for user: %s\n", userID)
+	_, _ = fmt.Fprintf(c.output, "  - SOUL.md: Agent persona and communication style\n")
+	_, _ = fmt.Fprintf(c.output, "  - USER.md: Your preferences and context\n")
+	_, _ = fmt.Fprintf(c.output, "  - RULES.md: Hard rules and restrictions\n")
+	_, _ = fmt.Fprintf(c.output, "\nYou can now customize these files to personalize your AI assistant.\n")
 
 	return nil
 }

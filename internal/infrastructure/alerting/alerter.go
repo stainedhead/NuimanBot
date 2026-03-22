@@ -198,7 +198,7 @@ func sendToSlack(ctx context.Context, alert Alert, config map[string]string) {
 		slog.Error("Failed to send Slack alert", "error", err)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		slog.Error("Slack webhook returned non-OK status", "status", resp.StatusCode)

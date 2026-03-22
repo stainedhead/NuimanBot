@@ -43,7 +43,7 @@ func (api *MemoryAPI) Recall(skillName, key string, scope domain.MemoryScope, de
 	}
 
 	if memory.IsExpired() {
-		api.storage.Delete(skillName, key, scope)
+		_ = api.storage.Delete(skillName, key, scope) // Best effort cleanup; error not actionable
 		return fmt.Errorf("memory expired")
 	}
 

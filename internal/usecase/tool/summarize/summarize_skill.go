@@ -229,7 +229,7 @@ func (s *SummarizeSkill) fetchWebPage(ctx context.Context, urlStr string) (strin
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)

@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"nuimanbot/internal/domain"
 )
 
 //go:embed templates/* static/*
@@ -34,6 +36,7 @@ type Server struct {
 	httpServer     *http.Server
 	templates      *template.Template
 	auth           *AuthService
+	loginLimiter   *loginRateLimiterStore
 	profileService ProfileService
 	botService     BotService
 }
@@ -41,8 +44,9 @@ type Server struct {
 // NewServer creates a new web admin server
 func NewServer(addr string) *Server {
 	server := &Server{
-		addr: addr,
-		auth: NewAuthService(), // Initialize auth service
+		addr:         addr,
+		auth:         NewAuthService(), // Initialize auth service
+		loginLimiter: newLoginRateLimiterStore(),
 	}
 
 	// Parse templates
@@ -75,31 +79,44 @@ func (s *Server) parseTemplates() *template.Template {
 	return templates
 }
 
-// registerRoutes registers all HTTP routes
+// registerRoutes registers all HTTP routes, applying middleware to admin-only routes.
+//
+// Route groups:
+//   - Public: /health, /static/, /admin/login, /admin/logout
+//   - Change-password (authenticated, no role check): /admin/change-password
+//   - Admin-only (requireRole(admin) + requirePasswordChange): all other /admin/* routes
 func (s *Server) registerRoutes(mux *http.ServeMux) {
-	// Health check endpoint
+	// Health check endpoint — public
 	mux.HandleFunc("/health", s.handleHealth)
 
-	// Root redirect
+	// Root redirect — public
 	mux.HandleFunc("/", s.handleRootRedirect)
 
-	// Static files - serve from embedded filesystem
+	// Static files — public
 	staticFS := http.FileServer(http.FS(embeddedFS))
 	mux.Handle("/static/", staticFS)
 
-	// Authentication routes
+	// Authentication routes — public (rate limiter is inside handleLogin)
 	mux.HandleFunc("/admin/login", s.handleLogin)
 	mux.HandleFunc("/admin/logout", s.handleLogout)
 
-	// Admin routes
-	mux.HandleFunc("/admin/dashboard", s.handleDashboard)
-	mux.HandleFunc("/admin/dashboard/reload", s.handleReloadConfig)
+	// Change-password — accessible to authenticated users regardless of force-change flag;
+	// does not require admin role so that users with force-change can reach it.
+	mux.HandleFunc("/admin/change-password", s.handleChangePassword)
+
+	// adminHandler wraps a handler with admin role enforcement and password-change redirect.
+	adminHandler := func(h http.HandlerFunc) http.Handler {
+		return s.requireRole(domain.RoleAdmin)(s.requirePasswordChange(h))
+	}
+
+	// Admin dashboard routes
+	mux.Handle("/admin/dashboard", adminHandler(s.handleDashboard))
+	mux.Handle("/admin/dashboard/reload", adminHandler(s.handleReloadConfig))
 
 	// User management routes
-	mux.HandleFunc("/admin/users", s.handleUsers)
-	mux.HandleFunc("/admin/users/create", s.handleUserCreate)
-	mux.HandleFunc("/admin/users/", func(w http.ResponseWriter, r *http.Request) {
-		// Route to edit or delete based on path
+	mux.Handle("/admin/users", adminHandler(s.handleUsers))
+	mux.Handle("/admin/users/create", adminHandler(s.handleUserCreate))
+	mux.Handle("/admin/users/", adminHandler(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/edit") {
 			s.handleUserEdit(w, r)
 		} else if strings.HasSuffix(r.URL.Path, "/delete") {
@@ -107,13 +124,12 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 		} else {
 			http.NotFound(w, r)
 		}
-	})
+	}))
 
 	// Bot management routes
-	mux.HandleFunc("/admin/bots", s.handleBots)
-	mux.HandleFunc("/admin/bots/create", s.handleBotCreate)
-	mux.HandleFunc("/admin/bots/", func(w http.ResponseWriter, r *http.Request) {
-		// Route to edit or delete based on path
+	mux.Handle("/admin/bots", adminHandler(s.handleBots))
+	mux.Handle("/admin/bots/create", adminHandler(s.handleBotCreate))
+	mux.Handle("/admin/bots/", adminHandler(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/edit") {
 			s.handleBotEdit(w, r)
 		} else if strings.HasSuffix(r.URL.Path, "/delete") {
@@ -121,13 +137,13 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 		} else {
 			http.NotFound(w, r)
 		}
-	})
+	}))
 
 	// Configuration and logging routes
-	mux.HandleFunc("/admin/llm", s.handleLLMConfig)
-	mux.HandleFunc("/admin/config", s.handleServerConfig)
-	mux.HandleFunc("/admin/logs", s.handleLogs)
-	mux.HandleFunc("/admin/", s.handleAdminIndex)
+	mux.Handle("/admin/llm", adminHandler(s.handleLLMConfig))
+	mux.Handle("/admin/config", adminHandler(s.handleServerConfig))
+	mux.Handle("/admin/logs", adminHandler(s.handleLogs))
+	mux.Handle("/admin/", adminHandler(s.handleAdminIndex))
 }
 
 // handleHealth handles health check requests
@@ -140,7 +156,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"time":   time.Now().Format(time.RFC3339),
 	}
 
-	json.NewEncoder(w).Encode(response)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		slog.Error("Failed to encode health response", "error", err)
+	}
 }
 
 // handleRootRedirect redirects / to /admin/
@@ -204,12 +222,6 @@ func (s *Server) GetAuth() *AuthService {
 	return s.auth
 }
 
-// renderTemplate renders an HTML template with data
-func (s *Server) renderTemplate(w http.ResponseWriter, name string, data interface{}) error {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	return s.templates.ExecuteTemplate(w, name, data)
-}
-
 // BaseData represents common template data passed to all pages
 type BaseData struct {
 	Title           string
@@ -260,12 +272,12 @@ func (bd *BaseData) WithFlashError(msg string) *BaseData {
 // Error404 renders a 404 error page
 func (s *Server) Error404(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotFound)
-	fmt.Fprintf(w, "404 - Page Not Found")
+	_, _ = fmt.Fprintf(w, "404 - Page Not Found")
 }
 
 // Error500 renders a 500 error page
 func (s *Server) Error500(w http.ResponseWriter, r *http.Request, err error) {
 	slog.Error("Internal server error", "path", r.URL.Path, "error", err)
 	w.WriteHeader(http.StatusInternalServerError)
-	fmt.Fprintf(w, "500 - Internal Server Error")
+	_, _ = fmt.Fprintf(w, "500 - Internal Server Error")
 }
