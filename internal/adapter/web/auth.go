@@ -13,11 +13,12 @@ import (
 )
 
 const (
-	sessionTimeout    = 24 * time.Hour
-	sessionCookieName = "session_id"
-	csrfTokenLength   = 32
-	sessionIDLength   = 32
-	bcryptCost        = 12
+	sessionTimeout         = 24 * time.Hour
+	sessionCleanupInterval = 5 * time.Minute
+	sessionCookieName      = "session_id"
+	csrfTokenLength        = 32
+	sessionIDLength        = 32
+	bcryptCost             = 12
 )
 
 // AuthService handles authentication and session management
@@ -47,12 +48,14 @@ type Session struct {
 
 // NewAuthService creates a new authentication service
 func NewAuthService() *AuthService {
-	return &AuthService{
+	svc := &AuthService{
 		users:          make(map[string]*AuthUser),
 		sessions:       make(map[string]*Session),
 		csrfTokens:     make(map[string]bool),
 		sessionTimeout: sessionTimeout,
 	}
+	go svc.runCleanupLoop()
+	return svc
 }
 
 // AddUser adds a user to the authentication service (for testing and setup)
@@ -107,9 +110,6 @@ func (a *AuthService) CreateSession(username, role string) string {
 	}
 
 	a.sessions[sessionID] = session
-
-	// Clean up expired sessions periodically
-	go a.cleanupExpiredSessions()
 
 	return sessionID
 }
@@ -183,6 +183,19 @@ func (a *AuthService) ValidateCSRFToken(token string) bool {
 	delete(a.csrfTokens, token)
 
 	return true
+}
+
+// runCleanupLoop runs a single background goroutine that periodically removes
+// expired sessions on a fixed interval. Using a timer-based loop (rather than
+// spawning a goroutine on every CreateSession call) prevents goroutine
+// accumulation under load: regardless of how many sessions are created, exactly
+// one cleanup goroutine exists for the lifetime of the AuthService.
+func (a *AuthService) runCleanupLoop() {
+	ticker := time.NewTicker(sessionCleanupInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		a.cleanupExpiredSessions()
+	}
 }
 
 // cleanupExpiredSessions removes expired sessions
