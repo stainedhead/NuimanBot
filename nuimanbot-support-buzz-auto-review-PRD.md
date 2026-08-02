@@ -75,9 +75,10 @@ Three distinct error paths in `Start()` have no corresponding test (confirmed by
 
 Confirmed: `BuzzRelayConnections` is declared as a `GaugeVec`, but a repo-wide search finds zero `.Set()`/`.Inc()`/`.Dec()`/`.WithLabelValues()` calls against it anywhere. `internal/infrastructure/nostr/client.go` does not import the `metrics` package at all; its connection bookkeeping (`registerConn`/`unregisterConn`, `client.go:195-210`) and `ConnectedRelayCount()` (`client.go:214-218`) never touch the metric. Notably, `ConnectedRelayCount()` itself has no production caller — it is used only in tests (`gateway_test.go:456,459`, `client_test.go:192,195`) — which is further evidence this wiring was planned but never finished. The gauge sits at zero cardinality (no series exported at all, not even a stale `0`), which is more confusing for an operator than a stale value would be. This gap is honestly disclosed in `documentation/technical-details.md:730,1266-1268`, which reduces its severity as a "surprise" but does not change that it's an incomplete implementation of a stated spec requirement (spec.md's Observability section lists all four metrics as in-scope for this branch).
 
+**Decided (product owner, 2026-08-02):** the metric is set from the `buzz` adapter layer via `ConnectedRelayCount()`, not from `internal/infrastructure/nostr` directly. This keeps `nostr/` protocol-only with zero Prometheus awareness, matching its own stated goal (`event.go:1-4`) of staying a swappable, metrics-agnostic protocol layer. `ConnectedRelayCount()` already exists for exactly this purpose.
+
 **Acceptance criteria:**
-- `registerConn`/`unregisterConn` (or equivalent connect/disconnect points) call `BuzzRelayConnections.WithLabelValues(relayURL, ...).Set(1)` / `.Set(0)` (or an Inc/Dec pairing) so the gauge reflects real relay connection state.
-- Because `internal/infrastructure/nostr` currently declares itself free of domain/config/adapter imports (see `event.go:1-4` doc comment), the implementation should record whether treating `infrastructure/metrics` as an allowed infra→infra dependency is an intentional, documented exception, or whether the metric should instead be set from the `buzz` adapter layer via `ConnectedRelayCount()`.
+- `buzz.Gateway` calls `g.client.ConnectedRelayCount()` (or an equivalent per-relay status source) and sets `BuzzRelayConnections.WithLabelValues(relayURL, status).Set(...)` from the adapter layer — e.g. via a small ticker, or reacting to connect/disconnect callbacks — not from `internal/infrastructure/nostr`.
 - A test verifies the gauge value changes on relay connect and disconnect.
 
 #### FR-005: `BuzzConfig.NIP05` field is declared and YAML-decoded but never read anywhere
@@ -86,16 +87,21 @@ Confirmed: `BuzzRelayConnections` is declared as a `GaugeVec`, but a repo-wide s
 
 `BuzzConfig.NIP05` (YAML tag `nip05`) is accepted from user configuration and documented in `support_docs/buzz-guide.md:65-72` as a configuration field, but a repo-wide search shows it is never read outside its own declaration — not by `cmd/nuimanbot/main.go`, not by `internal/adapter/gateway/buzz/gateway.go`, not by anything in `internal/infrastructure/nostr/`. A user who sets `nip05` in their config gets silent no-op behavior, which is worse than the field not existing at all, since it implies functionality that isn't there.
 
-**Acceptance criteria:**
-- Either: the `nip05` field is wired into whatever it was intended for (e.g., included in the `kind:10100` agent-profile event content, per NIP-05 identity-verification convention), with a test confirming it appears in the published profile event; or, if genuinely out of scope for this phase, the field and its documentation are removed (or explicitly marked reserved/no-effect, matching the existing precedent already used for `DMPolicy`) so it doesn't silently mislead operators.
+**Decided (product owner, 2026-08-02):** mark reserved now, matching the `DMPolicy` precedent. NIP-05 verification was explicitly called out as optional/deferred in the original PRD (§6.5) — this fix makes the config field honest about that rather than implying it's live.
 
-#### FR-006: RBAC-denial and rate-limit-exceeded metrics are declared but never incremented anywhere
+**Acceptance criteria:**
+- `BuzzConfig.NIP05`'s doc comment is updated to state it's reserved for a future phase and not currently read (referencing PRD §6.5), matching `DMPolicy`'s existing treatment.
+- `support_docs/buzz-guide.md:65-72` is corrected to describe `nip05` as reserved/no-effect rather than implying it's functional.
+
+#### FR-006 [DEFERRED — out of scope for this remediation pass]: RBAC-denial and rate-limit-exceeded metrics are declared but never incremented anywhere
 
 **File:** `internal/infrastructure/metrics/prometheus.go:218-241` (`RateLimitExceeded`, `SecurityValidationFailures`, `AuditEventsTotal` declarations); `internal/usecase/tool/service.go:119-224` (`ExecuteWithUser`, `auditPermissionDenial`)
 
 This branch's cross-cutting RBAC fix means `ExecuteWithUser()` now enforces role and rate-limit checks for every platform, and denials are correctly captured in the durable file-based audit log via `securitySvc.Audit(...)` (`auditPermissionDenial`, `service.go:210-224`, and the rate-limit branch at `service.go:188-203`) — this part works. However, three Prometheus metrics that exist specifically for this purpose (`AuditEventsTotal{action,outcome}`, `RateLimitExceeded{user_id,action}`, `SecurityValidationFailures{reason}`) are never incremented anywhere in the codebase — confirmed by grep, each appears only at its own `promauto` declaration. This means RBAC denials and rate-limit rejections are auditable after the fact (by reading/parsing the audit log) but are invisible to real-time alerting or dashboards. This gap pre-dates this branch and is not Buzz-specific, but this branch is what makes RBAC enforcement universal across all platforms for the first time (FR-011/FR-012 in the spec), which makes the absence of a live alertable signal for "spike in RBAC denials" newly significant.
 
-**Acceptance criteria:**
+**Decided (product owner, 2026-08-02): deferred, out of scope for this remediation pass.** This gap pre-dates the Buzz branch and is not Buzz-specific — bundling a pre-existing, cross-platform observability gap into this branch's fix set would expand its diff beyond what Buzz actually introduced or the RBAC fix (FR-011/FR-012) actually required. Tracked as a separate observability-hardening item instead.
+
+**Acceptance criteria (for the deferred follow-up, not this pass):**
 - `securitySvc.Audit(...)` (or the call sites in `auditPermissionDenial` / the rate-limit branch in `ExecuteWithUser`) increments `AuditEventsTotal.WithLabelValues(event.Action, event.Outcome)` and/or the more specific `RateLimitExceeded`/`SecurityValidationFailures` counters as appropriate.
 - A test confirms that a simulated RBAC denial and a simulated rate-limit rejection each increment the corresponding metric.
 
@@ -129,13 +135,15 @@ Neither the `agentCache`'s `isAgent` map nor `loopGuard`'s `channels` map has TT
 
 **Acceptance criteria:** `agentCache` has a bounded size or TTL-based eviction policy for stale pubkey entries, with a test confirming old entries are evicted after the configured window/capacity is exceeded.
 
-#### FR-010: `nostr.Filter.Since` is defined and marshaled but never populated
+#### FR-010 [PROMOTED TO P1 — real reliability gap, see decision below]: `nostr.Filter.Since` is defined and marshaled but never populated
 
 **File:** `internal/infrastructure/nostr/subscription.go:57-61`
 
-`Filter.Since` exists in the struct and is included in `MarshalJSON`, but no `New*Filter` constructor or gateway code ever sets it. As a result, reconnects re-issue the exact same `REQ` frame built once at `Start()`, meaning there's no time-bounded resume/backfill of messages missed during a disconnect. This is plausibly an intentional Phase 1 scope cut (research.md references suggest as much), but as shipped, the field exists without being functional, which can read as "wired" when it isn't.
+`Filter.Since` exists in the struct and is included in `MarshalJSON`, but no `New*Filter` constructor or gateway code ever sets it. As a result, reconnects re-issue the exact same `REQ` frame built once at `Start()`, meaning there's no time-bounded resume/backfill of messages missed during a disconnect.
 
-**Acceptance criteria:** Either populate `Since` on reconnect (based on the timestamp of the last successfully processed event) with a test confirming missed-message backfill after a simulated disconnect, or explicitly document `Since` as reserved/unused for this phase (matching the precedent set for `DMPolicy`).
+**Correction (2026-08-02):** this was NOT confirmed as an intentional Phase 1 scope cut — that was this review's own guess, and it doesn't hold up: `specs/260802-nuimanbot-support-buzz/research.md` and `spec.md` contain no mention of `Since`/backfill anywhere. **Decided (product owner, 2026-08-02): implement reconnect backfill.** Spec.md §6.10's reliability NFR requires the gateway to "continue operating" through partial relay outages — silently missing messages during a reconnect window undercuts that guarantee, so this is a real gap, not a documented cut. Reclassified P2→P1 accordingly.
+
+**Acceptance criteria:** populate `Since` on reconnect, based on the timestamp of the last successfully processed event, so a relay that drops and reconnects catches up on events missed during the outage. Test: simulate a disconnect, publish N events to the relay while it's down, reconnect, and assert all N are eventually delivered (not silently lost).
 
 #### FR-011: `Gateway` depends on the concrete `*user.Service` type rather than a small consumer-defined interface
 
@@ -194,13 +202,13 @@ This predates the Buzz branch and is not itself a claim made about Buzz, but it 
 | FR-001 | `Send()` nil-pointer panic risk on `g.client` | P1 |
 | FR-002 | `Stop()` has 0% test coverage | P1 |
 | FR-003 | `Start()` error/guard paths untested | P1 |
-| FR-004 | `buzz_relay_connections` gauge declared but never set | P1 |
-| FR-005 | `BuzzConfig.NIP05` field declared but never read | P1 |
-| FR-006 | RBAC-denial/rate-limit metrics declared but never incremented | P1 |
+| FR-004 | `buzz_relay_connections` gauge declared but never set — decided: adapter sets via `ConnectedRelayCount()` | P1 |
+| FR-005 | `BuzzConfig.NIP05` field declared but never read — decided: mark reserved (like `DMPolicy`) | P1 |
+| FR-006 | RBAC-denial/rate-limit metrics declared but never incremented — **decided: DEFERRED, out of scope this pass** | P1 (deferred) |
 | FR-007 | Doc describes non-functional `NUIMANBOT_GATEWAYS_BUZZ_ENABLED` env var | P1 |
 | FR-008 | Unsynchronized shared fields in `Gateway` (latent data race) | P2 |
 | FR-009 | Unbounded `agent_cache`/`loop_guard` map growth | P2 |
-| FR-010 | `nostr.Filter.Since` defined but never populated | P2 |
+| FR-010 | `nostr.Filter.Since` defined but never populated — **decided: implement backfill** | P1 (reclassified from P2) |
 | FR-011 | `Gateway` depends on concrete `*user.Service` vs. own interface | P2 |
 | FR-012 | Missing kind:9000/10100 forgery tests + retry/error-branch tests | P2 |
 | FR-013 | `buzz_events_received_total` scope narrower than name implies | P2 |
@@ -208,19 +216,23 @@ This predates the Buzz branch and is not itself a claim made about Buzz, but it 
 | FR-015 | Dormant subagent executor path (informational) | P2 |
 | FR-016 | Redundant Buzz-gateway user resolution | P2 |
 
-**Total: 0 P0, 7 P1, 9 P2 (16 findings)**
+**Total: 0 P0, 7 P1 (1 deferred, 1 reclassified up from P2), 8 P2 (16 findings)**
+
+**This remediation pass fixes:** FR-001, FR-002, FR-003, FR-004, FR-005, FR-007, FR-008, FR-009, FR-010, FR-011, FR-012, FR-013, FR-014, FR-016 (14 findings).
+**Deferred, not part of this pass:** FR-006 (separate observability-hardening follow-up).
+**Informational only, no fix:** FR-015.
 
 ---
 
 ## Open Questions
 
-These decisions should be made (or confirmed) before or during remediation, since they change the shape of the fix for the finding noted:
+All resolved by the product owner (2026-08-02) prior to remediation:
 
-1. **FR-004** — Should `internal/infrastructure/nostr` be allowed an infra→infra dependency on `internal/infrastructure/metrics` to set `BuzzRelayConnections` directly, or should the gauge instead be set from the `buzz` adapter layer via the existing (currently test-only) `ConnectedRelayCount()`? This is a Clean Architecture call, not just an implementation detail.
-2. **FR-005** — Is NIP-05 identity publishing actually planned for a near-term follow-up phase, or should `NIP05` be removed/marked reserved now? Determines whether the fix is "wire it up" (with a new test against the kind:10100 profile event) or "remove/mark reserved" (matching the `DMPolicy` precedent).
-3. **FR-006** — This gap pre-dates the Buzz branch and is not Buzz-specific. Should the fix land in this same remediation pass, or be spun off as a separate observability-hardening item so the Buzz branch's remediation stays scoped to Buzz-introduced gaps? Affects both fix scope and worktree/cluster assignment below.
-4. **FR-009** — What TTL or capacity bound should `agentCache` use? Is there an existing eviction/cache pattern elsewhere in the codebase (e.g., session handling) to match for consistency, or is this the first such cache and the bound is a fresh design decision?
-5. **FR-010** — `research.md` reportedly hints that `Filter.Since` backfill was an intentional Phase 1 scope cut. If confirmed, FR-010's fix reduces to documenting `Since` as reserved/unused (like `DMPolicy`) rather than implementing reconnect backfill. Confirm with the spec before choosing which acceptance-criteria branch to implement.
+1. **FR-004 — RESOLVED.** Gauge is set from the `buzz` adapter layer via `ConnectedRelayCount()`, not from `internal/infrastructure/nostr` directly. Keeps `nostr/` metrics-agnostic.
+2. **FR-005 — RESOLVED.** `NIP05` is marked reserved now (matching `DMPolicy`), not wired up. NIP-05 was already deferred per PRD §6.5.
+3. **FR-006 — RESOLVED.** Deferred out of this remediation pass entirely — tracked as a separate, later observability-hardening item since it's pre-existing and not Buzz-specific.
+4. **FR-009 — left to the implementer**, consistent with how this branch's Phase 2 loop-prevention heuristic was handled: pick a reasonable TTL/capacity bound, document the choice and rationale in implementation-notes.md, and cover it with a test. No existing cache-eviction pattern in this codebase to match, so this is a fresh design call, not a high-stakes one.
+5. **FR-010 — RESOLVED, and reclassified P2→P1.** Not a confirmed prior scope cut (that was this review's own unverified guess — no such note exists in research.md/spec.md). Implement reconnect backfill via `Filter.Since`; it's a real reliability gap against spec.md §6.10's NFR.
 
 ---
 
@@ -230,11 +242,12 @@ Whoever implements these fixes must follow this project's standard process (AGEN
 
 - **TDD for every fix, no exceptions.** Red (write a failing test that captures the acceptance criteria) → Green (minimal fix) → Refactor (mandatory, not optional). Do not write the implementation before the test.
 - **Brief code/design review after each fix, before starting the next one.** Confirm the fix satisfies its acceptance criteria above, doesn't reintroduce anything from the "Dimensions Reviewed With No Findings" section, and passes the full quality gate (`go fmt`, `go vet`, `golangci-lint run`, `go test ./...`, `go build -o bin/nuimanbot ./cmd/nuimanbot`). A second agent teammate doing this review (rather than the implementer self-reviewing) is preferred where practical.
-- **Fix order: P0 → P1 → P2.** No P0s exist in this PRD. Work through FR-001–FR-007 (P1) before any P2 item. Within P1, do FR-001/FR-002/FR-003 together since they share the same file and lifecycle concern (see Cluster A below).
+- **Fix order: P0 → P1 → P2.** No P0s exist in this PRD. Work through FR-001, FR-002, FR-003, FR-004, FR-005, FR-007, FR-010 (all P1, FR-006 excluded — deferred) before any P2 item. Within P1, do FR-001/FR-002/FR-003 together since they share the same file and lifecycle concern (see Cluster A below).
 - **Use git worktrees + agent teammates for parallel workstreams, but only across non-overlapping files.** Findings cluster as follows:
   - **Cluster A — `internal/adapter/gateway/buzz/gateway.go` lifecycle & structure (single owner, sequential, do first):** FR-001, FR-002, FR-003, FR-008, FR-011, FR-012, FR-013, FR-016. All touch the same file; assign one worktree/teammate and work top-to-bottom by priority to avoid merge conflicts.
-  - **Cluster B — observability wiring (parallel with A):** FR-004 (`internal/infrastructure/nostr/client.go`, `internal/infrastructure/metrics/prometheus.go` usage) and FR-006 (`internal/usecase/tool/service.go`, same metrics usage). Resolve the FR-006 scope question (Open Question 3) before starting.
-  - **Cluster C — config & docs (parallel with A/B):** FR-005 (`internal/config/gateway_config.go`, `support_docs/buzz-guide.md`), FR-007 (`support_docs/buzz-guide.md`), FR-014 (`documentation/technical-details.md`). FR-005 and FR-007 both touch `buzz-guide.md` — sequence those two within this cluster rather than editing concurrently.
-  - **Cluster D — cache & subscription (parallel with A/B/C):** FR-009 (`agent_cache.go`, `loop_guard.go`), FR-010 (`internal/infrastructure/nostr/subscription.go`).
+  - **Cluster B — observability wiring (parallel with A):** FR-004 (`internal/adapter/gateway/buzz/gateway.go` — sets the gauge via `ConnectedRelayCount()`, per the resolved Open Question 1 — coordinate with Cluster A since both touch `gateway.go`, or fold FR-004 into Cluster A's sequence). **FR-006 is excluded — deferred, not part of this pass.**
+  - **Cluster C — config & docs (parallel with A/B):** FR-005 (`internal/config/gateway_config.go`, `support_docs/buzz-guide.md` — mark `NIP05` reserved), FR-007 (`support_docs/buzz-guide.md`), FR-014 (`documentation/technical-details.md`). FR-005 and FR-007 both touch `buzz-guide.md` — sequence those two within this cluster rather than editing concurrently.
+  - **Cluster D — cache & subscription (parallel with A/B/C):** FR-009 (`agent_cache.go`, `loop_guard.go` — implementer picks TTL/capacity bound, documents rationale), FR-010 (`internal/infrastructure/nostr/subscription.go` — implement `Since` reconnect backfill, now P1).
   - **FR-015** is informational only — no fix, just a tracked follow-up note/comment.
+  - **FR-006** is deferred — do not implement in this pass; leave as a documented follow-up item.
 - Merge each cluster back to the integration branch and re-run the full quality gate before starting the next merge, so failures are attributable to a single cluster's changes.
