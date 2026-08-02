@@ -103,14 +103,16 @@ func hasToolNamed(tools []domain.ToolDefinition, name string) bool {
 	return false
 }
 
-// TestProcessMessage_RBACEnforcedAcrossPlatforms is the P3.1/P3.2 regression
-// test: for Telegram, Slack, and CLI, a message that triggers a tool call
-// must route through tool.Service.ExecuteWithUser (not the unchecked
-// Execute), so a RoleGuest caller is denied a RoleUser-gated tool — and that
-// tool must not even be listed for the LLM (FR-012, ListTools role
-// filtering). Before this fix, Execute() silently succeeded regardless of
-// role and ListTools ignored role entirely. Buzz's equivalent case is added
-// in P3.3, once P3.1/P3.2 have both landed.
+// TestProcessMessage_RBACEnforcedAcrossPlatforms is the P3.1/P3.2/P3.3
+// regression test: for every platform (Telegram, Slack, CLI, and Buzz), a
+// message that triggers a tool call must route through
+// tool.Service.ExecuteWithUser (not the unchecked Execute), so a RoleGuest
+// caller is denied a RoleUser-gated tool — and that tool must not even be
+// listed for the LLM (FR-012, ListTools role filtering). Before this fix,
+// Execute() silently succeeded regardless of role and ListTools ignored role
+// entirely. The Buzz cases require zero Buzz-specific code beyond what P3.1/
+// P3.2 already added to ChatService — confirming the fix is genuinely
+// platform-agnostic, not Buzz-specific with incidental coverage elsewhere.
 func TestProcessMessage_RBACEnforcedAcrossPlatforms(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -125,6 +127,8 @@ func TestProcessMessage_RBACEnforcedAcrossPlatforms(t *testing.T) {
 		{"Slack user allowed", domain.PlatformSlack, "slack-user", domain.RoleUser, false},
 		{"CLI guest denied", domain.PlatformCLI, "cli-guest", domain.RoleGuest, true},
 		{"CLI user allowed", domain.PlatformCLI, "cli-user", domain.RoleUser, false},
+		{"Buzz guest denied", domain.PlatformBuzz, "npub-guest", domain.RoleGuest, true},
+		{"Buzz user allowed", domain.PlatformBuzz, "npub-user", domain.RoleUser, false},
 	}
 
 	for _, tc := range cases {
