@@ -209,3 +209,32 @@ This predates the Buzz branch and is not itself a claim made about Buzz, but it 
 | FR-016 | Redundant Buzz-gateway user resolution | P2 |
 
 **Total: 0 P0, 7 P1, 9 P2 (16 findings)**
+
+---
+
+## Open Questions
+
+These decisions should be made (or confirmed) before or during remediation, since they change the shape of the fix for the finding noted:
+
+1. **FR-004** — Should `internal/infrastructure/nostr` be allowed an infra→infra dependency on `internal/infrastructure/metrics` to set `BuzzRelayConnections` directly, or should the gauge instead be set from the `buzz` adapter layer via the existing (currently test-only) `ConnectedRelayCount()`? This is a Clean Architecture call, not just an implementation detail.
+2. **FR-005** — Is NIP-05 identity publishing actually planned for a near-term follow-up phase, or should `NIP05` be removed/marked reserved now? Determines whether the fix is "wire it up" (with a new test against the kind:10100 profile event) or "remove/mark reserved" (matching the `DMPolicy` precedent).
+3. **FR-006** — This gap pre-dates the Buzz branch and is not Buzz-specific. Should the fix land in this same remediation pass, or be spun off as a separate observability-hardening item so the Buzz branch's remediation stays scoped to Buzz-introduced gaps? Affects both fix scope and worktree/cluster assignment below.
+4. **FR-009** — What TTL or capacity bound should `agentCache` use? Is there an existing eviction/cache pattern elsewhere in the codebase (e.g., session handling) to match for consistency, or is this the first such cache and the bound is a fresh design decision?
+5. **FR-010** — `research.md` reportedly hints that `Filter.Since` backfill was an intentional Phase 1 scope cut. If confirmed, FR-010's fix reduces to documenting `Since` as reserved/unused (like `DMPolicy`) rather than implementing reconnect backfill. Confirm with the spec before choosing which acceptance-criteria branch to implement.
+
+---
+
+## Guidance for Remediation
+
+Whoever implements these fixes must follow this project's standard process (AGENTS.md):
+
+- **TDD for every fix, no exceptions.** Red (write a failing test that captures the acceptance criteria) → Green (minimal fix) → Refactor (mandatory, not optional). Do not write the implementation before the test.
+- **Brief code/design review after each fix, before starting the next one.** Confirm the fix satisfies its acceptance criteria above, doesn't reintroduce anything from the "Dimensions Reviewed With No Findings" section, and passes the full quality gate (`go fmt`, `go vet`, `golangci-lint run`, `go test ./...`, `go build -o bin/nuimanbot ./cmd/nuimanbot`). A second agent teammate doing this review (rather than the implementer self-reviewing) is preferred where practical.
+- **Fix order: P0 → P1 → P2.** No P0s exist in this PRD. Work through FR-001–FR-007 (P1) before any P2 item. Within P1, do FR-001/FR-002/FR-003 together since they share the same file and lifecycle concern (see Cluster A below).
+- **Use git worktrees + agent teammates for parallel workstreams, but only across non-overlapping files.** Findings cluster as follows:
+  - **Cluster A — `internal/adapter/gateway/buzz/gateway.go` lifecycle & structure (single owner, sequential, do first):** FR-001, FR-002, FR-003, FR-008, FR-011, FR-012, FR-013, FR-016. All touch the same file; assign one worktree/teammate and work top-to-bottom by priority to avoid merge conflicts.
+  - **Cluster B — observability wiring (parallel with A):** FR-004 (`internal/infrastructure/nostr/client.go`, `internal/infrastructure/metrics/prometheus.go` usage) and FR-006 (`internal/usecase/tool/service.go`, same metrics usage). Resolve the FR-006 scope question (Open Question 3) before starting.
+  - **Cluster C — config & docs (parallel with A/B):** FR-005 (`internal/config/gateway_config.go`, `support_docs/buzz-guide.md`), FR-007 (`support_docs/buzz-guide.md`), FR-014 (`documentation/technical-details.md`). FR-005 and FR-007 both touch `buzz-guide.md` — sequence those two within this cluster rather than editing concurrently.
+  - **Cluster D — cache & subscription (parallel with A/B/C):** FR-009 (`agent_cache.go`, `loop_guard.go`), FR-010 (`internal/infrastructure/nostr/subscription.go`).
+  - **FR-015** is informational only — no fix, just a tracked follow-up note/comment.
+- Merge each cluster back to the integration branch and re-run the full quality gate before starting the next merge, so failures are attributable to a single cluster's changes.
