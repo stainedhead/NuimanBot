@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -585,6 +586,119 @@ func TestGateway_Send_MissingChannelID_ReturnsError(t *testing.T) {
 	err := gw.Send(context.Background(), domain.OutgoingMessage{Content: "no channel"})
 	if err == nil {
 		t.Error("Send() error = nil, want error when metadata[\"channel_id\"] is missing")
+	}
+}
+
+// fakeFailingNostrClient's Start always fails, letting tests exercise
+// Start()'s failed-client-Start wrap-and-return path (FR-003) without
+// needing an unreachable real error condition.
+type fakeFailingNostrClient struct{}
+
+func (fakeFailingNostrClient) Start(ctx context.Context, subscriptionID string, filters ...nostr.Filter) error {
+	return fmt.Errorf("simulated Nostr client start failure")
+}
+func (fakeFailingNostrClient) Stop() {}
+func (fakeFailingNostrClient) Publish(ctx context.Context, event nostr.Event) (int, error) {
+	return 0, nil
+}
+func (fakeFailingNostrClient) Events() <-chan nostr.ReceivedEvent { return nil }
+func (fakeFailingNostrClient) ConnectedRelayCount() int           { return 0 }
+
+func TestGateway_Start_NoRelays_ReturnsErrorAndLeavesClientNil(t *testing.T) {
+	privHex, _, err := nostr.GenerateKeypair()
+	if err != nil {
+		t.Fatalf("GenerateKeypair() error = %v", err)
+	}
+	cfg := &config.BuzzConfig{
+		Relays:     nil,
+		PrivateKey: domain.NewSecureStringFromString(privHex),
+		ChannelIDs: []string{"channel-uuid-1"},
+	}
+	gw, err := New(cfg, nil)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	err = gw.Start(context.Background())
+	if err == nil {
+		t.Fatal("Start() error = nil, want an error for a gateway with no configured relays")
+	}
+
+	// FR-003: must not leave the gateway partially initialized such that a
+	// subsequent Send()/Stop() call could panic (ties to FR-001).
+	if sendErr := gw.Send(context.Background(), domain.OutgoingMessage{
+		Content:  "x",
+		Metadata: map[string]any{"channel_id": "channel-uuid-1"},
+	}); sendErr == nil {
+		t.Error("Send() after a failed no-relays Start() error = nil, want error")
+	}
+	if stopErr := gw.Stop(context.Background()); stopErr != nil {
+		t.Errorf("Stop() after a failed no-relays Start() error = %v, want nil", stopErr)
+	}
+}
+
+func TestGateway_Start_NoPrivateKey_ReturnsErrorAndLeavesClientNil(t *testing.T) {
+	cfg := &config.BuzzConfig{
+		Relays:     []string{"wss://relay.example.com"},
+		PrivateKey: domain.NewSecureStringFromString(""),
+		ChannelIDs: []string{"channel-uuid-1"},
+	}
+	gw, err := New(cfg, nil)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	err = gw.Start(context.Background())
+	if err == nil {
+		t.Fatal("Start() error = nil, want an error for a gateway with no configured private key")
+	}
+
+	if sendErr := gw.Send(context.Background(), domain.OutgoingMessage{
+		Content:  "x",
+		Metadata: map[string]any{"channel_id": "channel-uuid-1"},
+	}); sendErr == nil {
+		t.Error("Send() after a failed no-private-key Start() error = nil, want error")
+	}
+	if stopErr := gw.Stop(context.Background()); stopErr != nil {
+		t.Errorf("Stop() after a failed no-private-key Start() error = %v, want nil", stopErr)
+	}
+}
+
+func TestGateway_Start_NostrClientStartFailure_ReturnsWrappedErrorAndLeavesClientNil(t *testing.T) {
+	origFactory := newNostrClient
+	newNostrClient = func(relayURLs []string) nostrClient { return fakeFailingNostrClient{} }
+	t.Cleanup(func() { newNostrClient = origFactory })
+
+	privHex, _, err := nostr.GenerateKeypair()
+	if err != nil {
+		t.Fatalf("GenerateKeypair() error = %v", err)
+	}
+	cfg := &config.BuzzConfig{
+		Relays:     []string{"wss://relay.example.com"},
+		PrivateKey: domain.NewSecureStringFromString(privHex),
+		ChannelIDs: []string{"channel-uuid-1"},
+	}
+	gw, err := New(cfg, nil)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	err = gw.Start(context.Background())
+	if err == nil {
+		t.Fatal("Start() error = nil, want the wrapped Nostr client Start() failure")
+	}
+	if !strings.Contains(err.Error(), "simulated Nostr client start failure") {
+		t.Errorf("Start() error = %q, want it to wrap the underlying client Start() error", err.Error())
+	}
+
+	if sendErr := gw.Send(context.Background(), domain.OutgoingMessage{
+		Content:  "x",
+		Metadata: map[string]any{"channel_id": "channel-uuid-1"},
+	}); sendErr == nil {
+		t.Error("Send() after a failed Start() (client.Start error) = nil, want error")
+	}
+	if stopErr := gw.Stop(context.Background()); stopErr != nil {
+		t.Errorf("Stop() after a failed Start() (client.Start error) = %v, want nil", stopErr)
 	}
 }
 

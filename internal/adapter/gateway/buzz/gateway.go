@@ -42,12 +42,32 @@ const (
 	buzzProfilePublishInitialBackoff = 200 * time.Millisecond
 )
 
+// nostrClient is the subset of *nostr.Client's methods Gateway depends on.
+// Defined here (rather than referencing *nostr.Client directly) so tests can
+// substitute a fake whose Start fails — nostr.Client.Start only fails when
+// its internal REQ-frame marshaling errors, which no valid Filter built from
+// gateway.go's own inputs can trigger, making that error-wrap path
+// (FR-003) otherwise untestable.
+type nostrClient interface {
+	Start(ctx context.Context, subscriptionID string, filters ...nostr.Filter) error
+	Stop()
+	Publish(ctx context.Context, event nostr.Event) (int, error)
+	Events() <-chan nostr.ReceivedEvent
+	ConnectedRelayCount() int
+}
+
+// newNostrClient constructs the nostrClient used by Start. A package
+// variable so tests can substitute a fake (see nostrClient's doc comment).
+var newNostrClient = func(relayURLs []string) nostrClient {
+	return nostr.NewClient(relayURLs)
+}
+
 // Gateway implements domain.Gateway for Buzz.
 type Gateway struct {
 	config      *config.BuzzConfig
 	userService *user.Service
 
-	client         *nostr.Client
+	client         nostrClient
 	messageHandler domain.MessageHandler
 	cancel         context.CancelFunc
 
@@ -93,8 +113,8 @@ func (g *Gateway) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	g.cancel = cancel
 
-	g.client = nostr.NewClient(g.config.Relays)
-	if err := g.client.Start(ctx, buzzSubscriptionID,
+	client := newNostrClient(g.config.Relays)
+	if err := client.Start(ctx, buzzSubscriptionID,
 		nostr.NewChannelFilter(g.config.ChannelIDs),
 		nostr.NewMembershipFilter(g.config.ChannelIDs),
 		nostr.NewAgentProfileFilter(),
@@ -102,6 +122,11 @@ func (g *Gateway) Start(ctx context.Context) error {
 		cancel()
 		return fmt.Errorf("failed to start Nostr client: %w", err)
 	}
+	// g.client is only set once the underlying client has actually started
+	// (FR-003) — a failed Start() above leaves g.client nil, so a subsequent
+	// Send()/Stop() call hits FR-001's nil-guard instead of operating on a
+	// half-initialized client.
+	g.client = client
 
 	slog.Info("Gateway started",
 		"platform", "buzz",
@@ -111,7 +136,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 
 	go g.publishAgentProfileBestEffort(ctx)
 
-	g.handleEvents(ctx)
+	g.handleEvents(ctx, client)
 	return nil
 }
 
@@ -230,14 +255,15 @@ func (g *Gateway) OnMessage(handler domain.MessageHandler) {
 	g.messageHandler = handler
 }
 
-// handleEvents reads from the Nostr client's merged event stream until ctx
-// is canceled or the stream closes.
-func (g *Gateway) handleEvents(ctx context.Context) {
+// handleEvents reads from client's merged event stream until ctx is canceled
+// or the stream closes.
+func (g *Gateway) handleEvents(ctx context.Context, client nostrClient) {
+	events := client.Events()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case recv, ok := <-g.client.Events():
+		case recv, ok := <-events:
 			if !ok {
 				return
 			}
