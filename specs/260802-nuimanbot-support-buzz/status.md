@@ -11,8 +11,15 @@
 | Phase 0 | Spec creation + review | Complete | 100% |
 | Phase 0 | Pre-implementation spikes (P0.1, P0.2) | Complete | 100% |
 | Phase 1 | Read-only participation (FR-001..FR-007) | Complete | 100% |
-| Phase 2 | Full gateway — Send() + loop prevention (FR-008, FR-009) | Not Started (out of this agent's scope) | 0% |
+| Phase 2 | Full gateway — Send() + loop prevention (FR-008, FR-009) | In Progress | 25% |
 | Phase 3 | Tool integration (FR-010) | Not Started (out of this agent's scope) | 0% |
+
+## Phase 2 Task Checklist
+
+- [x] P2.1 — `Send()`: publish signed `kind:9` channel messages (`internal/adapter/gateway/buzz/gateway.go`, `internal/infrastructure/nostr/client.go` `Publish`/`ConnectedRelayCount`)
+- [ ] P2.2 — Publish agent-profile event (`kind:10100`)
+- [ ] P2.3 — Subscribe to `kind:9000`/`kind:10100`, maintain is_agent cache
+- [ ] P2.4 — Loop-prevention guard
 
 ## Phase 0 Task Checklist
 
@@ -51,11 +58,15 @@
 
 ## Blockers
 
-None. Phase 0 and Phase 1 are complete; all AGENTS.md quality gates pass (`go fmt`, `go mod tidy`, `go vet`, `golangci-lint run` — 0 issues, `go test ./...` — all green, `go build` succeeds, `./bin/nuimanbot --help` runs without panic).
+None. Phase 0 and Phase 1 are complete; P2.1 complete. All AGENTS.md quality gates pass (`go fmt`, `go mod tidy`, `go vet`, `golangci-lint run` — 0 issues, `go test ./...` — all green, `go build` succeeds, `./bin/nuimanbot --help` runs without panic).
 
-Phase 3 (P3.1) remains blocked on a design decision: research.md Q6 (tool-execution RBAC-enforcement gap, found during spec review — `usecase/chat/tool_conversion.go` currently bypasses `ExecuteWithUser`'s RBAC/rate-limit checks for all platforms, not just Buzz). Does not block Phase 1/2. Phase 2 and Phase 3 are out of this agent's scope (Phase 0+1 only) and have not been started.
+Phase 3 (P3.1) remains blocked on a design decision: research.md Q6 (tool-execution RBAC-enforcement gap, found during spec review — `usecase/chat/tool_conversion.go` currently bypasses `ExecuteWithUser`'s RBAC/rate-limit checks for all platforms, not just Buzz). Does not block Phase 1/2. Phase 3 is out of this agent's scope and has not been started.
 
-## Recent Activity
+## Recent Activity (Phase 2)
+
+- 2026-08-02: P2.1 complete — `Client.Publish` (new: relay connection tracking via `relayConn`/`connsMu`, `ConnectedRelayCount`) added to `internal/infrastructure/nostr/client.go`; `Event` given NIP-01 wire JSON tags + a `Tag()` helper in `event.go`; `Gateway.Send()` implemented in `internal/adapter/gateway/buzz/gateway.go`, publishing correctly-signed, `#h`-tagged `kind:9` events and incrementing `buzz_events_published_total{status}`. All new code covered by tests (client_test.go, event_test.go, gateway_test.go), race-detector clean, full quality gate green.
+
+## Recent Activity (Phase 0-1)
 
 - 2026-08-02: Spec directory created from `nuimanbot-support-buzz-PRD.md`. All phase files initialized. PRD content (FRs, NFRs, rollout exit criteria) carried into spec.md without re-derivation, per explicit instruction — this PRD was already reviewed/hardened for this purpose.
 - 2026-08-02: Spec review completed (`/review-spec`). Verified claims against the actual codebase and fixed several gaps directly: (1) added tasks.md P0.2 spike for research.md Q5 (was previously unscoped, silently deferred into P1.3's refactor step); (2) added tasks.md P1.6b — FR-007's generate-if-absent keypair helper had zero task coverage; added corresponding Phase 1 exit criterion to spec.md; (3) corrected the `"buzz:<pubkey>"` user-key convention across spec.md/data-dictionary.md/architecture.md/tasks.md — `domain.User.ID` is a UUID, lookup is by `(Platform, PlatformUID)` tuple via the existing `usecase/user.Service`, and no gateway currently auto-creates users on first message (that claim was inaccurate — CreateUser today is CLI-admin-only); (4) clarified `BuzzConfig.DMPolicy` is reserved/unused — no FR in this spec covers Buzz DMs; (5) flagged (not resolved) research.md Q6: Phase 3's "no bypass" RBAC claim can't be verified as-is because the chat-triggered tool path bypasses RBAC/rate-limit checks for all platforms today, not just Buzz — needs a design decision before P3.1 starts.

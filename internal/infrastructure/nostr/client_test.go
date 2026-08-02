@@ -161,6 +161,83 @@ func TestClient_PartialRelayFailureDoesNotBlockOtherRelays(t *testing.T) {
 	}
 }
 
+func TestClient_Publish_WritesEventFrameToConnectedRelay(t *testing.T) {
+	received := make(chan []any, 1)
+	relay := newFakeRelay(t, func(conn *websocket.Conn) {
+		if _, _, err := conn.ReadMessage(); err != nil { // REQ frame
+			return
+		}
+		_, data, err := conn.ReadMessage() // published EVENT frame
+		if err != nil {
+			return
+		}
+		var frame []any
+		if err := json.Unmarshal(data, &frame); err != nil {
+			t.Errorf("failed to unmarshal published frame: %v", err)
+			return
+		}
+		received <- frame
+	})
+
+	client := nostr.NewClient([]string{wsURL(t, relay)})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := client.Start(ctx, "sub-1", nostr.NewChannelFilter([]string{"channel-uuid-1"})); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer client.Stop()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for client.ConnectedRelayCount() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if client.ConnectedRelayCount() == 0 {
+		t.Fatal("timed out waiting for relay connection")
+	}
+
+	event := nostr.Event{ID: "published-id", PubKey: "pk", CreatedAt: 1700000000, Kind: 9, Tags: [][]string{{"h", "channel-uuid-1"}}, Content: "hi", Sig: "sig"}
+	succeeded, err := client.Publish(ctx, event)
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+	if succeeded != 1 {
+		t.Errorf("Publish() succeeded = %d, want 1", succeeded)
+	}
+
+	select {
+	case frame := <-received:
+		if len(frame) != 2 {
+			t.Fatalf("published frame has %d elements, want 2 (\"EVENT\", event)", len(frame))
+		}
+		if frame[0] != "EVENT" {
+			t.Errorf("frame[0] = %v, want \"EVENT\"", frame[0])
+		}
+		eventObj, ok := frame[1].(map[string]any)
+		if !ok || eventObj["id"] != "published-id" {
+			t.Errorf("frame[1] = %v, want event with id=published-id", frame[1])
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for published frame at relay")
+	}
+}
+
+func TestClient_Publish_NoConnectedRelays_ReturnsError(t *testing.T) {
+	client := nostr.NewClient([]string{"ws://127.0.0.1:1"}) // never connects
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := client.Start(ctx, "sub-1", nostr.NewChannelFilter([]string{"channel-uuid-1"})); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer client.Stop()
+
+	_, err := client.Publish(ctx, nostr.Event{ID: "x"})
+	if err == nil {
+		t.Error("Publish() error = nil, want error when no relays are connected")
+	}
+}
+
 func TestClient_BoundedGoroutinesNoLeak(t *testing.T) {
 	relay := newFakeRelay(t, func(conn *websocket.Conn) {
 		for {

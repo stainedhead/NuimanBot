@@ -2,8 +2,14 @@ package buzz
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"testing"
+	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"nuimanbot/internal/config"
@@ -12,6 +18,36 @@ import (
 	"nuimanbot/internal/infrastructure/nostr"
 	"nuimanbot/internal/usecase/user"
 )
+
+// newFakeRelay starts an in-process WebSocket server that upgrades every
+// connection and hands it to handler. Mirrors
+// internal/infrastructure/nostr/client_test.go's helper of the same shape;
+// reimplemented locally since that one is unexported in another package.
+func newFakeRelay(t *testing.T, handler func(*websocket.Conn)) *httptest.Server {
+	t.Helper()
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		handler(conn)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// wsURL converts an httptest server's http:// URL to ws://.
+func wsURL(t *testing.T, srv *httptest.Server) string {
+	t.Helper()
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("failed to parse server URL: %v", err)
+	}
+	u.Scheme = "ws"
+	return u.String()
+}
 
 // stubSecurityService is a no-op domain.SecurityService, sufficient to
 // satisfy usecase/user.Service's audit-logging dependency in tests.
@@ -294,5 +330,190 @@ func TestGateway_ProcessEvent_RepeatPubkey_NoDuplicateUser(t *testing.T) {
 	}
 	if matching != 1 {
 		t.Errorf("found %d users for repeat pubkey, want exactly 1 (no duplicate)", matching)
+	}
+}
+
+// buzzRelayFrame is a helper to decode a client->relay NIP-01 frame's type
+// and (for "EVENT" frames) the wrapped event's kind, without needing the
+// full nostr.Event shape.
+type buzzRelayFrame struct {
+	msgType string
+	kind    int
+	tags    [][]string
+	content string
+}
+
+func decodeClientFrame(t *testing.T, data []byte) buzzRelayFrame {
+	t.Helper()
+	var raw []json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("failed to unmarshal client frame: %v", err)
+	}
+	var msgType string
+	if err := json.Unmarshal(raw[0], &msgType); err != nil {
+		t.Fatalf("failed to unmarshal frame type: %v", err)
+	}
+	f := buzzRelayFrame{msgType: msgType}
+	if msgType == "EVENT" && len(raw) >= 2 {
+		var wire struct {
+			Kind    int        `json:"kind"`
+			Tags    [][]string `json:"tags"`
+			Content string     `json:"content"`
+		}
+		if err := json.Unmarshal(raw[1], &wire); err != nil {
+			t.Fatalf("failed to unmarshal event: %v", err)
+		}
+		f.kind, f.tags, f.content = wire.Kind, wire.Tags, wire.Content
+	}
+	return f
+}
+
+func newConnectedTestGateway(t *testing.T, relay *httptest.Server) (*Gateway, string) {
+	t.Helper()
+	privHex, _, err := nostr.GenerateKeypair()
+	if err != nil {
+		t.Fatalf("GenerateKeypair() error = %v", err)
+	}
+
+	cfg := &config.BuzzConfig{
+		Relays:     []string{wsURL(t, relay)},
+		PrivateKey: domain.NewSecureStringFromString(privHex),
+		ChannelIDs: []string{"channel-uuid-1"},
+	}
+	gw, err := New(cfg, nil)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	gw.client = nostr.NewClient(cfg.Relays)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if err := gw.client.Start(ctx, buzzSubscriptionID, nostr.NewChannelFilter(cfg.ChannelIDs)); err != nil {
+		t.Fatalf("client.Start() error = %v", err)
+	}
+	t.Cleanup(gw.client.Stop)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for gw.client.ConnectedRelayCount() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if gw.client.ConnectedRelayCount() == 0 {
+		t.Fatal("timed out waiting for gateway's relay connection")
+	}
+
+	return gw, privHex
+}
+
+func TestGateway_Send_PublishesSignedChannelMessage(t *testing.T) {
+	frames := make(chan buzzRelayFrame, 4)
+	relay := newFakeRelay(t, func(conn *websocket.Conn) {
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			frames <- decodeClientFrame(t, data)
+		}
+	})
+
+	gw, _ := newConnectedTestGateway(t, relay)
+
+	before := testutil.ToFloat64(metrics.BuzzEventsPublishedTotal.WithLabelValues("success"))
+
+	err := gw.Send(context.Background(), domain.OutgoingMessage{
+		Content:  "hello from the gateway",
+		Metadata: map[string]any{"channel_id": "channel-uuid-1"},
+	})
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	after := testutil.ToFloat64(metrics.BuzzEventsPublishedTotal.WithLabelValues("success"))
+	if after != before+1 {
+		t.Errorf("BuzzEventsPublishedTotal{success} = %v, want %v", after, before+1)
+	}
+
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case f := <-frames:
+			if f.msgType != "EVENT" {
+				continue // the initial REQ frame
+			}
+			if f.kind != nostr.KindChannelMessage {
+				t.Errorf("published event kind = %d, want %d", f.kind, nostr.KindChannelMessage)
+			}
+			if f.content != "hello from the gateway" {
+				t.Errorf("published event content = %q, want %q", f.content, "hello from the gateway")
+			}
+			found := false
+			for _, tag := range f.tags {
+				if len(tag) == 2 && tag[0] == "h" && tag[1] == "channel-uuid-1" {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("published event missing #h channel-uuid-1 tag: %v", f.tags)
+			}
+			return
+		case <-deadline:
+			t.Fatal("timed out waiting for published EVENT frame at relay")
+		}
+	}
+}
+
+func TestGateway_Send_ProducesVerifiableSignature(t *testing.T) {
+	frames := make(chan buzzRelayFrame, 4)
+	rawEvents := make(chan []byte, 4)
+	relay := newFakeRelay(t, func(conn *websocket.Conn) {
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			f := decodeClientFrame(t, data)
+			frames <- f
+			if f.msgType == "EVENT" {
+				rawEvents <- data
+			}
+		}
+	})
+
+	gw, _ := newConnectedTestGateway(t, relay)
+
+	if err := gw.Send(context.Background(), domain.OutgoingMessage{
+		Content:  "verify me",
+		Metadata: map[string]any{"channel_id": "channel-uuid-1"},
+	}); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	select {
+	case data := <-rawEvents:
+		var raw []json.RawMessage
+		if err := json.Unmarshal(data, &raw); err != nil {
+			t.Fatalf("failed to unmarshal frame: %v", err)
+		}
+		var e nostr.Event
+		if err := json.Unmarshal(raw[1], &e); err != nil {
+			t.Fatalf("failed to unmarshal event: %v", err)
+		}
+		valid, err := nostr.Verify(e)
+		if err != nil {
+			t.Fatalf("Verify() error = %v", err)
+		}
+		if !valid {
+			t.Error("Verify() = false for a Send()-published event, want true")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for published event")
+	}
+}
+
+func TestGateway_Send_MissingChannelID_ReturnsError(t *testing.T) {
+	gw, _ := newTestGateway(t)
+	err := gw.Send(context.Background(), domain.OutgoingMessage{Content: "no channel"})
+	if err == nil {
+		t.Error("Send() error = nil, want error when metadata[\"channel_id\"] is missing")
 	}
 }

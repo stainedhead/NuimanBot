@@ -15,15 +15,31 @@ import (
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 )
 
-// Event represents a NIP-01 Nostr event.
+// Event represents a NIP-01 Nostr event. JSON tags match the NIP-01 wire
+// shape exactly, so Event can be marshaled directly into an outgoing
+// ["EVENT", event] frame (see Client.Publish) as well as unmarshaled from an
+// inbound relay frame.
 type Event struct {
-	ID        string
-	PubKey    string
-	CreatedAt int64
-	Kind      int
-	Tags      [][]string
-	Content   string
-	Sig       string
+	ID        string     `json:"id"`
+	PubKey    string     `json:"pubkey"`
+	CreatedAt int64      `json:"created_at"`
+	Kind      int        `json:"kind"`
+	Tags      [][]string `json:"tags"`
+	Content   string     `json:"content"`
+	Sig       string     `json:"sig"`
+}
+
+// Tag returns the value (second element) of e's first tag named name (e.g.
+// "h", "p", "role"), and whether such a tag was present. Tags with fewer
+// than two elements are skipped, since a NIP-01 tag's value is its second
+// element.
+func (e Event) Tag(name string) (string, bool) {
+	for _, tag := range e.Tags {
+		if len(tag) >= 2 && tag[0] == name {
+			return tag[1], true
+		}
+	}
+	return "", false
 }
 
 // ComputeID computes the NIP-01 event ID: the hex-encoded SHA-256 hash of the

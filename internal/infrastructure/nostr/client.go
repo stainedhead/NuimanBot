@@ -47,6 +47,20 @@ type Client struct {
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+
+	connsMu sync.Mutex
+	conns   map[string]*relayConn
+}
+
+// relayConn pairs a live relay WebSocket connection with a write mutex.
+// Gorilla's websocket.Conn supports one concurrent reader and one concurrent
+// writer; the read loop (runConnection) is the sole reader, and writeMu
+// serializes the initial subscription write against any concurrent Publish
+// calls (the sole writer role, shared across possibly-concurrent Publish
+// callers).
+type relayConn struct {
+	conn    *websocket.Conn
+	writeMu sync.Mutex
 }
 
 // NewClient creates a Client for the given relay URLs. Call Start to begin
@@ -58,6 +72,7 @@ func NewClient(relayURLs []string, opts ...ClientOption) *Client {
 		initialBackoff: 500 * time.Millisecond,
 		maxBackoff:     30 * time.Second,
 		dialer:         websocket.DefaultDialer,
+		conns:          make(map[string]*relayConn),
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -147,9 +162,13 @@ func (c *Client) runConnection(ctx context.Context, conn *websocket.Conn, relayU
 		}
 	}()
 
+	rc := &relayConn{conn: conn}
 	if err := conn.WriteMessage(websocket.TextMessage, reqFrame); err != nil {
 		return
 	}
+
+	c.registerConn(relayURL, rc)
+	defer c.unregisterConn(relayURL, rc)
 
 	for {
 		_, data, err := conn.ReadMessage()
@@ -168,6 +187,76 @@ func (c *Client) runConnection(ctx context.Context, conn *websocket.Conn, relayU
 			return
 		}
 	}
+}
+
+// registerConn records relayURL as currently connected, making it a target
+// for Publish. Multiple relay URLs may repeat (reconnects); the latest
+// connection for a URL wins.
+func (c *Client) registerConn(relayURL string, rc *relayConn) {
+	c.connsMu.Lock()
+	defer c.connsMu.Unlock()
+	c.conns[relayURL] = rc
+}
+
+// unregisterConn removes relayURL from the connected set, but only if it
+// still points at rc — guards against a fresh reconnect's registerConn being
+// clobbered by an older connection's delayed unregister.
+func (c *Client) unregisterConn(relayURL string, rc *relayConn) {
+	c.connsMu.Lock()
+	defer c.connsMu.Unlock()
+	if c.conns[relayURL] == rc {
+		delete(c.conns, relayURL)
+	}
+}
+
+// ConnectedRelayCount returns the number of relays currently connected. Safe
+// to call concurrently.
+func (c *Client) ConnectedRelayCount() int {
+	c.connsMu.Lock()
+	defer c.connsMu.Unlock()
+	return len(c.conns)
+}
+
+// Publish serializes event as an outgoing NIP-01 ["EVENT", event] client
+// frame and writes it to every currently connected relay. Partial failure
+// (some relays down or slow) does not fail the whole call as long as at
+// least one relay accepts the write — consistent with Start's
+// partial-connectivity NFR. Publish returns the number of relays the write
+// succeeded on, and an error only when every currently connected relay's
+// write failed (including when zero relays are connected).
+func (c *Client) Publish(ctx context.Context, event Event) (int, error) {
+	frame, err := json.Marshal([]any{"EVENT", event})
+	if err != nil {
+		return 0, fmt.Errorf("failed to marshal EVENT frame: %w", err)
+	}
+
+	c.connsMu.Lock()
+	targets := make(map[string]*relayConn, len(c.conns))
+	for relayURL, rc := range c.conns {
+		targets[relayURL] = rc
+	}
+	c.connsMu.Unlock()
+
+	if len(targets) == 0 {
+		return 0, fmt.Errorf("no Buzz relays currently connected")
+	}
+
+	var succeeded int
+	var lastErr error
+	for relayURL, rc := range targets {
+		rc.writeMu.Lock()
+		writeErr := rc.conn.WriteMessage(websocket.TextMessage, frame)
+		rc.writeMu.Unlock()
+		if writeErr != nil {
+			lastErr = fmt.Errorf("relay %s: %w", relayURL, writeErr)
+			continue
+		}
+		succeeded++
+	}
+	if succeeded == 0 {
+		return 0, lastErr
+	}
+	return succeeded, nil
 }
 
 func sleepOrDone(ctx context.Context, d time.Duration) bool {

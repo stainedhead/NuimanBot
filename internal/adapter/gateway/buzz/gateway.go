@@ -94,10 +94,41 @@ func (g *Gateway) Stop(ctx context.Context) error {
 	return nil
 }
 
-// Send publishes an outgoing message to Buzz. Not yet implemented — Phase 1
-// is read-only participation; publishing lands in Phase 2 (FR-008).
+// Send publishes msg as a signed kind:9 Buzz channel message (FR-008). The
+// target channel comes from msg.Metadata["channel_id"] (data-dictionary.md's
+// documented OutgoingMessage.Metadata contract for Buzz).
 func (g *Gateway) Send(ctx context.Context, msg domain.OutgoingMessage) error {
-	return fmt.Errorf("Buzz Send() is not yet supported (Phase 2)")
+	channelID, _ := msg.Metadata["channel_id"].(string)
+	if channelID == "" {
+		return fmt.Errorf(`Buzz Send requires metadata["channel_id"]`)
+	}
+
+	event, err := g.buildSignedChannelMessage(channelID, msg.Content)
+	if err != nil {
+		return err
+	}
+
+	if _, err := g.client.Publish(ctx, event); err != nil {
+		metrics.BuzzEventsPublishedTotal.WithLabelValues("failure").Inc()
+		return fmt.Errorf("failed to publish Buzz message: %w", err)
+	}
+	metrics.BuzzEventsPublishedTotal.WithLabelValues("success").Inc()
+	return nil
+}
+
+// buildSignedChannelMessage constructs and signs a kind:9 Buzz channel
+// message event carrying the required #h channel tag.
+func (g *Gateway) buildSignedChannelMessage(channelID, content string) (nostr.Event, error) {
+	event := nostr.Event{
+		CreatedAt: time.Now().Unix(),
+		Kind:      nostr.KindChannelMessage,
+		Tags:      [][]string{{nostr.ChannelTagName, channelID}},
+		Content:   content,
+	}
+	if err := nostr.Sign(&event, g.config.PrivateKey.Value()); err != nil {
+		return nostr.Event{}, fmt.Errorf("failed to sign Buzz message: %w", err)
+	}
+	return event, nil
 }
 
 // OnMessage registers a handler for incoming messages.
@@ -211,10 +242,6 @@ func (g *Gateway) resolveUser(ctx context.Context, pubkey string) error {
 // extractChannelID returns the value of e's channel tag (nostr.ChannelTagName),
 // or "" if absent.
 func extractChannelID(e nostr.Event) string {
-	for _, tag := range e.Tags {
-		if len(tag) >= 2 && tag[0] == nostr.ChannelTagName {
-			return tag[1]
-		}
-	}
-	return ""
+	channelID, _ := e.Tag(nostr.ChannelTagName)
+	return channelID
 }

@@ -1,6 +1,7 @@
 package nostr_test
 
 import (
+	"encoding/json"
 	"testing"
 
 	"nuimanbot/internal/infrastructure/nostr"
@@ -124,6 +125,59 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 	}
 	if !valid {
 		t.Error("Verify() = false for a validly signed event, want true")
+	}
+}
+
+// TestEvent_MarshalJSON_MatchesNIP01WireShape checks that json.Marshal(Event)
+// produces the exact NIP-01 wire field names (id/pubkey/created_at/kind/
+// tags/content/sig) — Client.Publish (P2.1) relies on this to build an
+// outgoing ["EVENT", event] frame other relays/clients can parse.
+func TestEvent_MarshalJSON_MatchesNIP01WireShape(t *testing.T) {
+	e := nostr.Event{
+		ID:        "abc123",
+		PubKey:    "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459",
+		CreatedAt: 1700000000,
+		Kind:      9,
+		Tags:      [][]string{{"h", "channel-uuid-1"}},
+		Content:   "hello",
+		Sig:       "deadbeef",
+	}
+
+	data, err := json.Marshal(e)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("failed to unmarshal event JSON: %v", err)
+	}
+
+	for _, key := range []string{"id", "pubkey", "created_at", "kind", "tags", "content", "sig"} {
+		if _, ok := decoded[key]; !ok {
+			t.Errorf("marshaled event missing wire field %q: %v", key, decoded)
+		}
+	}
+}
+
+func TestEvent_Tag_ReturnsFirstMatchingTagValue(t *testing.T) {
+	e := nostr.Event{Tags: [][]string{{"h", "channel-uuid-1"}, {"p", "some-pubkey"}, {"role", "bot"}}}
+
+	if v, ok := e.Tag("h"); !ok || v != "channel-uuid-1" {
+		t.Errorf("Tag(\"h\") = (%q, %v), want (\"channel-uuid-1\", true)", v, ok)
+	}
+	if v, ok := e.Tag("role"); !ok || v != "bot" {
+		t.Errorf("Tag(\"role\") = (%q, %v), want (\"bot\", true)", v, ok)
+	}
+	if _, ok := e.Tag("missing"); ok {
+		t.Error("Tag(\"missing\") returned ok=true, want false")
+	}
+}
+
+func TestEvent_Tag_SkipsShortTags(t *testing.T) {
+	e := nostr.Event{Tags: [][]string{{"solo"}}}
+	if _, ok := e.Tag("solo"); ok {
+		t.Error("Tag() matched a single-element tag, want it skipped (no value)")
 	}
 }
 
