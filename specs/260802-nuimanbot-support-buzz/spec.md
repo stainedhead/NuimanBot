@@ -49,8 +49,8 @@ Requirement numbering is carried over verbatim from PRD §6.9, grouped by rollou
 
 ### Phase 2 — Full gateway
 
-- **FR-008:** Publish signed, agent-tagged events via `Send()`.
-- **FR-009:** Apply loop-prevention guard to agent-authored reply chains.
+- **FR-008:** Publish signed `kind:9` channel messages via `Send()`, plus a `kind:10100` agent-profile event declaring this agent's identity (P0.2 finding: Buzz has no per-message agent tag — agent identity is a separate profile event, not a message tag; corrected 2026-08-02).
+- **FR-009:** Apply loop-prevention guard to agent-authored reply chains, sourcing `sender_is_agent` from a `kind:9000`/`kind:10100` membership+profile cache (research.md Q2, corrected 2026-08-02) rather than a per-message field.
 
 ### Phase 3 — Tool integration
 
@@ -124,8 +124,10 @@ Carried over verbatim from PRD §8 (Rollout Plan) exit criteria and Overall Acce
 
 ### Phase 2 exit criteria — Full gateway
 
-- `Send()` publishes correctly-signed, correctly-tagged (agent-marked) events to configured relays.
-- Loop-prevention guard demonstrably terminates a runaway agent-to-agent reply chain within the defined time window (test: simulated N-message exchange terminates rather than running indefinitely).
+- `Send()` publishes correctly-signed `kind:9` channel messages to configured relays.
+- Agent identity is published as a `kind:10100` profile event (not a per-message tag — corrected 2026-08-02 per P0.2 finding), verifiable/decodable by another Buzz-aware client.
+- Gateway subscribes to `kind:9000` (channel membership) and `kind:10100` (profile) events per joined channel and maintains a pubkey→is_agent cache; `sender_is_agent` in `IncomingMessage.Metadata` reflects this cache, not a per-message field.
+- Loop-prevention guard, consulting the is_agent cache, demonstrably terminates a runaway agent-to-agent reply chain within the defined time window (test: simulated N-message exchange terminates rather than running indefinitely).
 
 ### Phase 3 exit criteria — Tool integration
 

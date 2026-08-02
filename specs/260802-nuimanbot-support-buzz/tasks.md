@@ -143,34 +143,46 @@ go fmt ./... && go mod tidy && go vet ./... && golangci-lint run && go test ./..
 
 ## Phase 2 — Full gateway (FR-008, FR-009)
 
-### P2.1 — `Send()`: publish signed, agent-tagged events
+**Design correction (2026-08-02, research.md Q2/Q5):** the original P2.1-P2.3 breakdown assumed Buzz has a per-message agent-identity tag. P0.2's protocol spike found this is false — agent identity comes from a `kind:10100` profile event (agent-authored, replaceable) and `kind:9000` channel-membership role events, not a tag on each `kind:9` message. Revised task breakdown below reflects this.
+
+### P2.1 — `Send()`: publish signed `kind:9` channel messages
 
 - **Dependencies:** P1.1, P1.4, P1.7 (Phase 1 checkpoint passed)
 - **Duration:** ~1 day
-- **Red:** Test that `Send(ctx, domain.OutgoingMessage{...})` produces a correctly-signed NIP-01 event (verifiable via P1.2's `Verify`) and calls `Client.Publish` for each configured relay.
+- **Red:** Test that `Send(ctx, domain.OutgoingMessage{...})` produces a correctly-signed `kind:9` NIP-01 event (verifiable via P1.2's `Verify`), carries the required `#h` channel-ID tag (per P0.2), and calls `Client.Publish` for each configured relay.
 - **Green:** Implement `Send` on `buzz.Gateway` using `nostr/event.go`'s construction+signing and `nostr/client.go`'s publish path.
 - **Refactor:** Ensure error handling wraps relay publish failures with `%w` context; confirm partial-publish-failure (one relay down) doesn't fail the whole `Send()` if at least one relay accepts it (consistent with Phase 1's partial-connectivity NFR).
-- **Acceptance criteria:** Signed events verifiable; `buzz_events_published_total{status}` incremented; matches Phase 2 exit criterion "Send() publishes correctly-signed, correctly-tagged events."
+- **Acceptance criteria:** Signed `kind:9` events verifiable, carry `#h` tag; `buzz_events_published_total{status}` incremented; matches Phase 2 exit criterion "Send() publishes correctly-signed kind:9 channel messages."
 
-### P2.2 — Agent-tagging on outgoing events
+### P2.2 — Publish agent-profile event (`kind:10100`)
 
 - **Dependencies:** P2.1
-- **Duration:** ~0.3 day
-- **Red:** Test that outgoing events carry the agent-identity tag/marker (exact tag format resolved via research.md Q5 — if still unresolved at this point, this task blocks on a quick follow-up spike, documented in implementation-notes.md).
-- **Green:** Add agent-marker tag construction in `event.go` or `gateway.go`'s `Send` path.
-- **Refactor:** Keep tag-construction logic co-located with other NIP-01 tag handling (subscription.go's channel tags) for consistency.
-- **Acceptance criteria:** Outgoing events are distinguishable as agent-authored by other Buzz-aware clients per the resolved tag convention.
+- **Duration:** ~0.5 day
+- **Pre-requisite:** confirm the exact `kind:10100` event schema (content/tag fields for "agent metadata + owner reference") against `github.com/block/buzz`'s source (`crates/buzz-core/src/kind.rs` and wherever `KIND_AGENT_PROFILE` fields are defined/consumed) — P0.2 confirmed the kind number and its purpose but not the full field schema. Treat this as a short in-task spike, not a guess; document findings in implementation-notes.md.
+- **Red:** Test that the gateway publishes (or republishes on config change, since `kind:10100` is replaceable) a correctly-signed `kind:10100` event containing this agent's identity/owner-reference per the confirmed schema, once at `Start()` and not repeated per-message.
+- **Green:** Implement profile-event construction and publication, reusing `event.go`/`client.go`'s signing/publish path from P2.1.
+- **Refactor:** Keep profile-event construction separate from `Send()`'s per-message path — it's a distinct, low-frequency publication, not part of the message-send hot path.
+- **Acceptance criteria:** A `kind:10100` profile event is published and independently verifiable/decodable by another Buzz-aware client as declaring this agent's identity; matches Phase 2 exit criterion on agent-profile publication.
 
-### P2.3 — Loop-prevention guard
+### P2.3 — Subscribe to `kind:9000`/`kind:10100`, maintain is_agent cache
 
-- **Dependencies:** P2.2
+- **Dependencies:** P1.3 (subscription.go exists), P2.2 (so the cache logic can be tested against this agent's own published profile too)
 - **Duration:** ~1 day
-- **Red:** Simulated-exchange test: construct a chain of N agent-authored messages addressed to this agent in rapid succession; assert the guard stops auto-reply after the defined threshold/time window rather than replying indefinitely (explicit Phase 2 exit criterion in spec.md).
-- **Green:** Implement the guard per the heuristic finalized in research.md Q2 (time-window and/or tag-based).
+- **Red:** Test that receiving a `kind:9000` event with `MemberRole: Bot` for a pubkey, or a `kind:10100` profile event from a pubkey, updates an in-memory pubkey→is_agent cache; test cache lookup returns correct is_agent value for known/unknown pubkeys; test `sender_is_agent` in `IncomingMessage.Metadata` reflects a cache lookup at message-receive time, not a hardcoded value.
+- **Green:** Extend `subscription.go`/`gateway.go` to subscribe to `kind:9000` and `kind:10100` per joined channel, and add the pubkey→is_agent cache (simple in-memory map with a mutex or `sync.Map`; no persistence required for Phase 2).
+- **Refactor:** Keep the cache as an independently testable component, not buried in the event-read loop; confirm it's safe under concurrent access (relay read loop + membership/profile update loop).
+- **Acceptance criteria:** `sender_is_agent` correctly reflects live membership/profile data, not a placeholder; matches Phase 2 exit criterion on the is_agent cache.
+
+### P2.4 — Loop-prevention guard
+
+- **Dependencies:** P2.3
+- **Duration:** ~1 day
+- **Red:** Simulated-exchange test: construct a chain of N agent-authored messages (cache-marked as agent via P2.3) addressed to this agent in rapid succession; assert the guard stops auto-reply after the defined threshold/time window rather than replying indefinitely (explicit Phase 2 exit criterion in spec.md).
+- **Green:** Implement the guard per the heuristic finalized in research.md Q2 (time-window and/or reply-chain based), consulting the P2.3 is_agent cache rather than a per-message field.
 - **Refactor:** Extract the guard into a small, independently testable component (not buried inline in `handleEvents`) so the heuristic can be tuned without touching the read loop.
 - **Acceptance criteria:** Simulated runaway N-message exchange demonstrably terminates; guard does not suppress legitimate human-to-agent or single agent-to-agent reply.
 
-**[Phase 2 exit criteria checkpoint — verify both spec.md Phase 2 exit criteria before starting Phase 3]**
+**[Phase 2 exit criteria checkpoint — verify all four spec.md Phase 2 exit criteria before starting Phase 3]**
 
 ---
 
@@ -219,7 +231,7 @@ P1.6 (parallel) ─────────────────┘        �
                                               │
                               [Phase 1 checkpoint — incl. FR-007 keypair criterion]
                                               │
-                                     P2.1 ─ P2.2 ─ P2.3
+                                     P2.1 ─ P2.2 ─ P2.3 ─ P2.4
                                               │
                               [Phase 2 checkpoint]
                                               │

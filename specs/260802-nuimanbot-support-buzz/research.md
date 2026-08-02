@@ -23,8 +23,15 @@
 
    `go get github.com/btcsuite/btcd/btcec/v2` run as part of P0.1; `gorilla/websocket` promoted to direct via its use in `client.go` (P1.4) plus `go mod tidy`.
 
-2. **What is the exact loop-prevention heuristic?**
-   Time-window based (don't auto-reply to agent-authored messages within N seconds/minutes of this agent's own reply) vs. event-tag based (rely on Buzz's own agent-identity tagging mechanism) vs. content-based detection. Needs to be finalized during Phase 2 implementation with test coverage for a simulated N-message runaway exchange terminating rather than running indefinitely (see spec.md Phase 2 exit criteria).
+2. **[PARTIALLY RESOLVED 2026-08-02] What is the exact loop-prevention heuristic, and how is `sender_is_agent` actually determined?**
+
+   P0.2's spike against `github.com/block/buzz` source found there is **no per-message agent-identity tag** on `kind:9` channel messages — Phase 1 (P1.8/P1.9) correctly scoped `sender_is_agent` in `IncomingMessage.Metadata` as a best-effort placeholder `false`, flagged for Phase 2 as the first real consumer. Buzz determines agent status via two message-scoped-but-not-per-message signals instead:
+   - **Channel membership role** — `KIND_NIP29_PUT_USER = 9000` admin events carry a `MemberRole` (`Owner|Admin|Member|Guest|Bot`); `Bot` is Buzz's canonical agent designation, readable from the channel's membership list, not from the `kind:9` message itself.
+   - **Agent profile event** — `KIND_AGENT_PROFILE = 10100`, a replaceable, agent-authored, pubkey-scoped profile event.
+
+   **Decision (product owner, 2026-08-02): Phase 2 subscribes to `kind:9000` and `kind:10100` events per joined channel and maintains an in-memory pubkey→is_agent cache**, refreshed as membership/profile events arrive. The gateway's `sender_is_agent` metadata field becomes a cache lookup at message-receive time, not a raw per-event field. The loop-prevention guard itself queries this cache rather than trusting a message-embedded flag. This is more Phase 2 scope than the PRD originally assumed (which imagined a simple per-message tag), but it's what Buzz's actual protocol requires for correctness rather than a placeholder.
+
+   The exact reply-loop heuristic on top of that cache (time-window vs. event-tag/reply-chain based vs. content-based) is still an implementation-time decision for Phase 2, with test coverage for a simulated N-message runaway exchange terminating rather than running indefinitely (see spec.md Phase 2 exit criteria) — not resolved further here.
 
 3. **Does Buzz's "approved automations" concept require a new permission tier beyond `RoleGuest`/`RoleUser`/`RoleAdmin`, or does it map cleanly onto existing tool RBAC?**
    Relevant to Phase 3 (FR-010). Current assumption per PRD §6.5/§6.7 is that existing RBAC + rate-limiting + audit pipeline applies unchanged, with no bypass for Buzz-originated requests. Needs confirmation once Buzz's automation-approval protocol details are better understood (Buzz repo is open-source; may require reading its source/docs directly).
@@ -68,7 +75,7 @@
 
 ## Open Questions
 
-Questions 1 and 5 are **resolved** (2026-08-02, P0.1/P0.2 spikes) — see above. Questions 2, 3, and 4 remain implementation-time decisions for Phase 2/3 respectively (out of this agent's Phase 0+1 scope). Question 6 is resolved (2026-08-02) — see above; Phase 3 now includes an all-platforms RBAC-enforcement fix, not just Buzz.
+Questions 1, 5, and 6 are **resolved** (2026-08-02) — see above. Question 2 is **partially resolved** (2026-08-02) — the `sender_is_agent` data source is now settled (kind:9000/kind:10100 cache), but the reply-loop heuristic itself is still a Phase 2 implementation-time decision. Questions 3 and 4 remain implementation-time decisions for Phase 2/3 respectively.
 
 ## References
 
