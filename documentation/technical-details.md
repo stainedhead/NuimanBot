@@ -729,7 +729,7 @@ audit_events_total{action, outcome}
 buzz_events_received_total{channel_id, sender_is_agent}
 buzz_events_published_total{status}
 buzz_signature_verification_failures_total
-buzz_relay_connections{relay_url, status}  # declared; not yet wired to Client — see Buzz Gateway Architecture
+buzz_relay_connections  # aggregate connected-relay count, polled from Client every 250ms
 ```
 
 ### Health Checks
@@ -1265,9 +1265,9 @@ This is called once at startup in `cmd/nuimanbot/main.go` before constructing th
 
 **Trade-off accepted:** the gateway does not get go-nostr's broader NIP coverage (DMs, NIP-05, relay pool niceties) for free — acceptable since DMs are explicitly out of scope for this phase and Buzz's own transport needs are narrow (see `nostr/subscription.go`'s hand-rolled filter/REQ framing).
 
-### Known Gap: `buzz_relay_connections` Metric
+### `buzz_relay_connections` Metric
 
-`internal/infrastructure/metrics/prometheus.go` declares a `buzz_relay_connections` gauge (labeled `relay_url`, `status`), but no code path currently sets it — `nostr.Client` tracks connected-relay state internally (`ConnectedRelayCount()`) but nothing calls into the gauge. The three other Buzz metrics (`buzz_events_received_total`, `buzz_events_published_total`, `buzz_signature_verification_failures_total`) are live and incremented from `internal/adapter/gateway/buzz/gateway.go`. Wiring `buzz_relay_connections` up to `Client`'s connect/disconnect transitions is unimplemented follow-up work, not a documentation gap.
+`internal/infrastructure/metrics/prometheus.go` declares `buzz_relay_connections` as a plain `Gauge` (not labeled by `relay_url`/`status` — `nostr.Client` only exposes an aggregate `ConnectedRelayCount()`, not per-relay connect state, so a `GaugeVec` would carry unused labels). `buzz.Gateway.Start()` launches a background goroutine (`monitorRelayConnections`, `internal/adapter/gateway/buzz/gateway.go`) that polls `Client.ConnectedRelayCount()` every 250ms and sets the gauge until the gateway's context is canceled. All four Buzz metrics (`buzz_events_received_total`, `buzz_events_published_total`, `buzz_signature_verification_failures_total`, `buzz_relay_connections`) are live.
 
 ---
 

@@ -571,6 +571,32 @@ func TestGateway_Send_ProducesVerifiableSignature(t *testing.T) {
 	}
 }
 
+// TestGateway_Send_InvalidPrivateKey_ReturnsError covers the case where a
+// gateway reaches Send() with a non-empty but malformed configured private
+// key (Start() only checks for emptiness, not hex/key validity) — the
+// buildSignedChannelMessage -> nostr.Sign() failure must surface as an
+// error, not panic.
+func TestGateway_Send_InvalidPrivateKey_ReturnsError(t *testing.T) {
+	cfg := &config.BuzzConfig{
+		Relays:     []string{"ws://127.0.0.1:0"},
+		PrivateKey: domain.NewSecureStringFromString("not-a-valid-hex-key"),
+		ChannelIDs: []string{"channel-uuid-1"},
+	}
+	gw, err := New(cfg, nil)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	gw.client = nostr.NewClient(cfg.Relays) // non-nil so Send() reaches signing, not the FR-001 nil-guard
+
+	err = gw.Send(context.Background(), domain.OutgoingMessage{
+		Content:  "hello",
+		Metadata: map[string]any{"channel_id": "channel-uuid-1"},
+	})
+	if err == nil {
+		t.Error("Send() error = nil, want error when the configured private key is malformed")
+	}
+}
+
 func TestGateway_Send_NilClient_ReturnsErrorNotPanic(t *testing.T) {
 	gw, _ := newTestGateway(t) // constructed but never Start()ed: g.client is nil
 	err := gw.Send(context.Background(), domain.OutgoingMessage{

@@ -42,7 +42,7 @@ func (m *MockUserProfileRepository) GetProfileByUserID(ctx context.Context, user
 	if !ok {
 		return nil, errors.New("profile not found")
 	}
-	return profile, nil
+	return copyProfile(profile), nil
 }
 
 func (m *MockUserProfileRepository) GetProfileByEmail(ctx context.Context, email string) (*domain.UserProfile, error) {
@@ -51,7 +51,7 @@ func (m *MockUserProfileRepository) GetProfileByEmail(ctx context.Context, email
 	}
 	for _, p := range m.profiles {
 		if p.PrimaryEmail == email {
-			return p, nil
+			return copyProfile(p), nil
 		}
 	}
 	return nil, errors.New("profile not found")
@@ -65,19 +65,27 @@ func (m *MockUserProfileRepository) GetProfileByPlatformID(ctx context.Context, 
 		switch platform {
 		case domain.PlatformSlack:
 			if p.PlatformIDs.Slack == platformID {
-				return p, nil
+				return copyProfile(p), nil
 			}
 		case domain.PlatformTelegram:
 			if p.PlatformIDs.Telegram == platformID {
-				return p, nil
+				return copyProfile(p), nil
 			}
 		case domain.PlatformCLI:
 			if p.PlatformIDs.CLI == platformID {
-				return p, nil
+				return copyProfile(p), nil
 			}
 		}
 	}
 	return nil, errors.New("profile not found")
+}
+
+// copyProfile returns a shallow copy so callers can mutate the result
+// without affecting the mock's underlying store, matching the semantics
+// of the file-backed repository (which always deserializes fresh objects).
+func copyProfile(p *domain.UserProfile) *domain.UserProfile {
+	cp := *p
+	return &cp
 }
 
 func (m *MockUserProfileRepository) ListProfiles(ctx context.Context, offset, limit int) ([]*domain.UserProfile, error) {
@@ -86,7 +94,7 @@ func (m *MockUserProfileRepository) ListProfiles(ctx context.Context, offset, li
 	}
 	profiles := make([]*domain.UserProfile, 0, len(m.profiles))
 	for _, p := range m.profiles {
-		profiles = append(profiles, p)
+		profiles = append(profiles, copyProfile(p))
 	}
 	// Apply pagination
 	if offset >= len(profiles) {
@@ -113,7 +121,7 @@ func (m *MockUserProfileRepository) DeleteProfile(ctx context.Context, userID st
 func (m *MockUserProfileRepository) GetProfileByAPIKey(ctx context.Context, apiKey string) (*domain.UserProfile, error) {
 	for _, p := range m.profiles {
 		if p.APIKey == apiKey {
-			return p, nil
+			return copyProfile(p), nil
 		}
 	}
 	return nil, errors.New("profile not found")
