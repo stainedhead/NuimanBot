@@ -14,6 +14,7 @@ import (
 	"nuimanbot/internal/adapter/api"
 	cliadapter "nuimanbot/internal/adapter/cli"
 	memoryfactory "nuimanbot/internal/adapter/factory"
+	"nuimanbot/internal/adapter/gateway/buzz"
 	"nuimanbot/internal/adapter/gateway/cli"
 	"nuimanbot/internal/adapter/gateway/slack"
 	"nuimanbot/internal/adapter/gateway/telegram"
@@ -59,6 +60,7 @@ import (
 	"nuimanbot/internal/usecase/tool/github"
 	"nuimanbot/internal/usecase/tool/repo_search"
 	"nuimanbot/internal/usecase/tool/summarize"
+	"nuimanbot/internal/usecase/user"
 )
 
 // application represents the core NuimanBot application.
@@ -955,6 +957,42 @@ func (app *application) Run(ctx context.Context) error {
 					slog.Error("Slack gateway error", "error", err)
 				}
 			}()
+		}
+	}
+
+	// Initialize Buzz gateway if enabled
+	if app.Config.Gateways.Buzz.Enabled {
+		// Buzz is the first gateway to resolve/create domain.User records
+		// from a message-handling path (FR-006); no production
+		// domain.UserRepository existed before, so it's backed here by a
+		// dedicated file (distinct from users.json, which stores
+		// domain.UserProfile admin data, a different schema).
+		domainUserRepo := storage.NewFileUserRepository(dataDir + "/domain_users.json")
+		buzzUserService := user.NewService(domainUserRepo, app.SecurityService)
+
+		// Generate-if-absent secp256k1 keypair (FR-007), persisted via the
+		// existing credential vault.
+		ensuredKey, err := crypto.EnsureBuzzKeypair(ctx, app.Vault, "buzz_private_key", app.Config.Gateways.Buzz.PrivateKey)
+		if err != nil {
+			slog.Warn("Failed to ensure Buzz keypair", "error", err)
+		} else {
+			app.Config.Gateways.Buzz.PrivateKey = ensuredKey
+
+			buzzGateway, err := buzz.New(&app.Config.Gateways.Buzz, buzzUserService)
+			if err != nil {
+				slog.Warn("Failed to create Buzz gateway", "error", err)
+			} else {
+				app.connectGateway(buzzGateway)
+				gateways = append(gateways, buzzGateway) //nolint:ineffassign,staticcheck // Reserved for future shutdown handling
+
+				// Start Buzz gateway in background
+				go func() {
+					slog.Info("Starting gateway", "platform", "buzz")
+					if err := buzzGateway.Start(ctx); err != nil {
+						slog.Error("Buzz gateway error", "error", err)
+					}
+				}()
+			}
 		}
 	}
 

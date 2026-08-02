@@ -41,10 +41,21 @@ type WebUIConfig struct {
 	Addr    string `yaml:"addr"` // Listen address (e.g., ":8081")
 }
 
+// BuzzConfig configures the Buzz Gateway (Nostr-based multi-agent chat).
+type BuzzConfig struct {
+	Enabled    bool                `yaml:"enabled"`
+	PrivateKey domain.SecureString `yaml:"private_key"`
+	Relays     []string            `yaml:"relays"`
+	NIP05      string              `yaml:"nip05"`
+	ChannelIDs []string            `yaml:"channel_ids"`
+	DMPolicy   DMPolicy            `yaml:"dm_policy"`
+}
+
 // GatewaysConfig holds all gateway configurations.
 type GatewaysConfig struct {
 	Telegram TelegramConfig `yaml:"telegram"`
 	Slack    SlackConfig    `yaml:"slack"`
 	CLI      CLIConfig      `yaml:"cli"`
 	WebUI    WebUIConfig    `yaml:"web_ui"`
+	Buzz     BuzzConfig     `yaml:"buzz"`
 }

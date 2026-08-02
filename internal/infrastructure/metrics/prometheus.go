@@ -239,4 +239,36 @@ var (
 		},
 		[]string{"action", "outcome"},
 	)
+
+	// Buzz Gateway Metrics
+	BuzzRelayConnections = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "buzz_relay_connections",
+			Help: "Current Buzz relay connection status (1 = connected, 0 = disconnected)",
+		},
+		[]string{"relay_url", "status"},
+	)
+
+	BuzzEventsReceivedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "buzz_events_received_total",
+			Help: "Total number of verified Buzz events received",
+		},
+		[]string{"channel_id", "sender_is_agent"},
+	)
+
+	BuzzEventsPublishedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "buzz_events_published_total",
+			Help: "Total number of Buzz events published",
+		},
+		[]string{"status"},
+	)
+
+	BuzzSignatureVerificationFailuresTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "buzz_signature_verification_failures_total",
+			Help: "Total number of Buzz events dropped for failing signature verification",
+		},
+	)
 )

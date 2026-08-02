@@ -11,6 +11,7 @@ const (
 	PlatformTelegram Platform = "telegram"
 	PlatformSlack    Platform = "slack"
 	PlatformCLI      Platform = "cli"
+	PlatformBuzz     Platform = "buzz"
 )
 
 // IncomingMessage represents a message received from a platform.
