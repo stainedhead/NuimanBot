@@ -166,18 +166,20 @@ func (s *Service) SummarizeConversation(
 type Role string
 
 const (
-    RoleGuest Role = "guest"  // No tools
-    RoleUser  Role = "user"   // Basic tools
-    RoleAdmin Role = "admin"  // All tools
+    RoleGuest Role = "guest"  // Limited access, unauthenticated users
+    RoleUser  Role = "user"   // Standard access, registered users
+    RoleAdmin Role = "admin"  // Full access, administrators
 )
 
-// Permissions hierarchy
-var SkillPermissions = map[string]Role{
-    "calculator": RoleUser,
-    "datetime":   RoleUser,
+// ToolPermissions maps tool names to the minimum role required to execute them.
+// Tools not in this map default to requiring RoleUser.
+var ToolPermissions = map[string]Role{
+    "calculator": RoleGuest,
+    "datetime":   RoleGuest,
     "weather":    RoleUser,
-    "websearch":  RoleUser,
+    "web_search": RoleUser,
     "notes":      RoleUser,
+    "admin.user": RoleAdmin,
 }
 ```
 
