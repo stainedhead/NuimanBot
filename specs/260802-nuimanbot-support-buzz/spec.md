@@ -55,6 +55,10 @@ Requirement numbering is carried over verbatim from PRD §6.9, grouped by rollou
 ### Phase 3 — Tool integration
 
 - **FR-010:** Trigger `GitHub`/`CodingAgent`/`RepoSearch` tools from Buzz messages under existing RBAC.
+- **FR-011** *(added 2026-08-02, research.md Q6):* `ChatService`'s tool-invocation path (`usecase/chat/tool_conversion.go`) MUST call `tool.Service.ExecuteWithUser()` instead of the unchecked `Execute()`, for all platforms — Telegram, Slack, CLI, and Buzz — so tool execution is actually RBAC- and rate-limit-checked, not just for Buzz.
+- **FR-012** *(added 2026-08-02, research.md Q6):* `tool.Service.ListTools()` MUST apply role-based filtering (currently a `TODO` at `internal/usecase/tool/service.go:261`), for all platforms.
+
+> **Scope note:** FR-011/FR-012 fix a pre-existing gap discovered during spec review — tool execution today is unenforced for every platform, not just Buzz. Fixing it only for Buzz would be inconsistent (and impossible to test meaningfully, since the shared `ChatService` path doesn't branch by platform). Decision recorded in research.md Q6: fix for all platforms as part of Phase 3, accepting that existing Telegram/Slack/CLI users may see tool availability change if their role lacks permission for a tool they could previously call unchecked.
 
 ## Non-Functional Requirements
 
@@ -127,8 +131,10 @@ Carried over verbatim from PRD §8 (Rollout Plan) exit criteria and Overall Acce
 
 - Buzz channel messages can trigger `GitHub`/`CodingAgent`/`RepoSearch` tool execution under the existing RBAC + rate-limiting pipeline, with no bypass for Buzz-originated requests.
 - Tool execution triggered from Buzz is audit-logged identically to tool execution triggered from other platforms.
+- `ChatService`'s tool-invocation path calls `ExecuteWithUser()` (not the unchecked `Execute()`), verified by a regression test asserting RBAC/rate-limiting is enforced for tool calls originating from **each** platform (Telegram, Slack, CLI, Buzz), not just Buzz.
+- `ListTools()` returns a role-filtered tool list per caller, verified for at least two distinct roles (`RoleGuest` vs `RoleAdmin`) returning different tool sets where the fixture data warrants it.
 
-> **⚠️ Open design question — see research.md Open Questions.** As of this spec, the chat-message-triggered tool path (`usecase/chat/tool_conversion.go` → `toolExecService.Execute()`) does **not** currently invoke the RBAC/rate-limit-checked path (`tool.Service.ExecuteWithUser`, which performs `checkPermission` + rate limiting + audit) for **any** platform — Telegram, Slack, and CLI-via-skill-handler included. `ListTools` also currently ignores role entirely (`internal/usecase/tool/service.go:261`, marked `TODO`). This means "no bypass for Buzz-originated requests" is trivially true today only in the sense that Buzz would be exactly as unenforced as every other platform — not that Buzz gets genuine RBAC enforcement. Before Phase 3 implementation, a decision is needed: (a) Phase 3 also wires `ChatService`'s tool path to `ExecuteWithUser` for all platforms (bigger scope, changes existing Telegram/Slack/CLI behavior), or (b) Buzz explicitly inherits the current non-enforcement, and the Phase 3 exit criteria/PRD §6.7 security narrative is revised to reflect that. This is flagged, not resolved, in this spec — see research.md.
+**Resolved 2026-08-02 (research.md Q6):** tool execution is unenforced for every platform today, not just Buzz — `tool_conversion.go` calls the unchecked `Execute()`, and `ListTools` ignores role entirely. Decision: fix this for all platforms as part of Phase 3 (FR-011, FR-012), rather than scoping Buzz down to match the existing gap. This is a deliberate behavior change for existing Telegram/Slack/CLI users, not a Buzz-only fix.
 
 ### Overall Acceptance
 

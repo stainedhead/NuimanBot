@@ -174,19 +174,35 @@ go fmt ./... && go mod tidy && go vet ./... && golangci-lint run && go test ./..
 
 ---
 
-## Phase 3 — Tool integration (FR-010)
+## Phase 3 — Tool integration (FR-010, FR-011, FR-012)
 
-### P3.1 — Trigger `GitHub`/`CodingAgent`/`RepoSearch` tools from Buzz messages under existing RBAC
+### P3.1 — Wire `ChatService`'s tool-invocation path to `ExecuteWithUser()` for all platforms
 
-- **Dependencies:** P2.3 (Phase 2 checkpoint passed), **and a resolution of research.md Open Question 6 (see below) before this task starts**
-- **Duration:** ~1 day (may grow if Open Question 6 is resolved as option (a) — see below)
-- **⚠️ Pre-requisite, found during spec review:** confirm with the team lead/PRD owner how to resolve research.md Q6 before writing this task's Red step: `usecase/chat/tool_conversion.go` currently calls the unchecked `Execute()`, not the RBAC/rate-limit-checked `ExecuteWithUser()`, for **all** platforms today (not a Buzz-specific gap). Pick one:
-  - (a) Also wire `ChatService`'s tool-invocation path to `ExecuteWithUser` for all platforms as part of this task (bigger scope — touches shared `usecase/chat` code, affects existing Telegram/Slack/CLI behavior, needs its own regression tests for those platforms).
-  - (b) Leave the existing behavior as-is; Buzz inherits the same non-enforcement as other platforms, and this task's acceptance criteria is narrowed to "identical treatment to other platforms" rather than "genuine RBAC enforcement."
-- **Red:** Test that a Buzz-originated message routed through `ChatService`/`ToolService` triggers tool execution identically to an equivalent Slack/Telegram message — same checks (whatever those are per the Q6 resolution above), same audit-log entries (no Buzz-specific bypass beyond what other platforms already have).
-- **Green:** Confirm/wire the existing `messageHandler` → `ChatService.ProcessMessage` → tool-invocation path (already used by CLI per `cmd/nuimanbot/main.go`'s `skillHandler.SetMessageHandler` pattern) works unchanged for `PlatformBuzz`; implement the Q6 resolution chosen above.
+- **Dependencies:** P2.3 (Phase 2 checkpoint passed)
+- **Duration:** ~1 day
+- **Resolved 2026-08-02 (research.md Q6):** `usecase/chat/tool_conversion.go:31` currently calls the unchecked `Execute()` for **all** platforms today (Telegram, Slack, CLI) — not a Buzz-specific gap. Decision: fix it for everyone as part of this phase (FR-011), accepting that existing users may see tool availability change if their role lacks permission for a tool they could previously call unchecked.
+- **Red:** Regression tests asserting that a message from each existing platform (Telegram, Slack, CLI) routed through `ChatService` → tool conversion triggers `tool.Service.ExecuteWithUser()` (not `Execute()`), with `checkPermission`, rate limiting, and audit logging all exercised. Include a case where a `RoleGuest` user is denied a tool their role doesn't permit — today this would silently succeed via `Execute()`; after the fix it must be rejected.
+- **Green:** Change `usecase/chat/tool_conversion.go:31` to call `tool.Service.ExecuteWithUser()`, threading the resolved `domain.User` through the existing `ChatService.ProcessMessage` call chain.
+- **Refactor:** Confirm no duplicate permission-checking logic is introduced in `usecase/chat` — `ExecuteWithUser` already owns `checkPermission`/rate-limiting/audit; `ChatService` should not re-implement any of it.
+- **Acceptance criteria:** FR-011 met; all pre-existing platform tests still pass except where they asserted the old unchecked behavior (those are the ones the Red step updates); no Clean Architecture violation (usecase layer still owns the RBAC decision, adapter/gateway layers unchanged).
+
+### P3.2 — Role-filtered `ListTools()`
+
+- **Dependencies:** P3.1
+- **Duration:** ~0.5 day
+- **Red:** Test that `ListTools(ctx, userID)` returns different tool sets for `RoleGuest` vs `RoleAdmin` against fixture data where at least one tool is role-restricted.
+- **Green:** Implement the `TODO: Implement user-specific tool filtering` at `internal/usecase/tool/service.go:261`.
+- **Refactor:** Ensure the filtering logic is shared with (not duplicated from) whatever role-check helper `ExecuteWithUser`/`checkPermission` already uses.
+- **Acceptance criteria:** FR-012 met; `ListTools` output is role-accurate for every existing platform, not just Buzz.
+
+### P3.3 — Trigger `GitHub`/`CodingAgent`/`RepoSearch` tools from Buzz messages under (now-enforced) RBAC
+
+- **Dependencies:** P3.1, P3.2
+- **Duration:** ~0.5 day
+- **Red:** Test that a Buzz-originated message routed through `ChatService`/`ToolService` triggers tool execution identically to an equivalent Slack/Telegram message post-P3.1/P3.2 — same `checkPermission`/rate-limit/audit path, same `RoleGuest` denial behavior for an under-permissioned Buzz pubkey.
+- **Green:** Confirm the existing `messageHandler` → `ChatService.ProcessMessage` → tool-invocation path (already used by CLI per `cmd/nuimanbot/main.go`'s `skillHandler.SetMessageHandler` pattern) works unchanged for `PlatformBuzz` — this should require no new code if P3.1/P3.2 are platform-agnostic as intended.
 - **Refactor:** Remove any Buzz-specific special-casing discovered to be unnecessary; keep the tool-triggering path platform-agnostic.
-- **Acceptance criteria:** Tool execution triggered from Buzz is checked and audit-logged identically to other platforms (per the Q6 resolution); matches both Phase 3 exit criteria in spec.md, as clarified by spec.md's Phase 3 exit-criteria note.
+- **Acceptance criteria:** FR-010 met; matches both Phase 3 exit criteria in spec.md, including the RBAC-enforcement and role-filtered-`ListTools` criteria added alongside FR-011/FR-012.
 
 **[Phase 3 exit criteria checkpoint — verify Overall Acceptance in spec.md]**
 
@@ -207,9 +223,7 @@ P1.6 (parallel) ─────────────────┘        �
                                               │
                               [Phase 2 checkpoint]
                                               │
-                        [research.md Q6 resolved — see P3.1 pre-requisite]
-                                              │
-                                           P3.1
+                                     P3.1 ─ P3.2 ─ P3.3
                                               │
                               [Phase 3 checkpoint / Overall Acceptance]
 ```
