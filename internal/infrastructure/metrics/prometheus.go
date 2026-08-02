@@ -256,10 +256,17 @@ var (
 		},
 	)
 
+	// BuzzEventsReceivedTotal's help text originally described "verified Buzz
+	// events received" generically, but it is only ever incremented in
+	// processChannelMessage for kind:9 channel messages — not for the
+	// kind:9000/kind:10100 agent-status events that also flow through the
+	// same verified pipeline in processEvent (FR-013). Re-scoped the help
+	// text to make that explicit, rather than adding a companion counter for
+	// a volume nothing currently needs to alert on.
 	BuzzEventsReceivedTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "buzz_events_received_total",
-			Help: "Total number of verified Buzz events received",
+			Help: "Total number of verified Buzz kind:9 channel messages received (excludes kind:9000/kind:10100 agent-status events)",
 		},
 		[]string{"channel_id", "sender_is_agent"},
 	)
