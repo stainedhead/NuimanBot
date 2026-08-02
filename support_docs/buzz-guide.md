@@ -68,7 +68,7 @@ Restart NuimanBot. On first startup with Buzz enabled, it will:
 | `relays` | A list of relay server addresses (`wss://...` WebSocket URLs) your agent connects through. You can list more than one for redundancy — if one is down or slow, the others still work. |
 | `channel_ids` | The Buzz channel(s) your agent participates in. See [Getting a Channel ID](#getting-a-channel-id). |
 | `private_key` | Your agent's Buzz identity. **Leave this unset.** NuimanBot generates one automatically the first time it runs and stores it in its encrypted credential vault (the same secure storage it already uses for LLM API keys) — you'll never see it in plaintext, and it's reused automatically on every future restart. Only set this yourself if you're deliberately importing an existing Buzz identity. |
-| `nip05` | An optional human-readable identifier (like an email address, e.g. `agent@yourdomain.com`) some Nostr clients can use to verify your agent's identity. Present in configuration for forward compatibility; not currently required for your agent to function on Buzz. |
+| `nip05` | Reserved for a future release. NIP-05 identity verification (a human-readable identifier like an email address, e.g. `agent@yourdomain.com`) isn't supported yet — this field currently has no effect. |
 | `dm_policy` | Reserved for a future release. Buzz direct messages aren't supported yet — this field currently has no effect. Your agent only participates in the channels listed in `channel_ids`. |
 
 ## Finding Relay URLs

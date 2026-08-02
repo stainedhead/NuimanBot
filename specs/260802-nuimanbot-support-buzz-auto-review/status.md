@@ -10,7 +10,7 @@
 | Phase 0 | Spec creation | In Progress | — |
 | Cluster A | gateway.go lifecycle & structure (FR-001/002/003/008/011/012/013/016) | Not Started | 0% |
 | Cluster B | Observability wiring (FR-004) | Not Started | 0% |
-| Cluster C | Config & docs (FR-005/007/014) | Not Started | 0% |
+| Cluster C | Config & docs (FR-005/007/014) | In Progress | 33% |
 | Cluster D | Cache & subscription (FR-009/010) | Not Started | 0% |
 
 ## Phase 0 Task Checklist
@@ -30,3 +30,4 @@ None currently.
 ## Recent Activity
 
 - 2026-08-02: Spec directory `specs/260802-nuimanbot-support-buzz-auto-review/` created from review PRD. All phase files populated. 14 fixable findings (of 16 total) mapped to FRs; FR-006 deferred, FR-015 informational.
+- 2026-08-02: FR-005 complete (Cluster C). `BuzzConfig.NIP05` doc comment marks it reserved for a future phase (PRD §6.5), not currently read. `support_docs/buzz-guide.md`'s `nip05` row updated to match `dm_policy`'s reserved/no-effect framing. Build verified.

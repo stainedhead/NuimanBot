@@ -46,9 +46,11 @@ type BuzzConfig struct {
 	Enabled    bool                `yaml:"enabled"`
 	PrivateKey domain.SecureString `yaml:"private_key"`
 	Relays     []string            `yaml:"relays"`
-	NIP05      string              `yaml:"nip05"`
-	ChannelIDs []string            `yaml:"channel_ids"`
-	DMPolicy   DMPolicy            `yaml:"dm_policy"`
+	// NIP05 is reserved for a future phase (NIP-05 identity verification was
+	// explicitly deferred, see PRD §6.5) and is not currently read.
+	NIP05      string   `yaml:"nip05"`
+	ChannelIDs []string `yaml:"channel_ids"`
+	DMPolicy   DMPolicy `yaml:"dm_policy"`
 }
 
 // GatewaysConfig holds all gateway configurations.
