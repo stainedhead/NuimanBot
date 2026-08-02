@@ -86,6 +86,7 @@ func TestLoadConfig_FromEnv(t *testing.T) {
 		"NUIMANBOT_SECURITY_INPUTMAXLENGTH",
 		"NUIMANBOT_LLM_DEFAULTMODEL_PRIMARY",
 		"NUIMANBOT_GATEWAYS_CLI_DEBUGMODE",
+		"NUIMANBOT_GATEWAYS_BUZZ_ENABLED",
 		"NUIMANBOT_ENCRYPTION_KEY",
 		"NUIMANBOT_LLM_PROVIDERS_0_APIKEY",          // For array testing
 		"NUIMANBOT_LLM_PROVIDERS_1_APIKEY",          // For array testing
@@ -122,6 +123,9 @@ func TestLoadConfig_FromEnv(t *testing.T) {
 	if err := os.Setenv("NUIMANBOT_GATEWAYS_CLI_DEBUGMODE", "false"); err != nil {
 		t.Fatalf("Failed to set env var: %v", err)
 	}
+	if err := os.Setenv("NUIMANBOT_GATEWAYS_BUZZ_ENABLED", "true"); err != nil {
+		t.Fatalf("Failed to set env var: %v", err)
+	}
 	if err := os.Setenv("NUIMANBOT_LLM_PROVIDERS_0_ID", "env-anthropic"); err != nil {
 		t.Fatalf("Failed to set env var: %v", err)
 	}
@@ -156,6 +160,9 @@ func TestLoadConfig_FromEnv(t *testing.T) {
 	}
 	if cfg.Gateways.CLI.DebugMode {
 		t.Errorf("Expected Gateways.CLI.DebugMode false, got true")
+	}
+	if !cfg.Gateways.Buzz.Enabled {
+		t.Errorf("Expected Gateways.Buzz.Enabled true, got false")
 	}
 
 	// Test SecureString handling from env

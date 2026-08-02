@@ -283,6 +283,11 @@ func applyEnvOverrides(cfg *NuimanBotConfig) {
 			cfg.Gateways.CLI.DebugMode = b
 		}
 	}
+	if val := os.Getenv("NUIMANBOT_GATEWAYS_BUZZ_ENABLED"); val != "" {
+		if b, err := strconv.ParseBool(val); err == nil {
+			cfg.Gateways.Buzz.Enabled = b
+		}
+	}
 
 	// MCP config
 	if val := os.Getenv("NUIMANBOT_MCP_CLIENT_TIMEOUT"); val != "" {

@@ -47,13 +47,13 @@ gateways:
       - "your-channel-id-here"
 ```
 
-Or via environment variables, if you prefer not to edit the config file:
+`enabled` can also be toggled via environment variable, taking precedence over `config.yaml`:
 
 ```bash
 export NUIMANBOT_GATEWAYS_BUZZ_ENABLED=true
 ```
 
-(Relay and channel lists are easiest to set in `config.yaml`, since they're multi-value fields.)
+`relays` and `channel_ids` currently must be set in `config.yaml` — there's no environment-variable override for them yet.
 
 Restart NuimanBot. On first startup with Buzz enabled, it will:
 1. Connect to each relay you listed (it's fine if not all of them are reachable — it keeps working with whichever ones connect, and keeps retrying the rest in the background)
