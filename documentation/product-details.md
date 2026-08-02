@@ -41,16 +41,17 @@
   - Admin role can manage users, configure LLM providers, access audit logs
   - User role has restricted access to allowed tools only
   - Per-user tool allowlists configurable by admins
-  - Permission checks enforced at all layers
+  - Permission checks enforced at all layers, for every gateway (Telegram, Slack, CLI, Buzz) — tool execution triggered via `ChatService`'s LLM tool-calling path is routed through `tool.Service.ExecuteWithUser()`, and `ListTools()` returns a per-caller, role-filtered tool list, so a tool a user's role cannot execute is neither runnable nor advertised as available (fixed 2026-08-02 alongside Buzz gateway delivery — see [Technical Details](technical-details.md#rbac-enforcement-fix-all-platforms))
 
 #### FR-003: Multi-Platform Gateway Support
 - **Priority:** P0 (Critical)
 - **Status:** ✅ Complete
-- **Description:** Concurrent operation of Telegram, Slack, and CLI gateways
+- **Description:** Concurrent operation of Telegram, Slack, CLI, and Buzz gateways
 - **Acceptance Criteria:**
   - Telegram gateway with long-polling and webhook support
   - Slack gateway with Socket Mode (no public endpoint required)
   - CLI gateway with interactive REPL for development/admin tasks
+  - Buzz gateway: Nostr relay transport (WebSocket, reconnect-on-drop), channel join via subscription, signed message publish/receive, cryptographic agent identity (see Feature: Buzz Gateway below)
   - Unified conversation history across all platforms
   - User identity mapping across platforms
 
@@ -966,6 +967,29 @@
 - Startup failure (unhealthy Ingatan) does not block bot operation
 - JWT rotation transparent to callers
 
+### Workflow 17: Buzz Multi-Agent Channel Participation
+
+**Actors:** Human user (Buzz channel member), other agent (Buzz channel member), NuimanBot-hosted agent
+
+**Preconditions:**
+- Buzz gateway is enabled and connected to at least one configured relay
+- NuimanBot's agent has joined the configured Buzz channel(s)
+
+**Steps:**
+1. A human types a message in a shared Buzz channel; their Buzz client publishes it as a signed `kind:9` event tagged with the channel ID
+2. NuimanBot's Buzz gateway receives the event (possibly from multiple relays), verifies its signature, and drops it if verification fails or it is a duplicate of an already-processed event ID
+3. Gateway resolves the sender's Nostr pubkey to a `domain.User`, creating one with `RoleGuest` if this is the sender's first message
+4. Gateway checks the sender against its agent-identity cache (populated from `kind:9000` channel-membership and `kind:10100` agent-profile events) to determine `sender_is_agent`
+5. Gateway maps the event to a `domain.IncomingMessage` and hands it to the shared message-handling pipeline — identical `ValidateInput()` security screening as every other platform
+6. NuimanBot's agent generates a response, potentially invoking a tool (e.g. `github`, `repo_search`) under the sender's resolved role and the existing RBAC/rate-limiting pipeline
+7. NuimanBot's agent publishes its reply as a signed `kind:9` event via `Send()`
+8. If a second agent in the channel replies to NuimanBot's message, and then NuimanBot's agent would reply to that, the loop-prevention guard tracks consecutive agent-authored messages in that channel; after a small fixed number of consecutive agent turns with no intervening human message, further replies are suppressed until a human message resets the count
+
+**Postconditions:**
+- Human and agent participants see NuimanBot's replies in the shared channel like any other Buzz participant
+- Tool invocations triggered from Buzz are audit-logged identically to tool invocations from other platforms
+- An unbounded agent-to-agent reply chain terminates rather than running indefinitely
+
 ---
 
 ## System Constraints
@@ -1555,6 +1579,41 @@ requires_confirmation:
 - **Storage:** User home directory (`~/.nuimanbot/personas/`)
 - **Migration:** No migration required (files created on first use)
 - **Backwards compatibility:** System works without persona files (graceful degradation)
+
+### Feature 8: Buzz Gateway (Nostr)
+
+**Description:** Nostr-relay-transported gateway for Block's Buzz multi-agent chat platform, letting NuimanBot's agent participate in shared human+agent channels
+
+**Functional Specification:**
+- Connects to one or more configured Nostr relays over WebSocket; reconnects on drop with bounded exponential backoff; partial relay connectivity does not fail startup
+- Joins channels by subscribing (NIP-01 filters) to configured channel IDs; channel scoping uses Nostr's `#h` tag convention, not a Buzz-specific field
+- Reads messages: verifies every inbound event's signature before processing (unsigned/forged events are dropped and counted), de-duplicates events seen from multiple relays by event ID, and runs all message content through the same `ValidateInput()` security pipeline as Telegram/Slack/CLI
+- Posts messages: publishes signed `kind:9` channel-message events via `Send()`, addressed to a channel via `OutgoingMessage.Metadata["channel_id"]`
+- Agent vs. human distinction: Buzz has no per-message "this sender is an agent" field. NuimanBot's gateway derives sender identity from two event kinds it separately subscribes to — a channel-membership event naming a member's role, and an agent's own self-published profile event — and caches pubkey → is-agent in memory. This distinction feeds the loop-prevention guard (a bounded count of consecutive agent-authored messages per channel before further replies are suppressed) so a NuimanBot agent responding to another agent's messages cannot run away indefinitely
+- RBAC mapping: a Buzz sender's Nostr public key is mapped 1:1 to a `domain.User`. A pubkey seen for the first time is auto-created with `RoleGuest` (the same "first message creates a guest user" behavior used for Telegram/Slack — Buzz was the first gateway to actually exercise this path; see FR-011/FR-012 below for why this now applies uniformly)
+- Agent identity: on startup, the gateway publishes a self-describing profile event once (best-effort, retried with backoff) so other Buzz-aware clients/agents can identify NuimanBot's agent as an agent, not a human
+- Key management: if no private key is configured, a secp256k1 keypair is generated automatically on first run and persisted in the existing encrypted credential vault; subsequent runs reuse the persisted key
+
+**Configuration Example:**
+```yaml
+gateways:
+  buzz:
+    enabled: true
+    relays:
+      - "wss://relay.example.com"
+    channel_ids:
+      - "channel-uuid-here"
+    # private_key: left unset — generated and vault-persisted automatically
+```
+
+**Error Handling:**
+- Missing relay list or (after key generation) missing private key fails gateway startup with a clear error, not a silent no-op
+- Signature verification failures are dropped, logged, and counted (`buzz_signature_verification_failures_total`) — never treated as trusted input
+- A relay that is unreachable at startup does not block the other configured relays from connecting
+
+**Testing:**
+- Unit tests for NIP-01 event construction/ID computation/signing, signature verification, relay reconnect/backoff, and the agent-identity cache and loop-prevention guard
+- Gateway-level tests covering the full receive → verify → dedupe → RBAC-resolve → loop-guard → dispatch pipeline, and the publish path for `Send()`
 
 ---
 

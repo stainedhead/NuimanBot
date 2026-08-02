@@ -18,14 +18,15 @@
 7. [Self-Organizing Memory v2](#self-organizing-memory-v2)
 8. [API Documentation](#api-documentation)
 9. [MCP Client Architecture](#mcp-client-architecture)
-10. [REST API Security Architecture](#rest-api-security-architecture)
-11. [TLS Auto-Generation Architecture](#tls-auto-generation-architecture)
-12. [Web Admin Security Architecture](#web-admin-security-architecture)
-13. [Ingatan Memory Backend Architecture](#ingatan-memory-backend-architecture)
-14. [Configuration](#configuration)
-15. [Testing Strategy](#testing-strategy)
-16. [CI/CD Pipeline](#cicd-pipeline)
-17. [Deployment Architecture](#deployment-architecture)
+10. [Buzz Gateway & Nostr Protocol Architecture](#buzz-gateway--nostr-protocol-architecture)
+11. [REST API Security Architecture](#rest-api-security-architecture)
+12. [TLS Auto-Generation Architecture](#tls-auto-generation-architecture)
+13. [Web Admin Security Architecture](#web-admin-security-architecture)
+14. [Ingatan Memory Backend Architecture](#ingatan-memory-backend-architecture)
+15. [Configuration](#configuration)
+16. [Testing Strategy](#testing-strategy)
+17. [CI/CD Pipeline](#cicd-pipeline)
+18. [Deployment Architecture](#deployment-architecture)
 
 ---
 
@@ -194,6 +195,28 @@ func (s *Service) ExecuteWithUser(
 - Per-user, per-tool limits
 - Configurable requests/window
 - Audit on rate limit exceeded
+
+### RBAC Enforcement Fix (All Platforms)
+
+Discovered during Buzz gateway spec review (research.md Q6) and fixed as part of the Buzz Phase 3 delivery, this closes a pre-existing gap that affected **every** platform (Telegram, Slack, CLI, Buzz), not just Buzz:
+
+**Before the fix:**
+- `ChatService`'s tool-invocation path (`internal/usecase/chat/tool_conversion.go`) called `tool.Service.Execute()` — the unchecked execution path — meaning a tool call surfaced by the LLM's tool-calling loop ran regardless of the calling user's role.
+- `tool.Service.ListTools()` returned every registered tool for every caller, ignoring role entirely (a `TODO` at the call site).
+
+**After the fix:**
+- `tool_conversion.go` now calls `tool.Service.ExecuteWithUser(ctx, user, toolName, args)`, the same role-checked, rate-limited path `Execute()`/`ExecuteWithUser()` was always meant to guard.
+- `ListTools(ctx, user)` filters the registry's tools through the same `checkPermission` rule `ExecuteWithUser` applies — a tool a user's role cannot execute is never listed as available (`internal/usecase/tool/service.go`).
+- `ChatService.resolveUser` (`internal/usecase/chat/service.go`) is the shared, platform-agnostic entry point all four gateways now route through to resolve/create the `domain.User` used for these checks: `GetUserByPlatformUID`, falling back to `CreateUser` with a platform-dependent default role on first message.
+
+**Default role by platform** (`defaultRoleForPlatform`, `internal/usecase/chat/service.go`):
+
+| Platform | Default role for a new user | Why |
+|---|---|---|
+| CLI | `RoleAdmin` | Inherently local/trusted — whoever can run the binary already has full machine access, so gating behind RBAC adds friction without adding real security. Preserves the CLI's pre-existing de facto unrestricted access. |
+| Telegram, Slack, Buzz | `RoleGuest` | The sender is a remote, unauthenticated-by-default party; least-privilege default until an admin promotes them. |
+
+**Why fixed for all platforms, not scoped to Buzz:** the shared `ChatService` tool-invocation path does not branch by platform, so it was not possible to enforce RBAC for Buzz-originated tool calls without also enforcing it for Telegram/Slack/CLI — and leaving them unchecked while Buzz was checked would have been an inconsistent, hard-to-reason-about security posture. This is a deliberate behavior change: existing Telegram/Slack/CLI users whose role lacks permission for a tool they could previously call unchecked will see that tool become unavailable. Regression coverage (`internal/usecase/chat/rbac_test.go`) verifies RBAC/rate-limiting is enforced for tool calls originating from each platform, not just Buzz.
 
 #### 3. Security Service (`internal/usecase/security/service.go`)
 
@@ -699,6 +722,14 @@ security_validation_failures_total{reason}
 audit_events_total{action, outcome}
 ```
 
+**7. Buzz Gateway Metrics:**
+```prometheus
+buzz_events_received_total{channel_id, sender_is_agent}
+buzz_events_published_total{status}
+buzz_signature_verification_failures_total
+buzz_relay_connections{relay_url, status}  # declared; not yet wired to Client — see Buzz Gateway Architecture
+```
+
 ### Health Checks
 
 **Endpoints:**
@@ -1154,6 +1185,87 @@ registerMCPTools(ctx, cfg, toolRegistry):
 ```
 
 Servers that fail to initialize are skipped. The bot continues with all successfully registered MCP tools plus built-in tools.
+
+---
+
+## Buzz Gateway & Nostr Protocol Architecture
+
+### Overview
+
+Buzz (Block's open-source multi-agent chat platform) is built on Nostr: a decentralized protocol where clients publish signed events to one or more relays over WebSocket, rather than calling a single vendor API. This makes the Buzz gateway structurally different from Telegram/Slack in two ways that shape the implementation:
+
+- **No single API endpoint.** The gateway is a relay client, not an HTTP API client — it owns a WebSocket connection lifecycle (dial, subscribe, reconnect) per configured relay.
+- **Cryptographic, not token-based, identity.** There is no bot token. NuimanBot's agent identity *is* a secp256k1 keypair; every published event is signed, and every received event's signature is verified before it is trusted.
+
+The implementation splits across two layers, following Clean Architecture's dependency rule:
+
+- `internal/infrastructure/nostr/` — a generic, Buzz-agnostic NIP-01 (the core Nostr protocol spec) client. Imports no domain or config types; it would work for any Nostr application, not just Buzz.
+- `internal/adapter/gateway/buzz/` — the `domain.Gateway` implementation, which is Buzz-specific (event kinds, tag conventions, agent-identity heuristics) and depends on the generic `nostr` package.
+
+### Nostr Infrastructure Layer (`internal/infrastructure/nostr/`)
+
+**`event.go`** — NIP-01 event construction, ID computation, and signing.
+- `Event` mirrors the NIP-01 wire shape exactly (`id`, `pubkey`, `created_at`, `kind`, `tags`, `content`, `sig`) so it marshals directly into relay frames.
+- `ComputeID` hashes a *hand-rolled* canonical JSON serialization (`canonicalSerialize`), not `encoding/json`, because Go's marshaler escapes additional characters (`<`, `>`, `&`, U+2028, U+2029) beyond the seven NIP-01 mandates — using it would produce a different event ID than every other Nostr client for identical content, breaking interop.
+- `Sign` computes a BIP-340 Schnorr signature (via `btcec/v2/schnorr`) over the computed event ID using the agent's hex-encoded private key, populating `PubKey`, `ID`, and `Sig`.
+- `GenerateKeypair` / `PublicKeyFromPrivateKey` wrap `btcec.NewPrivateKey` and x-only (BIP-340) public key serialization.
+
+**`verify.go`** — inbound signature verification. `Verify(e Event)` recomputes the event ID from the event's own fields (catching tampered content) and checks the Schnorr signature against the claimed pubkey. It is a pure, stateless function, deliberately callable off the relay read loop so verification never blocks other events from being read (an explicit NFR).
+
+**`client.go`** — the multi-relay WebSocket client (`Client`).
+- One long-lived goroutine per configured relay URL (`runRelay`), each running its own dial → subscribe → read → (on drop) bounded-exponential-backoff reconnect loop (500ms initial, 30s max, reset on successful connect). N configured relays therefore produce bounded, not unbounded, goroutine/resource growth.
+- Events from all relays are merged onto a single buffered channel (`Events()`), tagged with the originating `RelayURL` so the gateway layer can dedupe and attribute.
+- `Publish` writes to every *currently connected* relay and succeeds if at least one write succeeds — consistent with the "partial connectivity is not a failure" reliability requirement.
+- Unreachable relays at startup do not fail `Start()`; they retry in the background.
+
+**`subscription.go`** — NIP-01 filter and `REQ` frame construction (`Filter`, `NewChannelFilter`, `NewMembershipFilter`, `NewAgentProfileFilter`, `NewSubscriptionRequest`). Multiple filters under one subscription ID are OR'd together per NIP-01, which is how the gateway combines a channel-tag-scoped filter (kind:9, kind:9000) with an unscoped one (kind:10100) in a single subscription.
+
+### Buzz Adapter Layer (`internal/adapter/gateway/buzz/`)
+
+**`gateway.go`** — the `domain.Gateway` implementation (`Platform`, `Start`, `Stop`, `Send`, `OnMessage`), mirroring the Slack/Telegram gateway shape. Its event pipeline, in order:
+
+1. **Dedupe** (`isDuplicate`) — by event ID, across all relays, via an in-memory seen-set.
+2. **Verify** (`nostr.Verify`) — applied uniformly to *every* event kind the gateway acts on (not just chat messages), since trusting an unverified `kind:9000`/`kind:10100` event would let a forged event silently corrupt the agent-identity cache or bypass the loop guard.
+3. **Dispatch by kind** — `kind:9000`/`kind:10100` update the agent-identity cache; `kind:9` (channel messages) go through the RBAC/loop-guard/handler pipeline.
+
+**`agent_cache.go`** — an in-memory, concurrency-safe `pubkey → is_agent` map (`agentCache`), populated by two signals (see "Agent identity" below): a `kind:9000` membership event carrying role `"bot"`, or the mere *presence* of a `kind:10100` profile event for that pubkey.
+
+**`loop_guard.go`** — runaway agent-to-agent reply prevention (`loopGuard`). Per channel, tracks a rolling count of *consecutive* agent-authored messages (no intervening human message); once the count exceeds a fixed threshold (5) within a fixed window (30s), further agent-authored messages in that channel are suppressed until a human message resets the streak or the streak ages out. This is a time-window + consecutive-count heuristic rather than a reply-chain/thread-tag heuristic, because Buzz's `kind:9` messages carry no reliable "in-reply-to" tag to follow.
+
+### Nostr Protocol Specifics — What Buzz Actually Does (Gotchas)
+
+These deviate from what a naive NIP-01/NIP-29 integration would assume, and were resolved by reading Buzz's own relay source (`buzz-relay/src/handlers/side_effects.rs`, `crates/buzz-core/src/kind.rs`) during implementation — the original PRD's assumptions about several of these were wrong and were corrected mid-implementation:
+
+| Concern | What it actually is |
+|---|---|
+| Channel message | `kind:9` (NIP-29 group chat message), scoped to a channel via an `#h` tag (`ChannelTagName = "h"`) whose value is the channel UUID. Buzz's relay rejects `kind:9` events missing this tag. |
+| **Per-message agent identity** | **Does not exist.** There is no tag on a `kind:9` event that says "this sender is an agent." This is the biggest divergence from what a naive integration would assume (e.g. copying a Discord/Slack "bot flag" model). Agent identity has to be derived out-of-band (see below). |
+| Agent profile | `kind:10100`, a replaceable, pubkey-scoped (not channel-scoped) event. Its *presence* for a pubkey is the identity signal NuimanBot uses — not its content. Its actual relay-consumed content schema, confirmed against `handle_agent_profile`, is `{"channel_add_policy": "anyone"\|"owner_only"\|"nobody"}`, which is narrower than `kind.rs`'s doc comment ("agent metadata + owner reference") suggests; no current relay code path reads or requires anything beyond `channel_add_policy`. |
+| Channel membership | `kind:9000` (NIP-29 `PUT_USER`), carrying a required `#h` channel tag, a required `p` tag naming the target member's pubkey, and an optional `role` tag. A member-role of `"bot"` is Buzz's channel-membership-based agent designation. An event with **no** `role` tag means "no role change" (the relay preserves the member's current role) — it must not be read as "this member is not an agent." |
+
+**Derived design decision:** because there is no per-message identity marker, `sender_is_agent` for an incoming `kind:9` message is looked up from the `agentCache` (populated from the two signals above), not read off the message itself. This is why the gateway subscribes to `kind:9000` and `kind:10100` in addition to `kind:9`, even though Phase 1 only needed channel messages.
+
+### Vault-Backed Keypair Generation (`internal/infrastructure/crypto/buzz_keygen.go`)
+
+`EnsureBuzzKeypair(ctx, vault, vaultKey, configured)` implements "generate a Buzz identity if none exists" without adding a new secret-storage subsystem:
+
+1. If `BuzzConfig.PrivateKey` is already set (operator-supplied), it is returned unchanged and never regenerated.
+2. Otherwise, the existing `domain.CredentialVault` (`VersionedVault`, AES-256-GCM) is checked under a fixed key (`"buzz_private_key"`) for a key persisted by a previous run.
+3. If neither is present, `nostr.GenerateKeypair()` generates a fresh secp256k1 keypair, and the hex-encoded private key is persisted to the vault before being returned.
+
+This is called once at startup in `cmd/nuimanbot/main.go` before constructing the Buzz gateway, so the gateway itself always receives a resolved key. No new vault subsystem, encryption scheme, or storage format was introduced — Buzz reuses the vault that already backs LLM provider API keys.
+
+### Library Choice: Hand-Rolled NIP-01 + btcec/v2 (not go-nostr)
+
+**Decision:** implement NIP-01 event construction/signing/verification directly (as documented above) using `github.com/btcsuite/btcd/btcec/v2` and `.../schnorr` for secp256k1/BIP-340 signing, rather than depending on a full Nostr client library.
+
+**Why:** the natural off-the-shelf choice, `github.com/nbd-wtf/go-nostr`, is archived (unmaintained) and pulls in a much larger dependency surface (relay pool management, NIP-04/44 encryption, NIP-05 resolution, etc.) than this gateway needs — Phase 1–3 only require event construction, Schnorr signing/verification, and basic REQ/EVENT framing, all of which are small, well-specified pieces of NIP-01. `btcec/v2` is an actively maintained, widely-used secp256k1/Schnorr implementation (already a transitive dependency in the Go ecosystem via btcd) with no comparable maintenance risk. Hand-rolling the thin NIP-01 framing on top of it keeps the dependency footprint minimal and avoids importing unmaintained code that would need to be trusted with signing keys.
+
+**Trade-off accepted:** the gateway does not get go-nostr's broader NIP coverage (DMs, NIP-05, relay pool niceties) for free — acceptable since DMs are explicitly out of scope for this phase and Buzz's own transport needs are narrow (see `nostr/subscription.go`'s hand-rolled filter/REQ framing).
+
+### Known Gap: `buzz_relay_connections` Metric
+
+`internal/infrastructure/metrics/prometheus.go` declares a `buzz_relay_connections` gauge (labeled `relay_url`, `status`), but no code path currently sets it — `nostr.Client` tracks connected-relay state internally (`ConnectedRelayCount()`) but nothing calls into the gauge. The three other Buzz metrics (`buzz_events_received_total`, `buzz_events_published_total`, `buzz_signature_verification_failures_total`) are live and incremented from `internal/adapter/gateway/buzz/gateway.go`. Wiring `buzz_relay_connections` up to `Client`'s connect/disconnect transitions is unimplemented follow-up work, not a documentation gap.
 
 ---
 
