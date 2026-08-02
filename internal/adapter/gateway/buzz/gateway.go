@@ -51,6 +51,9 @@ type Gateway struct {
 	messageHandler domain.MessageHandler
 	cancel         context.CancelFunc
 
+	stopMu  sync.Mutex
+	stopped bool // guards Stop() so a second call is a safe no-op (FR-002) rather than a double-close panic in nostr.Client.Stop()
+
 	seenMu sync.Mutex
 	seen   map[string]struct{} // dedupe by event ID (FR-004)
 
@@ -158,8 +161,19 @@ func (g *Gateway) publishAgentProfileBestEffort(ctx context.Context) {
 	}
 }
 
-// Stop gracefully shuts down the Buzz gateway.
+// Stop gracefully shuts down the Buzz gateway: cancels Start()'s context and
+// stops the underlying Nostr client. Idempotent (FR-002) — a second call is
+// a safe no-op, since nostr.Client.Stop() itself is not safe to call twice
+// (it closes its event channel, which would panic on a repeat close).
 func (g *Gateway) Stop(ctx context.Context) error {
+	g.stopMu.Lock()
+	if g.stopped {
+		g.stopMu.Unlock()
+		return nil
+	}
+	g.stopped = true
+	g.stopMu.Unlock()
+
 	if g.cancel != nil {
 		slog.Info("Stopping gateway", "platform", "buzz")
 		g.cancel()

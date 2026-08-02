@@ -588,6 +588,65 @@ func TestGateway_Send_MissingChannelID_ReturnsError(t *testing.T) {
 	}
 }
 
+func TestGateway_Stop_CancelsStartAndIsIdempotent(t *testing.T) {
+	relay := newFakeRelay(t, func(conn *websocket.Conn) {
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	})
+
+	privHex, _, err := nostr.GenerateKeypair()
+	if err != nil {
+		t.Fatalf("GenerateKeypair() error = %v", err)
+	}
+	cfg := &config.BuzzConfig{
+		Relays:     []string{wsURL(t, relay)},
+		PrivateKey: domain.NewSecureStringFromString(privHex),
+		ChannelIDs: []string{"channel-uuid-1"},
+	}
+	gw, err := New(cfg, nil)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	gw.OnMessage(func(ctx context.Context, msg domain.IncomingMessage) error { return nil })
+
+	startErrCh := make(chan error, 1)
+	go func() { startErrCh <- gw.Start(context.Background()) }()
+
+	// Give Start() time to connect before stopping.
+	time.Sleep(300 * time.Millisecond)
+
+	if err := gw.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+
+	select {
+	case err := <-startErrCh:
+		if err != nil {
+			t.Errorf("Start() returned error after Stop(): %v, want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Start() did not return after Stop() canceled its context")
+	}
+
+	// Idempotent: a second Stop() must not panic (nostr.Client.Stop() closes
+	// its event channel, which panics on a repeat close) or return an error.
+	if err := gw.Stop(context.Background()); err != nil {
+		t.Errorf("second Stop() call error = %v, want nil (idempotent)", err)
+	}
+
+	// Post-stop state: no relays connected, so Send() must fail gracefully.
+	err = gw.Send(context.Background(), domain.OutgoingMessage{
+		Content:  "after stop",
+		Metadata: map[string]any{"channel_id": "channel-uuid-1"},
+	})
+	if err == nil {
+		t.Error("Send() after Stop() error = nil, want a graceful error (no relays connected)")
+	}
+}
+
 func TestGateway_PublishAgentProfile_PublishesSignedKind10100Event(t *testing.T) {
 	frames := make(chan buzzRelayFrame, 4)
 	relay := newFakeRelay(t, func(conn *websocket.Conn) {
