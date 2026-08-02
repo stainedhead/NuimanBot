@@ -29,6 +29,7 @@ NuimanBot already supports multiple messaging platforms (CLI, Telegram, Slack) t
 - Media/file sharing beyond text messages.
 - Running Buzz's "approved automations" execution model directly — initial phase covers chat participation only; automation execution can reuse existing tools (`GitHub`, `CodingAgent`) but is not scoped here.
 - Multi-relay conflict resolution / eventual-consistency guarantees beyond basic redundancy (best-effort, not exhaustively specified).
+- **Buzz direct messages (DMs).** No FR, exit criterion, or NIP-01 filter/tag design in this spec addresses DM subscription or DM `Send()` addressing (e.g. NIP-04/NIP-17 encrypted DMs). `BuzzConfig.DMPolicy` (data-dictionary.md) is carried over from the Telegram/Slack config shape for structural consistency and reserved for a future phase — it has no effect until DM support is explicitly specced. All three phases (FR-001–FR-010) scope to **channel** participation only.
 
 ## User Requirements — Functional Requirements
 
@@ -41,8 +42,10 @@ Requirement numbering is carried over verbatim from PRD §6.9, grouped by rollou
 - **FR-003:** Verify event signatures before processing; drop unsigned/forged events.
 - **FR-004:** De-duplicate events by event ID across relays.
 - **FR-005:** Map verified events to `domain.IncomingMessage` (`PlatformBuzz`) including metadata.
-- **FR-006:** Resolve/create `domain.User` (`RoleGuest`) keyed by `buzz:<pubkey>` on first message.
+- **FR-006:** Resolve/create `domain.User` (`RoleGuest`) for `Platform: PlatformBuzz` / `PlatformUID: <pubkey>` on first message, via the existing `usecase/user.Service` (`GetUserByPlatformUID` / `CreateUser`) — see data-dictionary.md for the corrected key convention.
 - **FR-007:** Generate-if-absent secp256k1 keypair via existing vault.
+
+> **Note on FR-006:** no existing gateway (Telegram/Slack) currently auto-creates a user on first message — `CreateUser` is presently only invoked from CLI admin commands (`internal/adapter/gateway/cli/admin_commands.go`). Buzz will be the first gateway to call the existing, already-exported `usecase/user.Service` methods from a gateway's message-handling path. This is new *usage* of existing usecase methods, not new usecase-layer code — see architecture.md.
 
 ### Phase 2 — Full gateway
 
@@ -113,6 +116,7 @@ Carried over verbatim from PRD §8 (Rollout Plan) exit criteria and Overall Acce
 - Duplicate events (same event ID delivered by multiple relays) are forwarded to the message handler exactly once.
 - First message from a new `sender_pubkey` creates a `domain.User` with `RoleGuest`.
 - All Buzz-originated messages pass through `ValidateInput()` identically to other platforms.
+- If no private key is configured, a secp256k1 keypair is generated on first run and persisted via the existing vault (`VersionedVault`, AES-256-GCM); subsequent runs reuse the persisted key without regenerating it (FR-007).
 
 ### Phase 2 exit criteria — Full gateway
 
@@ -123,6 +127,8 @@ Carried over verbatim from PRD §8 (Rollout Plan) exit criteria and Overall Acce
 
 - Buzz channel messages can trigger `GitHub`/`CodingAgent`/`RepoSearch` tool execution under the existing RBAC + rate-limiting pipeline, with no bypass for Buzz-originated requests.
 - Tool execution triggered from Buzz is audit-logged identically to tool execution triggered from other platforms.
+
+> **⚠️ Open design question — see research.md Open Questions.** As of this spec, the chat-message-triggered tool path (`usecase/chat/tool_conversion.go` → `toolExecService.Execute()`) does **not** currently invoke the RBAC/rate-limit-checked path (`tool.Service.ExecuteWithUser`, which performs `checkPermission` + rate limiting + audit) for **any** platform — Telegram, Slack, and CLI-via-skill-handler included. `ListTools` also currently ignores role entirely (`internal/usecase/tool/service.go:261`, marked `TODO`). This means "no bypass for Buzz-originated requests" is trivially true today only in the sense that Buzz would be exactly as unenforced as every other platform — not that Buzz gets genuine RBAC enforcement. Before Phase 3 implementation, a decision is needed: (a) Phase 3 also wires `ChatService`'s tool path to `ExecuteWithUser` for all platforms (bigger scope, changes existing Telegram/Slack/CLI behavior), or (b) Buzz explicitly inherits the current non-enforcement, and the Phase 3 exit criteria/PRD §6.7 security narrative is revised to reflect that. This is flagged, not resolved, in this spec — see research.md.
 
 ### Overall Acceptance
 

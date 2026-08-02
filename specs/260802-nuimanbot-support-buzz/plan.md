@@ -9,7 +9,7 @@
 Strict TDD (Red-Green-Refactor) per AGENTS.md, task by task, within a single spec directory covering all three PRD-defined phases. Each phase is gated on the previous phase's exit criteria (spec.md) being met and its quality gates passing (`go fmt`, `go mod tidy`, `go vet`, `golangci-lint run`, `go test ./...`, build, `./bin/nuimanbot --help`).
 
 Sequencing:
-1. Resolve the Nostr library spike (research.md Q1) before any Phase 1 coding task.
+1. Resolve the two Phase 1 spikes before any Phase 1 coding task: the Nostr library choice (research.md Q1, tasks.md P0.1) and Buzz's protocol conventions — event kind, channel tag, agent-identity tag (research.md Q5, tasks.md P0.2).
 2. Build infrastructure layer (`internal/infrastructure/nostr/`) bottom-up: event construction/signing → verification → subscription filters → relay client (connect/reconnect/fanout).
 3. Build adapter layer (`internal/adapter/gateway/buzz/gateway.go`) on top, wiring dedupe + verify + map-to-domain + RBAC resolution.
 4. Wire config (`BuzzConfig`) and `main.go` — enables end-to-end manual testing against a real or local Nostr relay.
@@ -33,22 +33,24 @@ Goal: Buzz messages can trigger `GitHub`/`CodingAgent`/`RepoSearch` tools under 
 ## Critical Path
 
 ```
-research.md Q1 spike (library choice)
+research.md Q1 spike (library choice) + Q5 spike (event kind / tag conventions)
    → P1.1 event.go (construct/ID/sign)
    → P1.2 verify.go (signature verification)
    → P1.3 subscription.go (filters)
    → P1.4 client.go (relay connect/reconnect/fanout)
    → P1.5 domain.PlatformBuzz constant
    → P1.6 config.BuzzConfig
+   → P1.6b generate-if-absent secp256k1 keypair helper (FR-007, crypto/)
    → P1.7 adapter/gateway/buzz/gateway.go (Start, dedupe, verify, map, handleEvents)
-   → P1.8 RBAC user resolution (buzz:<pubkey> → RoleGuest)
+   → P1.8 RBAC user resolution ((PlatformBuzz, pubkey) → RoleGuest, via usecase/user.Service)
    → P1.9 main.go wiring (Buzz enabled block)
    → P1.10 Prometheus metrics
-   → [Phase 1 exit criteria verified]
+   → [Phase 1 exit criteria verified, incl. FR-007 keypair-generation criterion]
    → P2.1 Send() publish path (event.go signing reused)
    → P2.2 agent-tagging on outgoing events
    → P2.3 loop-prevention guard
    → [Phase 2 exit criteria verified]
+   → research.md Q6 resolved (tool-execution RBAC-enforcement gap — see P3.1 note)
    → P3.1 tool-triggering wiring from Buzz messages (reuses existing ToolService)
    → [Phase 3 exit criteria verified, Overall Acceptance met]
 ```

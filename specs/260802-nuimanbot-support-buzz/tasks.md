@@ -6,7 +6,9 @@
 
 ## Progress Summary
 
-0/21 tasks complete (0%)
+0/17 tasks complete (0%)
+
+(Corrected during spec review: the original count of 21 did not match the 15 task headers actually present. Two tasks were added during review — P0.2 and P1.6b — bringing the accurate total to 17.)
 
 Every task below follows AGENTS.md's mandatory Red-Green-Refactor cycle: write a failing test first (Red), implement the minimal code to pass it (Green), then refactor for clarity/duplication/naming while keeping tests green (Refactor — not optional). A task is not "done" until all three sub-steps are complete and the quality-gate command passes:
 
@@ -25,13 +27,20 @@ go fmt ./... && go mod tidy && go vet ./... && golangci-lint run && go test ./..
 - **Description:** Spike/evaluate hand-rolled NIP-01 vs. `github.com/nbd-wtf/go-nostr` vs. `github.com/btcsuite/btcd/btcec` (signing-only). Not a TDD task (research, not implementation) — resolve research.md Q1 and record the decision + rationale in implementation-notes.md before starting P1.1.
 - **Acceptance criteria:** research.md Q1 marked resolved; implementation-notes.md records the chosen library and why; go.mod dependency direction decided (promote gorilla/websocket to direct + add chosen signing/client lib).
 
+### P0.2 — Resolve Buzz protocol conventions (event kind, channel tag, agent-identity tag)
+
+- **Dependencies:** none (can run in parallel with P0.1)
+- **Duration:** ~0.5 day
+- **Description:** Spike/read Buzz's open-source protocol spec/source (PRD §2) to determine: (a) the NIP-01 event `Kind` used for channel messages, (b) the tag name/format used to associate an event with a Buzz channel ID, (c) the tag name/format Buzz uses to mark an event as agent-authored (needed for `sender_is_agent` on the read side and outgoing agent-tagging in P2.2). Not a TDD task (research, not implementation) — resolve research.md Q5 and record the decision + rationale in implementation-notes.md before starting P1.1/P1.3.
+- **Acceptance criteria:** research.md Q5 marked resolved; implementation-notes.md records the chosen event kind and tag conventions with a source reference (Buzz repo file/commit or protocol doc section); P1.1 and P1.3 can proceed without guessing kind/tag values.
+
 ---
 
 ## Phase 1 — Read-only participation (FR-001–FR-007)
 
 ### P1.1 — NIP-01 event construction, ID computation, signing (`internal/infrastructure/nostr/event.go`)
 
-- **Dependencies:** P0.1
+- **Dependencies:** P0.1, P0.2 (event `Kind` value needed for realistic fixtures, even though ID-computation itself is kind-agnostic per NIP-01)
 - **Duration:** ~1 day
 - **Red:** Write tests asserting event ID computation matches known NIP-01 test vectors (canonical serialization → SHA-256), and that sign/verify round-trips correctly for a generated keypair.
 - **Green:** Implement `Event` struct, canonical serialization, ID computation, and signing using the library chosen in P0.1.
@@ -49,11 +58,11 @@ go fmt ./... && go mod tidy && go vet ./... && golangci-lint run && go test ./..
 
 ### P1.3 — Filter-based subscription management (`internal/infrastructure/nostr/subscription.go`)
 
-- **Dependencies:** P1.1
+- **Dependencies:** P1.1, P0.2 (channel-tag convention needed to build correct filters, not just a placeholder)
 - **Duration:** ~0.5 day
 - **Red:** Tests asserting a `Filter` built from configured channel IDs serializes to the expected NIP-01 `REQ` shape.
-- **Green:** Implement `Filter`/`Subscription` construction from `[]string` channel IDs (FR-002).
-- **Refactor:** Clarify naming vs. Buzz-specific channel-tag conventions once research.md Q5 is answered (may require a follow-up note if Buzz tag conventions differ from assumed defaults — document in implementation-notes.md, don't silently guess).
+- **Green:** Implement `Filter`/`Subscription` construction from `[]string` channel IDs (FR-002), using the tag convention resolved in P0.2.
+- **Refactor:** Confirm naming matches the Buzz-specific channel-tag convention recorded in implementation-notes.md from P0.2.
 - **Acceptance criteria:** Filter construction covers all configured channel IDs; unit tests green.
 
 ### P1.4 — Relay WebSocket client: connect, reconnect, multi-relay fanout (`internal/infrastructure/nostr/client.go`)
@@ -83,6 +92,15 @@ go fmt ./... && go mod tidy && go vet ./... && golangci-lint run && go test ./..
 - **Refactor:** Confirm consistent field ordering/style with `TelegramConfig`/`SlackConfig`.
 - **Acceptance criteria:** Config unmarshal test green; `Enabled` defaults false; existing config tests unaffected.
 
+### P1.6b — Generate-if-absent secp256k1 keypair helper (FR-007)
+
+- **Dependencies:** P0.1 (library choice determines key-generation API)
+- **Duration:** ~0.5 day
+- **Red:** Tests: (a) when `BuzzConfig.PrivateKey` is empty, a new secp256k1 keypair is generated and persisted through the existing `VersionedVault` (AES-256-GCM, same mechanism as other vault-stored secrets); (b) when `BuzzConfig.PrivateKey` is already set, no new key is generated and the existing key is used unchanged; (c) the generated public key is derivable/consistent with the stored private key.
+- **Green:** Implement a generate-if-absent helper in `internal/infrastructure/crypto/` (e.g. `keygen.go`, alongside the existing `keygen.go`/`vault.go` in that package) that NuimanBot's Buzz gateway `Start()` calls before initializing `nostr.Client`.
+- **Refactor:** Confirm the helper doesn't duplicate logic already in `internal/infrastructure/crypto/keygen.go`; ensure the generated key is written back through `VersionedVault` so it persists across restarts, not just held in memory.
+- **Acceptance criteria:** No private key configured → key generated once and persisted; restart reuses the persisted key without regenerating; matches spec.md's Phase 1 exit criterion for FR-007.
+
 ### P1.7 — `buzz.Gateway`: Start, dedupe, verify, map to `domain.IncomingMessage` (`internal/adapter/gateway/buzz/gateway.go`)
 
 - **Dependencies:** P1.2, P1.4, P1.5, P1.6
@@ -92,18 +110,18 @@ go fmt ./... && go mod tidy && go vet ./... && golangci-lint run && go test ./..
 - **Refactor:** Compare against `slack.Gateway`'s structure for consistency (naming, error wrapping with `%w`, doc comments on exported symbols per AGENTS.md).
 - **Acceptance criteria:** All Phase 1 exit criteria in spec.md related to connect/verify/dedupe/mapping are demonstrated by tests; mirrors slack/gateway.go's shape.
 
-### P1.8 — RBAC user resolution: `buzz:<pubkey>` → `RoleGuest` on first message (FR-006)
+### P1.8 — RBAC user resolution: `(PlatformBuzz, pubkey)` → `RoleGuest` on first message (FR-006)
 
 - **Dependencies:** P1.7
 - **Duration:** ~0.5 day
-- **Red:** Test that a message from a new `sender_pubkey` creates a `domain.User` with ID `buzz:<pubkey>` and `Role: RoleGuest`; a second message from the same pubkey does not create a duplicate user.
-- **Green:** Wire into whatever existing user-resolution mechanism Telegram/Slack use on first message (locate and reuse, don't duplicate — check how Slack/Telegram currently resolve/create users, since neither gateway file shown resolves users directly, it may happen in usecase/chat or a UserRepository).
-- **Refactor:** Ensure the `buzz:` prefix convention is applied consistently and doesn't collide with other platforms' PlatformUID-derived keys.
-- **Acceptance criteria:** New pubkey → new `RoleGuest` user; repeat pubkey → no duplicate; existing Telegram/Slack user-resolution tests unaffected.
+- **Red:** Test that a message from a new `sender_pubkey` creates a `domain.User` (UUID-assigned `ID`, per `usecase/user.Service.CreateUser`) with `PlatformIDs[domain.PlatformBuzz] == pubkey` and `Role: RoleGuest`; a second message from the same pubkey does not create a duplicate user (verified via `GetUserByPlatformUID` returning the existing user first).
+- **Green:** Call `usecase/user.Service.GetUserByPlatformUID(ctx, domain.PlatformBuzz, pubkey)`; if it returns `ErrUserNotFound`, call `CreateUser(ctx, domain.PlatformBuzz, pubkey, domain.RoleGuest)`. **Note:** confirmed during spec review that no existing gateway currently calls this on first message — `CreateUser` today is only invoked from CLI admin commands (`internal/adapter/gateway/cli/admin_commands.go`). Buzz's `gateway.go` will be the first caller from a message-handling path; both methods are already exported on `usecase/user.Service`, so this is new *usage*, not new usecase-layer code.
+- **Refactor:** Ensure lookup/creation happens exactly once per event (guard against a race if two events from a brand-new pubkey arrive concurrently across relays before dedupe — see P1.7's dedupe-by-event-ID, which happens first in the pipeline and reduces but doesn't eliminate this window if the same pubkey posts two different events near-simultaneously).
+- **Acceptance criteria:** New pubkey → new `RoleGuest` user via `(Platform, PlatformUID)` tuple; repeat pubkey → no duplicate; existing Telegram/Slack user-resolution tests unaffected; no `"buzz:"`-prefixed string ID is introduced anywhere (matches data-dictionary.md's corrected convention).
 
 ### P1.9 — Wire Buzz gateway into `cmd/nuimanbot/main.go`
 
-- **Dependencies:** P1.7, P1.8
+- **Dependencies:** P1.7, P1.8, P1.6b
 - **Duration:** ~0.3 day
 - **Red:** N/A for main.go wiring (not typically unit-tested directly) — verify via manual `./bin/nuimanbot --help` run and, if the project has any main-package smoke tests, extend them.
 - **Green:** Add the `if app.Config.Gateways.Buzz.Enabled { ... }` block per architecture.md, following the identical Telegram/Slack pattern at ~line 924-950.
@@ -160,12 +178,15 @@ go fmt ./... && go mod tidy && go vet ./... && golangci-lint run && go test ./..
 
 ### P3.1 — Trigger `GitHub`/`CodingAgent`/`RepoSearch` tools from Buzz messages under existing RBAC
 
-- **Dependencies:** P2.3 (Phase 2 checkpoint passed)
-- **Duration:** ~1 day
-- **Red:** Test that a Buzz-originated message routed through `ChatService`/`ToolService` triggers tool execution identically to an equivalent Slack/Telegram message — same RBAC checks, same rate-limiting, same audit-log entries (no Buzz-specific bypass).
-- **Green:** Confirm/wire the existing `messageHandler` → `ChatService.ProcessMessage` → tool-invocation path (already used by CLI per `cmd/nuimanbot/main.go`'s `skillHandler.SetMessageHandler` pattern) works unchanged for `PlatformBuzz`; add any Buzz-specific plumbing only if a gap is found (expected to be none, per architecture.md's "usecase layer unchanged" decision).
+- **Dependencies:** P2.3 (Phase 2 checkpoint passed), **and a resolution of research.md Open Question 6 (see below) before this task starts**
+- **Duration:** ~1 day (may grow if Open Question 6 is resolved as option (a) — see below)
+- **⚠️ Pre-requisite, found during spec review:** confirm with the team lead/PRD owner how to resolve research.md Q6 before writing this task's Red step: `usecase/chat/tool_conversion.go` currently calls the unchecked `Execute()`, not the RBAC/rate-limit-checked `ExecuteWithUser()`, for **all** platforms today (not a Buzz-specific gap). Pick one:
+  - (a) Also wire `ChatService`'s tool-invocation path to `ExecuteWithUser` for all platforms as part of this task (bigger scope — touches shared `usecase/chat` code, affects existing Telegram/Slack/CLI behavior, needs its own regression tests for those platforms).
+  - (b) Leave the existing behavior as-is; Buzz inherits the same non-enforcement as other platforms, and this task's acceptance criteria is narrowed to "identical treatment to other platforms" rather than "genuine RBAC enforcement."
+- **Red:** Test that a Buzz-originated message routed through `ChatService`/`ToolService` triggers tool execution identically to an equivalent Slack/Telegram message — same checks (whatever those are per the Q6 resolution above), same audit-log entries (no Buzz-specific bypass beyond what other platforms already have).
+- **Green:** Confirm/wire the existing `messageHandler` → `ChatService.ProcessMessage` → tool-invocation path (already used by CLI per `cmd/nuimanbot/main.go`'s `skillHandler.SetMessageHandler` pattern) works unchanged for `PlatformBuzz`; implement the Q6 resolution chosen above.
 - **Refactor:** Remove any Buzz-specific special-casing discovered to be unnecessary; keep the tool-triggering path platform-agnostic.
-- **Acceptance criteria:** Tool execution triggered from Buzz is RBAC-checked and audit-logged identically to other platforms; matches both Phase 3 exit criteria in spec.md.
+- **Acceptance criteria:** Tool execution triggered from Buzz is checked and audit-logged identically to other platforms (per the Q6 resolution); matches both Phase 3 exit criteria in spec.md, as clarified by spec.md's Phase 3 exit-criteria note.
 
 **[Phase 3 exit criteria checkpoint — verify Overall Acceptance in spec.md]**
 
@@ -174,17 +195,19 @@ go fmt ./... && go mod tidy && go vet ./... && golangci-lint run && go test ./..
 ## Task Dependency Summary
 
 ```
-P0.1
- └─ P1.1 ─┬─ P1.2 ─┐
-          └─ P1.3 ─┴─ P1.4 ─┐
-P1.5 (parallel) ────────────┼─ P1.7 ─┬─ P1.8 ─┬─ P1.9
-P1.6 (parallel) ────────────┘        └─ P1.10 ┘
+P0.1 ─┬─ P1.1 ─┬─ P1.2 ─┐
+P0.2 ─┘        └─ P1.3 ─┴─ P1.4 ─┐
+P0.1 ─ P1.6b (parallel) ─────────┤
+P1.5 (parallel) ─────────────────┼─ P1.7 ─┬─ P1.8 ─┬─ P1.9 (also needs P1.6b)
+P1.6 (parallel) ─────────────────┘        └─ P1.10 ┘
                                               │
-                              [Phase 1 checkpoint]
+                              [Phase 1 checkpoint — incl. FR-007 keypair criterion]
                                               │
                                      P2.1 ─ P2.2 ─ P2.3
                                               │
                               [Phase 2 checkpoint]
+                                              │
+                        [research.md Q6 resolved — see P3.1 pre-requisite]
                                               │
                                            P3.1
                                               │

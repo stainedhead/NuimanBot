@@ -20,7 +20,7 @@ New config struct in `internal/config/gateway_config.go`, mirroring the shape of
 | `Relays` | `[]string` | `relays` | List of `wss://` relay URLs to connect to. |
 | `NIP05` | `string` | `nip05` | Optional verified identifier (NIP-05); used only as an optional auto-trust signal, not required for MVP. |
 | `ChannelIDs` | `[]string` | `channel_ids` | Channels to subscribe to on connect. |
-| `DMPolicy` | `config.DMPolicy` | `dm_policy` | Reuses existing `DMPolicy` enum (`pairing`/`allowlist`/`open`) already defined for Telegram/Slack. |
+| `DMPolicy` | `config.DMPolicy` | `dm_policy` | Reuses existing `DMPolicy` enum (`pairing`/`allowlist`/`open`) already defined for Telegram/Slack. **Reserved for a future phase** — no FR/exit criterion in this spec implements Buzz DM subscription or DM `Send()` addressing; this field has no effect in Phases 1–3 (see spec.md Non-Goals). |
 
 Added to `GatewaysConfig` as `Buzz BuzzConfig \`yaml:"buzz"\``, alongside `Telegram`, `Slack`, `CLI`, `WebUI`.
 
@@ -42,7 +42,7 @@ Populated by `internal/adapter/gateway/buzz/gateway.go` when mapping a verified 
 |---|---|---|
 | `event_id` | `string` | Nostr event ID (hex-encoded, SHA-256 of the serialized event per NIP-01). |
 | `relay_url` | `string` | The relay URL the event was received from (for audit/debugging; a given event may arrive from multiple relays — see dedup, FR-004). |
-| `sender_pubkey` | `string` | Author's Nostr public key (hex-encoded secp256k1 x-only pubkey per NIP-01). Used to derive `buzz:<pubkey>` as the `domain.User` key. |
+| `sender_pubkey` | `string` | Author's Nostr public key (hex-encoded secp256k1 x-only pubkey per NIP-01). Used as `PlatformUID` (with `Platform: domain.PlatformBuzz`) when resolving/creating the `domain.User` via `usecase/user.Service.GetUserByPlatformUID` / `CreateUser` — **not** a synthesized `"buzz:<pubkey>"` string. `domain.User.ID` is an independently-generated UUID (see `internal/usecase/user/service.go:CreateUser`); lookup is always by the `(Platform, PlatformUID)` tuple via `domain.UserRepository.GetUserByPlatformID`, exactly as Telegram (numeric ID) and Slack (Slack user ID) already do — no platform-prefixing is needed or used anywhere else in the codebase. |
 | `sender_is_agent` | `bool` | Derived from Buzz's agent-identity metadata/tags. Used by the loop-prevention guard (FR-009) to avoid agent-to-agent runaway reply chains. |
 | `channel_id` | `string` | Buzz channel identifier the event belongs to. |
 | `signature` | `string` | Event signature (hex-encoded Schnorr signature per NIP-01), retained for audit trail after verification. |

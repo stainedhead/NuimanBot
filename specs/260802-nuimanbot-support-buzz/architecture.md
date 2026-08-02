@@ -94,8 +94,8 @@ adapter/gateway/buzz/gateway.go  — handleEvents loop
    │  3. map to domain.IncomingMessage{Platform: PlatformBuzz, PlatformUID: pubkey,
    │     Metadata: {event_id, relay_url, sender_pubkey, sender_is_agent, channel_id, signature}} — FR-005
    ▼
-usecase (via app-level user resolution, not shown as a separate file here)
-   │  4. resolve/create domain.User keyed "buzz:<pubkey>", default RoleGuest — FR-006
+usecase/user.Service (GetUserByPlatformUID / CreateUser — existing, exported)
+   │  4. resolve/create domain.User for (PlatformBuzz, pubkey), default RoleGuest — FR-006
    ▼
 g.messageHandler(ctx, incomingMsg)  — same MessageHandler used by all gateways
    ▼
@@ -130,10 +130,10 @@ main.go            buzz.Gateway         nostr.Client          Relay
 ## Integration Points
 
 - **Security Service** (`internal/usecase/security/service.go`) — `ValidateInput()` applied to all Buzz `domain.IncomingMessage.Text` identically to other platforms, no bypass.
-- **Tool Service** (`internal/usecase/tool/service.go`) — Phase 3 only; RBAC + rate-limiting + audit pipeline applied unchanged to tool calls triggered from Buzz messages.
+- **Tool Service** (`internal/usecase/tool/service.go`) — Phase 3 only; tool calls triggered from Buzz messages go through the same code path as tool calls triggered from Telegram/Slack/CLI. **Open question:** that shared path (`usecase/chat/tool_conversion.go` → `Execute()`) does not currently invoke the RBAC/rate-limit-checked `ExecuteWithUser()` for any platform — see spec.md's Phase 3 exit criteria note and research.md Open Questions before starting P3.1.
 - **Credential Vault** (`internal/infrastructure/crypto/`) — generate-if-absent secp256k1 keypair, stored via existing `VersionedVault` (AES-256-GCM), no new storage subsystem.
 - **Metrics** (`internal/infrastructure/metrics/prometheus.go`) — new counters/gauges: `buzz_relay_connections{relay_url,status}`, `buzz_events_received_total{channel_id,sender_is_agent}`, `buzz_events_published_total{status}`, `buzz_signature_verification_failures_total`.
-- **User/RBAC resolution** — reuses whatever existing mechanism resolves/creates `domain.User` on first message for Telegram/Slack (`buzz:<pubkey>` follows the same `PlatformUID` convention).
+- **User/RBAC resolution** — calls the existing, already-exported `usecase/user.Service.GetUserByPlatformUID(ctx, domain.PlatformBuzz, pubkey)`, then `CreateUser(ctx, domain.PlatformBuzz, pubkey, domain.RoleGuest)` if not found. **Note:** no gateway today (Telegram/Slack) actually calls this on first message — `CreateUser` is currently only invoked from CLI admin commands (`internal/adapter/gateway/cli/admin_commands.go`). Buzz's `gateway.go` will be the first caller of this pattern from a message-handling path; it uses existing exported methods, so it does not require new usecase-layer code, only new *usage* of it from the adapter layer. `domain.User.ID` is a UUID (see `usecase/user/service.go`), not `"buzz:<pubkey>"` — lookup is always by the `(Platform, PlatformUID)` tuple.
 
 ## Architectural Decisions
 
