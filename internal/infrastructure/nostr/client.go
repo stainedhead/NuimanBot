@@ -86,12 +86,12 @@ func (c *Client) Events() <-chan ReceivedEvent {
 	return c.events
 }
 
-// Start connects to all configured relays and subscribes with filter,
-// launching one goroutine per relay. Unreachable relays are retried with
-// backoff in the background and do not fail Start — partial connectivity is
-// not a startup failure (NFR).
-func (c *Client) Start(ctx context.Context, subscriptionID string, filter Filter) error {
-	reqFrame, err := NewSubscriptionRequest(subscriptionID, filter)
+// Start connects to all configured relays and subscribes with filters
+// (OR'd together per NIP-01), launching one goroutine per relay. Unreachable
+// relays are retried with backoff in the background and do not fail Start —
+// partial connectivity is not a startup failure (NFR).
+func (c *Client) Start(ctx context.Context, subscriptionID string, filters ...Filter) error {
+	reqFrame, err := NewSubscriptionRequest(subscriptionID, filters...)
 	if err != nil {
 		return fmt.Errorf("failed to build subscription request: %w", err)
 	}

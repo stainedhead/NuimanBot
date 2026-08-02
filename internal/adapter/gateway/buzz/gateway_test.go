@@ -149,6 +149,47 @@ func newTestGateway(t *testing.T) (*Gateway, *inMemoryUserRepository) {
 	return gw, repo
 }
 
+func signedMembershipEvent(t *testing.T, channelID, targetPubkey, role string) nostr.Event {
+	t.Helper()
+	privHex, _, err := nostr.GenerateKeypair()
+	if err != nil {
+		t.Fatalf("GenerateKeypair() error = %v", err)
+	}
+	tags := [][]string{{nostr.ChannelTagName, channelID}, {nostr.PubkeyTagName, targetPubkey}}
+	if role != "" {
+		tags = append(tags, []string{nostr.RoleTagName, role})
+	}
+	e := nostr.Event{CreatedAt: 1700000000, Kind: nostr.KindChannelMembership, Tags: tags}
+	if err := nostr.Sign(&e, privHex); err != nil {
+		t.Fatalf("Sign() error = %v", err)
+	}
+	return e
+}
+
+// signedAgentProfileEvent returns a signed kind:10100 event along with the
+// hex pubkey that signed (and thus "owns") it.
+func signedAgentProfileEvent(t *testing.T) (nostr.Event, string) {
+	t.Helper()
+	privHex, pubHex, err := nostr.GenerateKeypair()
+	if err != nil {
+		t.Fatalf("GenerateKeypair() error = %v", err)
+	}
+	e := nostr.Event{CreatedAt: 1700000000, Kind: nostr.KindAgentProfile, Content: `{"channel_add_policy":"owner_only"}`}
+	if err := nostr.Sign(&e, privHex); err != nil {
+		t.Fatalf("Sign() error = %v", err)
+	}
+	return e, pubHex
+}
+
+func signedChannelEventFrom(t *testing.T, privHex, channelID, content string) nostr.Event {
+	t.Helper()
+	e := nostr.Event{CreatedAt: 1700000000, Kind: nostr.KindChannelMessage, Tags: [][]string{{nostr.ChannelTagName, channelID}}, Content: content}
+	if err := nostr.Sign(&e, privHex); err != nil {
+		t.Fatalf("Sign() error = %v", err)
+	}
+	return e
+}
+
 func signedChannelEvent(t *testing.T, channelID, content string) nostr.Event {
 	t.Helper()
 	privHex, _, err := nostr.GenerateKeypair()
@@ -682,5 +723,203 @@ func TestGateway_Start_PublishesAgentProfileOnceNotPerMessage(t *testing.T) {
 	mu.Unlock()
 	if got != 1 {
 		t.Errorf("published %d kind:10100 profile events during Start(), want exactly 1 (once, not per-message)", got)
+	}
+}
+
+// --- P2.3: kind:9000/kind:10100 → agentCache ---
+
+func TestGateway_ProcessEvent_MembershipBotRole_MarksTargetAsAgent(t *testing.T) {
+	gw, _ := newTestGateway(t)
+	gw.OnMessage(func(ctx context.Context, msg domain.IncomingMessage) error { return nil })
+
+	target := "target-pubkey-hex"
+	e := signedMembershipEvent(t, "channel-uuid-1", target, nostr.RoleBot)
+	gw.processEvent(context.Background(), nostr.ReceivedEvent{Event: e, RelayURL: "wss://relay.example.com"})
+
+	if !gw.agentCache.IsAgent(target) {
+		t.Error("agentCache.IsAgent(target) = false after a kind:9000 Bot-role event, want true")
+	}
+}
+
+func TestGateway_ProcessEvent_MembershipNonBotRole_MarksTargetNotAgent(t *testing.T) {
+	gw, _ := newTestGateway(t)
+	gw.OnMessage(func(ctx context.Context, msg domain.IncomingMessage) error { return nil })
+
+	target := "target-pubkey-hex"
+	gw.agentCache.Set(target, true) // previously known as an agent
+
+	e := signedMembershipEvent(t, "channel-uuid-1", target, "member")
+	gw.processEvent(context.Background(), nostr.ReceivedEvent{Event: e, RelayURL: "wss://relay.example.com"})
+
+	if gw.agentCache.IsAgent(target) {
+		t.Error("agentCache.IsAgent(target) = true after a kind:9000 role=member event, want false")
+	}
+}
+
+func TestGateway_ProcessEvent_MembershipNoRoleTag_DoesNotChangeCache(t *testing.T) {
+	gw, _ := newTestGateway(t)
+	gw.OnMessage(func(ctx context.Context, msg domain.IncomingMessage) error { return nil })
+
+	target := "target-pubkey-hex"
+	gw.agentCache.Set(target, true)
+
+	// No role tag = no role change (relay preserves current role).
+	e := signedMembershipEvent(t, "channel-uuid-1", target, "")
+	gw.processEvent(context.Background(), nostr.ReceivedEvent{Event: e, RelayURL: "wss://relay.example.com"})
+
+	if !gw.agentCache.IsAgent(target) {
+		t.Error("agentCache.IsAgent(target) changed to false after a role-tag-less kind:9000 event, want unchanged (true)")
+	}
+}
+
+func TestGateway_ProcessEvent_AgentProfileEvent_MarksPublisherAsAgent(t *testing.T) {
+	gw, _ := newTestGateway(t)
+	gw.OnMessage(func(ctx context.Context, msg domain.IncomingMessage) error { return nil })
+
+	e, pubkey := signedAgentProfileEvent(t)
+	gw.processEvent(context.Background(), nostr.ReceivedEvent{Event: e, RelayURL: "wss://relay.example.com"})
+
+	if !gw.agentCache.IsAgent(pubkey) {
+		t.Error("agentCache.IsAgent(pubkey) = false after that pubkey published a kind:10100 event, want true")
+	}
+}
+
+func TestGateway_ProcessEvent_ChannelMessage_SenderIsAgentReflectsCache(t *testing.T) {
+	gw, _ := newTestGateway(t)
+
+	privHex, pubHex, err := nostr.GenerateKeypair()
+	if err != nil {
+		t.Fatalf("GenerateKeypair() error = %v", err)
+	}
+	gw.agentCache.Set(pubHex, true)
+
+	var got domain.IncomingMessage
+	gw.OnMessage(func(ctx context.Context, msg domain.IncomingMessage) error {
+		got = msg
+		return nil
+	})
+
+	e := signedChannelEventFrom(t, privHex, "channel-uuid-1", "hi")
+	gw.processEvent(context.Background(), nostr.ReceivedEvent{Event: e, RelayURL: "wss://relay.example.com"})
+
+	if got.Metadata["sender_is_agent"] != true {
+		t.Errorf(`Metadata["sender_is_agent"] = %v, want true (cache-backed)`, got.Metadata["sender_is_agent"])
+	}
+}
+
+func TestGateway_ProcessEvent_UnknownSender_SenderIsAgentDefaultsFalse(t *testing.T) {
+	gw, _ := newTestGateway(t)
+
+	var got domain.IncomingMessage
+	gw.OnMessage(func(ctx context.Context, msg domain.IncomingMessage) error {
+		got = msg
+		return nil
+	})
+
+	e := signedChannelEvent(t, "channel-uuid-1", "hi")
+	gw.processEvent(context.Background(), nostr.ReceivedEvent{Event: e, RelayURL: "wss://relay.example.com"})
+
+	if got.Metadata["sender_is_agent"] != false {
+		t.Errorf(`Metadata["sender_is_agent"] = %v, want false for a pubkey never seen in agentCache`, got.Metadata["sender_is_agent"])
+	}
+}
+
+// --- P2.4: loop-prevention guard, wired through processEvent ---
+
+func TestGateway_ProcessEvent_RunawayAgentChain_Terminates(t *testing.T) {
+	gw, _ := newTestGateway(t)
+
+	privHex, pubHex, err := nostr.GenerateKeypair()
+	if err != nil {
+		t.Fatalf("GenerateKeypair() error = %v", err)
+	}
+	gw.agentCache.Set(pubHex, true)
+
+	var handlerCalls int
+	gw.OnMessage(func(ctx context.Context, msg domain.IncomingMessage) error {
+		handlerCalls++
+		return nil
+	})
+
+	const messageCount = 50
+	for i := 0; i < messageCount; i++ {
+		// All within the same second: a real runaway agent-to-agent loop
+		// fires in near-real-time (sub-second turnaround), not spread across
+		// tens of real seconds — CreatedAt (NIP-01's second-resolution
+		// timestamp) reflects that "rapid succession" here.
+		e := nostr.Event{
+			CreatedAt: 1700000000,
+			Kind:      nostr.KindChannelMessage,
+			Tags:      [][]string{{nostr.ChannelTagName, "channel-uuid-1"}},
+			Content:   fmt.Sprintf("agent reply #%d", i),
+		}
+		if err := nostr.Sign(&e, privHex); err != nil {
+			t.Fatalf("Sign() error = %v", err)
+		}
+		gw.processEvent(context.Background(), nostr.ReceivedEvent{Event: e, RelayURL: "wss://relay.example.com"})
+	}
+
+	if handlerCalls != buzzLoopGuardMaxConsecutiveAgent {
+		t.Errorf("handler invoked %d times for a %d-message runaway agent-to-agent chain, want exactly %d (guard threshold) — a runaway exchange must terminate, not run indefinitely",
+			handlerCalls, messageCount, buzzLoopGuardMaxConsecutiveAgent)
+	}
+}
+
+func TestGateway_ProcessEvent_SingleAgentReply_NotSuppressed(t *testing.T) {
+	gw, _ := newTestGateway(t)
+
+	privHex, pubHex, err := nostr.GenerateKeypair()
+	if err != nil {
+		t.Fatalf("GenerateKeypair() error = %v", err)
+	}
+	gw.agentCache.Set(pubHex, true)
+
+	var handlerCalls int
+	gw.OnMessage(func(ctx context.Context, msg domain.IncomingMessage) error {
+		handlerCalls++
+		return nil
+	})
+
+	singleReply := signedChannelEventFrom(t, privHex, "channel-uuid-1", "a single agent reply")
+	gw.processEvent(context.Background(), nostr.ReceivedEvent{Event: singleReply, RelayURL: "wss://relay.example.com"})
+
+	if handlerCalls != 1 {
+		t.Errorf("handler invoked %d times for a single agent reply, want 1 (must not be suppressed)", handlerCalls)
+	}
+}
+
+func TestGateway_ProcessEvent_HumanToAgentExchange_NotSuppressed(t *testing.T) {
+	gw, _ := newTestGateway(t)
+
+	humanPriv, _, err := nostr.GenerateKeypair()
+	if err != nil {
+		t.Fatalf("GenerateKeypair() error = %v", err)
+	}
+	agentPriv, agentPub, err := nostr.GenerateKeypair()
+	if err != nil {
+		t.Fatalf("GenerateKeypair() error = %v", err)
+	}
+	gw.agentCache.Set(agentPub, true)
+
+	var handlerCalls int
+	gw.OnMessage(func(ctx context.Context, msg domain.IncomingMessage) error {
+		handlerCalls++
+		return nil
+	})
+
+	// A human message, then a single agent reply, repeated several times —
+	// each human message resets the streak, so no exchange should ever
+	// approach the runaway threshold.
+	for i := 0; i < buzzLoopGuardMaxConsecutiveAgent+3; i++ {
+		human := signedChannelEventFrom(t, humanPriv, "channel-uuid-1", fmt.Sprintf("human msg %d", i))
+		gw.processEvent(context.Background(), nostr.ReceivedEvent{Event: human, RelayURL: "wss://relay.example.com"})
+
+		agentReply := signedChannelEventFrom(t, agentPriv, "channel-uuid-1", fmt.Sprintf("agent reply %d", i))
+		gw.processEvent(context.Background(), nostr.ReceivedEvent{Event: agentReply, RelayURL: "wss://relay.example.com"})
+	}
+
+	want := 2 * (buzzLoopGuardMaxConsecutiveAgent + 3)
+	if handlerCalls != want {
+		t.Errorf("handler invoked %d times for a human/agent alternating exchange, want %d (guard must not suppress a legitimate human-to-agent exchange)", handlerCalls, want)
 	}
 }

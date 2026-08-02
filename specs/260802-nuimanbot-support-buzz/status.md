@@ -11,15 +11,21 @@
 | Phase 0 | Spec creation + review | Complete | 100% |
 | Phase 0 | Pre-implementation spikes (P0.1, P0.2) | Complete | 100% |
 | Phase 1 | Read-only participation (FR-001..FR-007) | Complete | 100% |
-| Phase 2 | Full gateway — Send() + loop prevention (FR-008, FR-009) | In Progress | 50% |
+| Phase 2 | Full gateway — Send() + loop prevention (FR-008, FR-009) | Complete | 100% |
 | Phase 3 | Tool integration (FR-010) | Not Started (out of this agent's scope) | 0% |
 
 ## Phase 2 Task Checklist
 
 - [x] P2.1 — `Send()`: publish signed `kind:9` channel messages (`internal/adapter/gateway/buzz/gateway.go`, `internal/infrastructure/nostr/client.go` `Publish`/`ConnectedRelayCount`)
 - [x] P2.2 — Publish agent-profile event (`kind:10100`) — schema spike found the doc-comment ("agent metadata + owner reference") does NOT match the actual relay-enforced content (`{"channel_add_policy": "anyone"|"owner_only"|"nobody"}`); implemented against the verified schema, defaulting to `"owner_only"`. See implementation-notes.md.
-- [ ] P2.3 — Subscribe to `kind:9000`/`kind:10100`, maintain is_agent cache
-- [ ] P2.4 — Loop-prevention guard
+- [x] P2.3 — Subscribe to `kind:9000`/`kind:10100` (combined into the existing subscription via multi-filter `Client.Start`), maintain pubkey→is_agent cache (`internal/adapter/gateway/buzz/agent_cache.go`); `sender_is_agent` in `IncomingMessage.Metadata` now reflects a live cache lookup.
+- [x] P2.4 — Loop-prevention guard (`internal/adapter/gateway/buzz/loop_guard.go`): per-channel consecutive-agent-message streak with a time window (5 messages / 30s, both testable/tunable constants). Proven via test: a 50-message simulated agent-to-agent runaway terminates at exactly the threshold; a single agent reply and a human/agent alternating exchange are never suppressed.
+
+**Phase 2 exit criteria (spec.md) — all verified:**
+- `Send()` publishes correctly-signed `kind:9` channel messages. ✓ (gateway_test.go, nostr/client_test.go)
+- Agent-profile (`kind:10100`) published once at Start, not per-message. ✓ (`TestGateway_Start_PublishesAgentProfileOnceNotPerMessage`)
+- `sender_is_agent` reflects live membership/profile data via the pubkey cache, not a placeholder. ✓ (`TestGateway_ProcessEvent_ChannelMessage_SenderIsAgentReflectsCache` and related P2.3 tests)
+- Simulated runaway N-message agent-to-agent exchange terminates; legitimate single-reply/human-to-agent exchanges are not suppressed. ✓ (`TestGateway_ProcessEvent_RunawayAgentChain_Terminates`, `TestGateway_ProcessEvent_SingleAgentReply_NotSuppressed`, `TestGateway_ProcessEvent_HumanToAgentExchange_NotSuppressed`, plus unit-level `loop_guard_test.go`)
 
 ## Phase 0 Task Checklist
 
@@ -58,7 +64,7 @@
 
 ## Blockers
 
-None. Phase 0 and Phase 1 are complete; P2.1 complete. All AGENTS.md quality gates pass (`go fmt`, `go mod tidy`, `go vet`, `golangci-lint run` — 0 issues, `go test ./...` — all green, `go build` succeeds, `./bin/nuimanbot --help` runs without panic).
+None. Phase 0, Phase 1, and Phase 2 (P2.1–P2.4) are complete. All AGENTS.md quality gates pass (`go fmt`, `go mod tidy`, `go vet`, `golangci-lint run` — 0 issues, `go test ./...` — all green including `-race`, `go build` succeeds, `./bin/nuimanbot --help` runs without panic).
 
 Phase 3 (P3.1) remains blocked on a design decision: research.md Q6 (tool-execution RBAC-enforcement gap, found during spec review — `usecase/chat/tool_conversion.go` currently bypasses `ExecuteWithUser`'s RBAC/rate-limit checks for all platforms, not just Buzz). Does not block Phase 1/2. Phase 3 is out of this agent's scope and has not been started.
 
@@ -66,6 +72,7 @@ Phase 3 (P3.1) remains blocked on a design decision: research.md Q6 (tool-execut
 
 - 2026-08-02: P2.1 complete — `Client.Publish` (new: relay connection tracking via `relayConn`/`connsMu`, `ConnectedRelayCount`) added to `internal/infrastructure/nostr/client.go`; `Event` given NIP-01 wire JSON tags + a `Tag()` helper in `event.go`; `Gateway.Send()` implemented in `internal/adapter/gateway/buzz/gateway.go`, publishing correctly-signed, `#h`-tagged `kind:9` events and incrementing `buzz_events_published_total{status}`. All new code covered by tests (client_test.go, event_test.go, gateway_test.go), race-detector clean, full quality gate green.
 - 2026-08-02: P2.2 complete — pre-requisite schema spike run directly against `github.com/block/buzz` (`crates/buzz-relay/src/handlers/side_effects.rs`'s `handle_agent_profile`, `crates/buzz-cli/src/commands/channels.rs`'s `cmd_set_add_policy`, and `NOSTR.md`), found the doc comment on `KIND_AGENT_PROFILE` in `kind.rs` ("Agent metadata + owner reference") does not match what any current relay code path reads or requires: the only content field the relay parses/enforces is `channel_add_policy` (`"anyone"|"owner_only"|"nobody"`), a per-pubkey channel-invite-permission setting, not an identity declaration. Implemented `Gateway.publishAgentProfile`/`publishAgentProfileBestEffort` against this verified schema (constant `buzzChannelAddPolicy = "owner_only"`), published once at `Start()` via a bounded-retry goroutine (relay connection is dialed async and may not be up on the first attempt), not on every message. Full finding recorded in implementation-notes.md. All new code covered by tests, race-detector clean, full quality gate green.
+- 2026-08-02: P2.3+P2.4 complete. P2.3: added `nostr.KindChannelMembership`/`PubkeyTagName`/`RoleTagName`/`RoleBot` constants and `NewMembershipFilter`/`NewAgentProfileFilter` (verified against `side_effects.rs`'s `handle_put_user` for the kind:9000 `p`/`role` tag shape); made `Client.Start`/`NewSubscriptionRequest` variadic over `Filter` so channel-message + membership + profile filters combine into one NIP-01 REQ (multiple filters OR'd, since kind:10100 carries no `#h` tag and can't share a single filter object with kind:9000's `#h` requirement). Added `agentCache` (`internal/adapter/gateway/buzz/agent_cache.go`), a concurrency-safe pubkey→is_agent map. `Gateway.processEvent` now dedupes/verifies every event kind generically (hardening: an unverified kind:9000/10100 event must not be able to forge cache state) before dispatching to `handleAgentStatusEvent` (kind:9000/10100) or the renamed `processChannelMessage` (kind:9), which now reads `sender_is_agent` from the cache instead of a hardcoded `false`. P2.4: added `loopGuard` (`internal/adapter/gateway/buzz/loop_guard.go`) — chose a per-channel consecutive-agent-message-count + time-window heuristic (5 messages / 30s) over a reply-chain/event-tag approach, because Buzz's kind:9 messages carry no reliable in-reply-to tag to follow (research.md Q2 left this open). Wired into `processChannelMessage` right before handler dispatch. Proven via test at both the `loopGuard` unit level and the `Gateway.processEvent` integration level: a 50-message simulated runaway agent-to-agent chain (same channel, rapid succession) terminates at exactly the 5-message threshold; a single agent reply and an alternating human/agent exchange are never suppressed. All new code covered by tests, race-detector clean, full quality gate green.
 
 ## Recent Activity (Phase 0-1)
 

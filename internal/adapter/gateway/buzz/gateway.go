@@ -53,6 +53,9 @@ type Gateway struct {
 
 	seenMu sync.Mutex
 	seen   map[string]struct{} // dedupe by event ID (FR-004)
+
+	agentCache *agentCache // pubkey→is_agent, from kind:9000/kind:10100 (P2.3)
+	loopGuard  *loopGuard  // runaway agent-to-agent reply prevention (P2.4/FR-009)
 }
 
 // New creates a new Buzz gateway. userService resolves/creates
@@ -63,6 +66,8 @@ func New(cfg *config.BuzzConfig, userService *user.Service) (*Gateway, error) {
 		config:      cfg,
 		userService: userService,
 		seen:        make(map[string]struct{}),
+		agentCache:  newAgentCache(),
+		loopGuard:   newLoopGuard(buzzLoopGuardMaxConsecutiveAgent, buzzLoopGuardWindow),
 	}, nil
 }
 
@@ -86,8 +91,11 @@ func (g *Gateway) Start(ctx context.Context) error {
 	g.cancel = cancel
 
 	g.client = nostr.NewClient(g.config.Relays)
-	filter := nostr.NewChannelFilter(g.config.ChannelIDs)
-	if err := g.client.Start(ctx, buzzSubscriptionID, filter); err != nil {
+	if err := g.client.Start(ctx, buzzSubscriptionID,
+		nostr.NewChannelFilter(g.config.ChannelIDs),
+		nostr.NewMembershipFilter(g.config.ChannelIDs),
+		nostr.NewAgentProfileFilter(),
+	); err != nil {
 		cancel()
 		return fmt.Errorf("failed to start Nostr client: %w", err)
 	}
@@ -220,9 +228,12 @@ func (g *Gateway) handleEvents(ctx context.Context) {
 	}
 }
 
-// processEvent runs a single received event through the Phase 1 pipeline:
-// dedupe (FR-004) → verify (FR-003) → map to domain.IncomingMessage (FR-005)
-// → RBAC user resolution (FR-006) → message handler dispatch.
+// processEvent runs a single received event through dedupe (FR-004) and
+// signature verification (FR-003) — applied uniformly to every event kind
+// this gateway acts on, not just kind:9 channel messages, since trusting an
+// unverified kind:9000/kind:10100 event would let a forged event corrupt
+// agentCache (P2.3) or bypass the loop-prevention guard (P2.4) — then
+// dispatches to the kind-specific handler.
 func (g *Gateway) processEvent(ctx context.Context, recv nostr.ReceivedEvent) {
 	if g.isDuplicate(recv.Event.ID) {
 		return
@@ -239,12 +250,21 @@ func (g *Gateway) processEvent(ctx context.Context, recv nostr.ReceivedEvent) {
 		return
 	}
 
+	switch recv.Event.Kind {
+	case nostr.KindChannelMembership, nostr.KindAgentProfile:
+		g.handleAgentStatusEvent(recv.Event)
+	case nostr.KindChannelMessage:
+		g.processChannelMessage(ctx, recv)
+	}
+}
+
+// processChannelMessage runs a verified kind:9 event through the rest of the
+// Phase 1/2 pipeline: map to domain.IncomingMessage (FR-005) → RBAC user
+// resolution (FR-006) → loop-prevention guard (FR-009) → message handler
+// dispatch.
+func (g *Gateway) processChannelMessage(ctx context.Context, recv nostr.ReceivedEvent) {
 	channelID := extractChannelID(recv.Event)
-	// Best-effort default: Buzz has no per-message agent-identity tag —
-	// accurate detection requires NIP-29 membership-role tracking or a
-	// kind:10100 profile lookup, out of scope for Phase 1's infrastructure
-	// (see research.md Q5). Flagged for Phase 2's loop-prevention guard.
-	senderIsAgent := false
+	senderIsAgent := g.agentCache.IsAgent(recv.Event.PubKey)
 
 	metrics.BuzzEventsReceivedTotal.WithLabelValues(channelID, strconv.FormatBool(senderIsAgent)).Inc()
 
@@ -254,12 +274,21 @@ func (g *Gateway) processEvent(ctx context.Context, recv nostr.ReceivedEvent) {
 		}
 	}
 
+	timestamp := time.Unix(recv.Event.CreatedAt, 0)
+	if !g.loopGuard.Allow(channelID, senderIsAgent, timestamp) {
+		slog.Warn("Buzz loop-prevention guard suppressed message",
+			"channel_id", channelID,
+			"sender_pubkey", recv.Event.PubKey,
+		)
+		return
+	}
+
 	incomingMsg := domain.IncomingMessage{
 		ID:          recv.Event.ID,
 		Platform:    domain.PlatformBuzz,
 		PlatformUID: recv.Event.PubKey,
 		Text:        recv.Event.Content,
-		Timestamp:   time.Unix(recv.Event.CreatedAt, 0),
+		Timestamp:   timestamp,
 		Metadata: map[string]any{
 			"event_id":        recv.Event.ID,
 			"relay_url":       recv.RelayURL,
@@ -275,6 +304,37 @@ func (g *Gateway) processEvent(ctx context.Context, recv nostr.ReceivedEvent) {
 			slog.Error("Error handling message", "platform", "buzz", "error", err)
 		}
 	}
+}
+
+// handleAgentStatusEvent updates agentCache from a verified kind:9000
+// (channel membership) or kind:10100 (agent profile) event (P2.3).
+func (g *Gateway) handleAgentStatusEvent(e nostr.Event) {
+	switch e.Kind {
+	case nostr.KindChannelMembership:
+		g.handleMembershipEvent(e)
+	case nostr.KindAgentProfile:
+		// The mere presence of a kind:10100 event for a pubkey is the
+		// agent-identity signal — see implementation-notes.md P2.2 for why
+		// its content (channel_add_policy) is not itself an identity field.
+		g.agentCache.Set(e.PubKey, true)
+	}
+}
+
+// handleMembershipEvent updates agentCache from a kind:9000 event's target
+// member (nostr.PubkeyTagName) and role (nostr.RoleTagName) tags. An event
+// with no role tag requests no role change (the relay preserves the
+// member's current role) and is ignored here rather than treated as a
+// non-agent signal.
+func (g *Gateway) handleMembershipEvent(e nostr.Event) {
+	target, ok := e.Tag(nostr.PubkeyTagName)
+	if !ok {
+		return
+	}
+	role, ok := e.Tag(nostr.RoleTagName)
+	if !ok {
+		return
+	}
+	g.agentCache.Set(target, role == nostr.RoleBot)
 }
 
 // isDuplicate reports whether eventID has already been processed, recording

@@ -181,6 +181,83 @@ func TestEvent_Tag_SkipsShortTags(t *testing.T) {
 	}
 }
 
+func TestKindChannelMembership_Is9000(t *testing.T) {
+	if nostr.KindChannelMembership != 9000 {
+		t.Errorf("KindChannelMembership = %d, want 9000", nostr.KindChannelMembership)
+	}
+}
+
+func TestKindAgentProfile_Is10100(t *testing.T) {
+	if nostr.KindAgentProfile != 10100 {
+		t.Errorf("KindAgentProfile = %d, want 10100", nostr.KindAgentProfile)
+	}
+}
+
+func TestRoleBot_IsBotString(t *testing.T) {
+	if nostr.RoleBot != "bot" {
+		t.Errorf("RoleBot = %q, want %q", nostr.RoleBot, "bot")
+	}
+}
+
+func TestNewMembershipFilter_ScopedToChannelsAndKind9000(t *testing.T) {
+	filter := nostr.NewMembershipFilter([]string{"channel-uuid-1"})
+	if len(filter.Kinds) != 1 || filter.Kinds[0] != nostr.KindChannelMembership {
+		t.Errorf("filter.Kinds = %v, want [%d]", filter.Kinds, nostr.KindChannelMembership)
+	}
+	if len(filter.ChannelIDs) != 1 || filter.ChannelIDs[0] != "channel-uuid-1" {
+		t.Errorf("filter.ChannelIDs = %v, want [channel-uuid-1]", filter.ChannelIDs)
+	}
+}
+
+func TestNewAgentProfileFilter_GlobalNotChannelScoped(t *testing.T) {
+	filter := nostr.NewAgentProfileFilter()
+	if len(filter.Kinds) != 1 || filter.Kinds[0] != nostr.KindAgentProfile {
+		t.Errorf("filter.Kinds = %v, want [%d]", filter.Kinds, nostr.KindAgentProfile)
+	}
+	if len(filter.ChannelIDs) != 0 {
+		t.Errorf("filter.ChannelIDs = %v, want empty (kind:10100 is not channel-scoped)", filter.ChannelIDs)
+	}
+
+	data, err := json.Marshal(filter)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("failed to unmarshal filter JSON: %v", err)
+	}
+	if _, ok := decoded["#h"]; ok {
+		t.Errorf("agent profile filter has a #h tag, want none: %v", decoded)
+	}
+}
+
+func TestNewSubscriptionRequest_MultipleFilters_AreOredInOneREQ(t *testing.T) {
+	frame, err := nostr.NewSubscriptionRequest("sub-1",
+		nostr.NewChannelFilter([]string{"channel-uuid-1"}),
+		nostr.NewMembershipFilter([]string{"channel-uuid-1"}),
+		nostr.NewAgentProfileFilter(),
+	)
+	if err != nil {
+		t.Fatalf("NewSubscriptionRequest() error = %v", err)
+	}
+
+	var decoded []any
+	if err := json.Unmarshal(frame, &decoded); err != nil {
+		t.Fatalf("failed to unmarshal REQ frame: %v", err)
+	}
+	if len(decoded) != 5 {
+		t.Fatalf("REQ frame has %d elements, want 5 (\"REQ\", subscription id, 3 filters)", len(decoded))
+	}
+	if decoded[0] != "REQ" || decoded[1] != "sub-1" {
+		t.Errorf("frame[0:2] = %v, want [REQ sub-1]", decoded[0:2])
+	}
+	for i := 2; i < 5; i++ {
+		if _, ok := decoded[i].(map[string]any); !ok {
+			t.Errorf("frame[%d] is not a filter object: %v", i, decoded[i])
+		}
+	}
+}
+
 func TestSign_DifferentKeysProduceDifferentSignatures(t *testing.T) {
 	priv1, _, err := nostr.GenerateKeypair()
 	if err != nil {
