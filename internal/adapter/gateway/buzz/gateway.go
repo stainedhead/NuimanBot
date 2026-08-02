@@ -4,6 +4,7 @@ package buzz
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -18,9 +19,28 @@ import (
 	"nuimanbot/internal/usecase/user"
 )
 
-// buzzSubscriptionID is the fixed NIP-01 subscription id this gateway uses
-// for its single channel-message subscription (FR-002).
-const buzzSubscriptionID = "buzz-channels"
+const (
+	// buzzSubscriptionID is the fixed NIP-01 subscription id this gateway uses
+	// for its single channel-message subscription (FR-002).
+	buzzSubscriptionID = "buzz-channels"
+
+	// buzzChannelAddPolicy is the value this agent declares in its kind:10100
+	// profile event's channel_add_policy field (P2.2) — see
+	// implementation-notes.md for why this is the actual, relay-consumed
+	// content schema for kind:10100 (not the "agent metadata + owner
+	// reference" description in Buzz's kind.rs doc comment, which no current
+	// relay code path reads or requires). "owner_only" is deliberately
+	// conservative: only the Buzz workspace owner may add this agent to new
+	// channels, so it isn't pulled into arbitrary channels by any user.
+	buzzChannelAddPolicy = "owner_only"
+
+	// buzzProfilePublishMaxAttempts/InitialBackoff bound the best-effort retry
+	// for publishing the kind:10100 profile event once at Start() — the relay
+	// connection is dialed asynchronously and may not be up yet on the first
+	// attempt.
+	buzzProfilePublishMaxAttempts    = 5
+	buzzProfilePublishInitialBackoff = 200 * time.Millisecond
+)
 
 // Gateway implements domain.Gateway for Buzz.
 type Gateway struct {
@@ -78,8 +98,56 @@ func (g *Gateway) Start(ctx context.Context) error {
 		"channels", len(g.config.ChannelIDs),
 	)
 
+	go g.publishAgentProfileBestEffort(ctx)
+
 	g.handleEvents(ctx)
 	return nil
+}
+
+// publishAgentProfile publishes this agent's kind:10100 profile event once
+// (P2.2). Not part of Send()'s per-message hot path.
+func (g *Gateway) publishAgentProfile(ctx context.Context) error {
+	content, err := json.Marshal(map[string]string{"channel_add_policy": buzzChannelAddPolicy})
+	if err != nil {
+		return fmt.Errorf("failed to marshal Buzz agent profile content: %w", err)
+	}
+
+	event := nostr.Event{
+		CreatedAt: time.Now().Unix(),
+		Kind:      nostr.KindAgentProfile,
+		Content:   string(content),
+	}
+	if err := nostr.Sign(&event, g.config.PrivateKey.Value()); err != nil {
+		return fmt.Errorf("failed to sign Buzz agent profile: %w", err)
+	}
+	if _, err := g.client.Publish(ctx, event); err != nil {
+		return fmt.Errorf("failed to publish Buzz agent profile: %w", err)
+	}
+	return nil
+}
+
+// publishAgentProfileBestEffort retries publishAgentProfile with bounded
+// backoff, since the relay connection is dialed asynchronously by
+// nostr.Client.Start and may not be up yet on the first attempt. A
+// persistent failure is logged, not escalated — this is a low-stakes
+// self-declaration, not something message send/receive correctness depends
+// on.
+func (g *Gateway) publishAgentProfileBestEffort(ctx context.Context) {
+	backoff := buzzProfilePublishInitialBackoff
+	for attempt := 1; attempt <= buzzProfilePublishMaxAttempts; attempt++ {
+		if err := g.publishAgentProfile(ctx); err == nil {
+			return
+		} else if attempt == buzzProfilePublishMaxAttempts {
+			slog.Warn("Failed to publish Buzz agent profile after retries", "attempts", attempt, "error", err)
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+	}
 }
 
 // Stop gracefully shuts down the Buzz gateway.

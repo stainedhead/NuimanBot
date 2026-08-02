@@ -11,13 +11,13 @@
 | Phase 0 | Spec creation + review | Complete | 100% |
 | Phase 0 | Pre-implementation spikes (P0.1, P0.2) | Complete | 100% |
 | Phase 1 | Read-only participation (FR-001..FR-007) | Complete | 100% |
-| Phase 2 | Full gateway — Send() + loop prevention (FR-008, FR-009) | In Progress | 25% |
+| Phase 2 | Full gateway — Send() + loop prevention (FR-008, FR-009) | In Progress | 50% |
 | Phase 3 | Tool integration (FR-010) | Not Started (out of this agent's scope) | 0% |
 
 ## Phase 2 Task Checklist
 
 - [x] P2.1 — `Send()`: publish signed `kind:9` channel messages (`internal/adapter/gateway/buzz/gateway.go`, `internal/infrastructure/nostr/client.go` `Publish`/`ConnectedRelayCount`)
-- [ ] P2.2 — Publish agent-profile event (`kind:10100`)
+- [x] P2.2 — Publish agent-profile event (`kind:10100`) — schema spike found the doc-comment ("agent metadata + owner reference") does NOT match the actual relay-enforced content (`{"channel_add_policy": "anyone"|"owner_only"|"nobody"}`); implemented against the verified schema, defaulting to `"owner_only"`. See implementation-notes.md.
 - [ ] P2.3 — Subscribe to `kind:9000`/`kind:10100`, maintain is_agent cache
 - [ ] P2.4 — Loop-prevention guard
 
@@ -65,6 +65,7 @@ Phase 3 (P3.1) remains blocked on a design decision: research.md Q6 (tool-execut
 ## Recent Activity (Phase 2)
 
 - 2026-08-02: P2.1 complete — `Client.Publish` (new: relay connection tracking via `relayConn`/`connsMu`, `ConnectedRelayCount`) added to `internal/infrastructure/nostr/client.go`; `Event` given NIP-01 wire JSON tags + a `Tag()` helper in `event.go`; `Gateway.Send()` implemented in `internal/adapter/gateway/buzz/gateway.go`, publishing correctly-signed, `#h`-tagged `kind:9` events and incrementing `buzz_events_published_total{status}`. All new code covered by tests (client_test.go, event_test.go, gateway_test.go), race-detector clean, full quality gate green.
+- 2026-08-02: P2.2 complete — pre-requisite schema spike run directly against `github.com/block/buzz` (`crates/buzz-relay/src/handlers/side_effects.rs`'s `handle_agent_profile`, `crates/buzz-cli/src/commands/channels.rs`'s `cmd_set_add_policy`, and `NOSTR.md`), found the doc comment on `KIND_AGENT_PROFILE` in `kind.rs` ("Agent metadata + owner reference") does not match what any current relay code path reads or requires: the only content field the relay parses/enforces is `channel_add_policy` (`"anyone"|"owner_only"|"nobody"`), a per-pubkey channel-invite-permission setting, not an identity declaration. Implemented `Gateway.publishAgentProfile`/`publishAgentProfileBestEffort` against this verified schema (constant `buzzChannelAddPolicy = "owner_only"`), published once at `Start()` via a bounded-retry goroutine (relay connection is dialed async and may not be up on the first attempt), not on every message. Full finding recorded in implementation-notes.md. All new code covered by tests, race-detector clean, full quality gate green.
 
 ## Recent Activity (Phase 0-1)
 

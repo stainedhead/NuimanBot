@@ -3,9 +3,11 @@ package buzz
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +20,22 @@ import (
 	"nuimanbot/internal/infrastructure/nostr"
 	"nuimanbot/internal/usecase/user"
 )
+
+// sampleWireEventJSON builds a minimal kind:9 wire-shape event (an unverified
+// signature is fine — tests using this only care about message volume/
+// timing, not whether the gateway forwards the message).
+func sampleWireEventJSON(t *testing.T, i int) map[string]any {
+	t.Helper()
+	return map[string]any{
+		"id":         fmt.Sprintf("evt-%d", i),
+		"pubkey":     "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459",
+		"created_at": 1700000000,
+		"kind":       nostr.KindChannelMessage,
+		"tags":       [][]string{{"h", "channel-uuid-1"}},
+		"content":    fmt.Sprintf("msg %d", i),
+		"sig":        "deadbeef",
+	}
+}
 
 // newFakeRelay starts an in-process WebSocket server that upgrades every
 // connection and hands it to handler. Mirrors
@@ -515,5 +533,154 @@ func TestGateway_Send_MissingChannelID_ReturnsError(t *testing.T) {
 	err := gw.Send(context.Background(), domain.OutgoingMessage{Content: "no channel"})
 	if err == nil {
 		t.Error("Send() error = nil, want error when metadata[\"channel_id\"] is missing")
+	}
+}
+
+func TestGateway_PublishAgentProfile_PublishesSignedKind10100Event(t *testing.T) {
+	frames := make(chan buzzRelayFrame, 4)
+	relay := newFakeRelay(t, func(conn *websocket.Conn) {
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			frames <- decodeClientFrame(t, data)
+		}
+	})
+
+	gw, _ := newConnectedTestGateway(t, relay)
+
+	if err := gw.publishAgentProfile(context.Background()); err != nil {
+		t.Fatalf("publishAgentProfile() error = %v", err)
+	}
+
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case f := <-frames:
+			if f.msgType != "EVENT" {
+				continue // the initial REQ frame
+			}
+			if f.kind != nostr.KindAgentProfile {
+				t.Errorf("published event kind = %d, want %d", f.kind, nostr.KindAgentProfile)
+			}
+			var content map[string]string
+			if err := json.Unmarshal([]byte(f.content), &content); err != nil {
+				t.Fatalf("failed to unmarshal profile content: %v", err)
+			}
+			if content["channel_add_policy"] != buzzChannelAddPolicy {
+				t.Errorf(`content["channel_add_policy"] = %q, want %q`, content["channel_add_policy"], buzzChannelAddPolicy)
+			}
+			return
+		case <-deadline:
+			t.Fatal("timed out waiting for published kind:10100 event at relay")
+		}
+	}
+}
+
+func TestGateway_PublishAgentProfile_ProducesVerifiableSignature(t *testing.T) {
+	rawEvents := make(chan []byte, 4)
+	relay := newFakeRelay(t, func(conn *websocket.Conn) {
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if decodeClientFrame(t, data).msgType == "EVENT" {
+				rawEvents <- data
+			}
+		}
+	})
+
+	gw, _ := newConnectedTestGateway(t, relay)
+
+	if err := gw.publishAgentProfile(context.Background()); err != nil {
+		t.Fatalf("publishAgentProfile() error = %v", err)
+	}
+
+	select {
+	case data := <-rawEvents:
+		var raw []json.RawMessage
+		if err := json.Unmarshal(data, &raw); err != nil {
+			t.Fatalf("failed to unmarshal frame: %v", err)
+		}
+		var e nostr.Event
+		if err := json.Unmarshal(raw[1], &e); err != nil {
+			t.Fatalf("failed to unmarshal event: %v", err)
+		}
+		valid, err := nostr.Verify(e)
+		if err != nil {
+			t.Fatalf("Verify() error = %v", err)
+		}
+		if !valid {
+			t.Error("Verify() = false for a published agent profile event, want true")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for published event")
+	}
+}
+
+func TestGateway_Start_PublishesAgentProfileOnceNotPerMessage(t *testing.T) {
+	var mu sync.Mutex
+	profileFrames := 0
+
+	relay := newFakeRelay(t, func(conn *websocket.Conn) {
+		if _, _, err := conn.ReadMessage(); err != nil { // REQ frame
+			return
+		}
+		// Simulate several channel messages arriving in quick succession —
+		// none of these should trigger another profile publish.
+		for i := 0; i < 3; i++ {
+			frame, err := json.Marshal([]any{"EVENT", buzzSubscriptionID, sampleWireEventJSON(t, i)})
+			if err != nil {
+				t.Errorf("failed to marshal fake EVENT frame: %v", err)
+				return
+			}
+			_ = conn.WriteMessage(websocket.TextMessage, frame)
+		}
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if f := decodeClientFrame(t, data); f.msgType == "EVENT" && f.kind == nostr.KindAgentProfile {
+				mu.Lock()
+				profileFrames++
+				mu.Unlock()
+			}
+		}
+	})
+
+	privHex, _, err := nostr.GenerateKeypair()
+	if err != nil {
+		t.Fatalf("GenerateKeypair() error = %v", err)
+	}
+	cfg := &config.BuzzConfig{
+		Relays:     []string{wsURL(t, relay)},
+		PrivateKey: domain.NewSecureStringFromString(privHex),
+		ChannelIDs: []string{"channel-uuid-1"},
+	}
+	gw, err := New(cfg, nil)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	gw.OnMessage(func(ctx context.Context, msg domain.IncomingMessage) error { return nil })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		_ = gw.Start(ctx)
+		close(done)
+	}()
+
+	time.Sleep(1200 * time.Millisecond)
+	cancel()
+	<-done
+
+	mu.Lock()
+	got := profileFrames
+	mu.Unlock()
+	if got != 1 {
+		t.Errorf("published %d kind:10100 profile events during Start(), want exactly 1 (once, not per-message)", got)
 	}
 }
