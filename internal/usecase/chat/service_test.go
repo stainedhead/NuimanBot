@@ -73,13 +73,13 @@ func (m *mockMemoryRepository) ListConversations(ctx context.Context, userID str
 }
 
 type mockToolExecutionService struct {
-	executeFunc    func(ctx context.Context, toolName string, params map[string]any) (*domain.ExecutionResult, error)
+	executeFunc    func(ctx context.Context, user *domain.User, toolName string, params map[string]any) (*domain.ExecutionResult, error)
 	listSkillsFunc func(ctx context.Context, userID string) ([]domain.Tool, error)
 }
 
-func (m *mockToolExecutionService) Execute(ctx context.Context, toolName string, params map[string]any) (*domain.ExecutionResult, error) {
+func (m *mockToolExecutionService) ExecuteWithUser(ctx context.Context, user *domain.User, toolName string, params map[string]any) (*domain.ExecutionResult, error) {
 	if m.executeFunc != nil {
-		return m.executeFunc(ctx, toolName, params)
+		return m.executeFunc(ctx, user, toolName, params)
 	}
 	return &domain.ExecutionResult{Output: "mock skill result"}, nil
 }
@@ -89,6 +89,37 @@ func (m *mockToolExecutionService) ListTools(ctx context.Context, userID string)
 		return m.listSkillsFunc(ctx, userID)
 	}
 	return []domain.Tool{}, nil
+}
+
+// mockUserService is a test double for chat.UserService. By default it
+// resolves any (platform, platformUID) to a found RoleAdmin user so existing
+// orchestration tests (which don't exercise RBAC themselves — that's tested
+// against the real tool.Service in rbac_test.go) don't need to configure it.
+type mockUserService struct {
+	getUserFunc    func(ctx context.Context, platform domain.Platform, platformUID string) (*domain.User, error)
+	createUserFunc func(ctx context.Context, platform domain.Platform, platformUID string, role domain.Role) (*domain.User, error)
+}
+
+func (m *mockUserService) GetUserByPlatformUID(ctx context.Context, platform domain.Platform, platformUID string) (*domain.User, error) {
+	if m.getUserFunc != nil {
+		return m.getUserFunc(ctx, platform, platformUID)
+	}
+	return &domain.User{
+		ID:          platformUID,
+		Role:        domain.RoleAdmin,
+		PlatformIDs: map[domain.Platform]string{platform: platformUID},
+	}, nil
+}
+
+func (m *mockUserService) CreateUser(ctx context.Context, platform domain.Platform, platformUID string, role domain.Role) (*domain.User, error) {
+	if m.createUserFunc != nil {
+		return m.createUserFunc(ctx, platform, platformUID, role)
+	}
+	return &domain.User{
+		ID:          platformUID,
+		Role:        role,
+		PlatformIDs: map[domain.Platform]string{platform: platformUID},
+	}, nil
 }
 
 type mockSecurityService struct {
@@ -159,7 +190,7 @@ func createTestService(
 	toolExecService ToolExecutionService,
 	securityService SecurityService,
 ) *Service {
-	return NewService(llmService, memoryRepo, toolExecService, securityService)
+	return NewService(llmService, memoryRepo, toolExecService, securityService, &mockUserService{})
 }
 
 // TestProcessMessage_NoToolCalls tests basic message processing without tool calls
@@ -283,7 +314,7 @@ func TestProcessMessage_WithToolCalls(t *testing.T) {
 				},
 			}, nil
 		},
-		executeFunc: func(ctx context.Context, toolName string, params map[string]any) (*domain.ExecutionResult, error) {
+		executeFunc: func(ctx context.Context, user *domain.User, toolName string, params map[string]any) (*domain.ExecutionResult, error) {
 			if toolName != "calculator" {
 				return nil, errors.New("unknown skill")
 			}
@@ -363,7 +394,7 @@ func TestProcessMessage_MultipleToolIterations(t *testing.T) {
 				&mockSkill{name: "calculator", description: "Calculator", inputSchema: map[string]any{}},
 			}, nil
 		},
-		executeFunc: func(ctx context.Context, toolName string, params map[string]any) (*domain.ExecutionResult, error) {
+		executeFunc: func(ctx context.Context, user *domain.User, toolName string, params map[string]any) (*domain.ExecutionResult, error) {
 			return &domain.ExecutionResult{Output: "result"}, nil
 		},
 	}
@@ -422,7 +453,7 @@ func TestProcessMessage_MaxIterationsExceeded(t *testing.T) {
 				&mockSkill{name: "calculator", description: "Calculator", inputSchema: map[string]any{}},
 			}, nil
 		},
-		executeFunc: func(ctx context.Context, toolName string, params map[string]any) (*domain.ExecutionResult, error) {
+		executeFunc: func(ctx context.Context, user *domain.User, toolName string, params map[string]any) (*domain.ExecutionResult, error) {
 			return &domain.ExecutionResult{Output: "result"}, nil
 		},
 	}
@@ -488,7 +519,7 @@ func TestProcessMessage_ToolExecutionError(t *testing.T) {
 				&mockSkill{name: "calculator", description: "Calculator", inputSchema: map[string]any{}},
 			}, nil
 		},
-		executeFunc: func(ctx context.Context, toolName string, params map[string]any) (*domain.ExecutionResult, error) {
+		executeFunc: func(ctx context.Context, user *domain.User, toolName string, params map[string]any) (*domain.ExecutionResult, error) {
 			return nil, errors.New("tool execution failed")
 		},
 	}
@@ -884,7 +915,7 @@ func TestProcessMessage_NoCacheForToolCalls(t *testing.T) {
 				&mockSkill{name: "calculator", description: "Calculator", inputSchema: map[string]any{}},
 			}, nil
 		},
-		executeFunc: func(ctx context.Context, toolName string, params map[string]any) (*domain.ExecutionResult, error) {
+		executeFunc: func(ctx context.Context, user *domain.User, toolName string, params map[string]any) (*domain.ExecutionResult, error) {
 			return &domain.ExecutionResult{Output: "result"}, nil
 		},
 	}
@@ -1372,7 +1403,7 @@ func TestProcessMessage_CuratorReceivesToolOutputs(t *testing.T) {
 				&mockSkill{name: "weather", description: "Weather", inputSchema: map[string]any{}},
 			}, nil
 		},
-		executeFunc: func(ctx context.Context, toolName string, params map[string]any) (*domain.ExecutionResult, error) {
+		executeFunc: func(ctx context.Context, user *domain.User, toolName string, params map[string]any) (*domain.ExecutionResult, error) {
 			return &domain.ExecutionResult{Output: "Sunny, 72°F"}, nil
 		},
 	}

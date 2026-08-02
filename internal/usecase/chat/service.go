@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time" // For time.Now()
 
@@ -28,11 +29,21 @@ type MemoryRepository interface {
 }
 
 // ToolExecutionService defines the interface for tool execution required by the ChatService.
-// This will be defined by the Tools Core Agent.
+// ExecuteWithUser (not the unchecked Execute) is used so tool calls triggered
+// from chat messages are RBAC- and rate-limit-checked for every platform (FR-011).
 type ToolExecutionService interface {
-	Execute(ctx context.Context, toolName string, params map[string]any) (*domain.ExecutionResult, error)
+	ExecuteWithUser(ctx context.Context, user *domain.User, toolName string, params map[string]any) (*domain.ExecutionResult, error)
 	ListTools(ctx context.Context, userID string) ([]domain.Tool, error)
-	// Other methods for skill management (e.g., registration, permission checks)
+}
+
+// UserService defines the interface for resolving/creating the platform-scoped
+// domain.User required to enforce RBAC on tool calls (FR-006, FR-011). This is
+// the single platform-agnostic entry point used by ChatService for every
+// gateway (Telegram, Slack, CLI, Buzz) — gateways are not required to resolve
+// a user themselves before dispatching to ChatService.ProcessMessage.
+type UserService interface {
+	GetUserByPlatformUID(ctx context.Context, platform domain.Platform, platformUID string) (*domain.User, error)
+	CreateUser(ctx context.Context, platform domain.Platform, platformUID string, role domain.Role) (*domain.User, error)
 }
 
 // SecurityService defines the interface for security operations required by the ChatService.
@@ -89,8 +100,9 @@ type LLMDefaults struct {
 type Service struct {
 	llmService      LLMService
 	memoryRepo      MemoryRepository
-	toolExecService ToolExecutionService // Currently PENDING (will be mocked or basic for now)
+	toolExecService ToolExecutionService
 	securityService SecurityService
+	userService     UserService    // Resolves/creates the domain.User used for RBAC on tool calls
 	cache           LLMCache       // Optional cache for LLM responses
 	memoryCurator   MemoryCurator  // Optional memory curator for long-term storage
 	memoryRecaller  MemoryRecaller // Optional memory recaller for context injection
@@ -104,12 +116,14 @@ func NewService(
 	memoryRepo MemoryRepository,
 	toolExecService ToolExecutionService,
 	securityService SecurityService,
+	userService UserService,
 ) *Service {
 	return &Service{
 		llmService:      llmService,
 		memoryRepo:      memoryRepo,
 		toolExecService: toolExecService,
 		securityService: securityService,
+		userService:     userService,
 	}
 }
 
@@ -167,6 +181,30 @@ func getConversationID(platform domain.Platform, platformUID string) string {
 	return string(platform) + ":" + platformUID
 }
 
+// resolveUser resolves or creates the domain.User for (platform, platformUID),
+// defaulting new users to RoleGuest. This is the platform-agnostic RBAC entry
+// point (FR-006, FR-011) used for every gateway's messages, not just Buzz's.
+func (s *Service) resolveUser(ctx context.Context, platform domain.Platform, platformUID string) (*domain.User, error) {
+	user, err := s.userService.GetUserByPlatformUID(ctx, platform, platformUID)
+	if err == nil {
+		return user, nil
+	}
+	if !errors.Is(err, domain.ErrUserNotFound) {
+		return nil, fmt.Errorf("failed to look up user: %w", err)
+	}
+
+	user, err = s.userService.CreateUser(ctx, platform, platformUID, domain.RoleGuest)
+	if err != nil {
+		if errors.Is(err, domain.ErrConflict) {
+			// Lost a race with a concurrent first-message create for the same
+			// brand-new platform UID; look up the winner instead of failing.
+			return s.userService.GetUserByPlatformUID(ctx, platform, platformUID)
+		}
+		return nil, fmt.Errorf("failed to create user: %w", err)
+	}
+	return user, nil
+}
+
 // ProcessMessage processes an incoming message, interacts with LLM/skills/memory, and returns an outgoing message.
 func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.IncomingMessage) (domain.OutgoingMessage, error) {
 	// Add request ID to context for correlation
@@ -187,6 +225,14 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 
 	// Generate conversation ID from platform and user
 	conversationID := getConversationID(incomingMsg.Platform, incomingMsg.PlatformUID)
+
+	// 1.5. Resolve the RBAC-relevant domain.User for this platform/UID (FR-006,
+	// FR-011). This must happen before listing/executing tools so those calls
+	// are genuinely permission-checked, not just labeled with a raw UID.
+	user, err := s.resolveUser(ctx, incomingMsg.Platform, incomingMsg.PlatformUID)
+	if err != nil {
+		return domain.OutgoingMessage{}, fmt.Errorf("failed to resolve user: %w", err)
+	}
 
 	// 2. Load Conversation History
 	// For MVP, retrieve recent messages for context.
@@ -298,7 +344,7 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 		}
 
 		// Execute tool calls and collect outputs for memory extraction
-		toolResults := s.executeToolCalls(ctx, llmResponse.ToolCalls)
+		toolResults := s.executeToolCalls(ctx, user, llmResponse.ToolCalls)
 		for _, tr := range toolResults {
 			if tr.Error != "" {
 				collectedToolOutputs = append(collectedToolOutputs, fmt.Sprintf("Tool %s error: %s", tr.ToolName, tr.Error))

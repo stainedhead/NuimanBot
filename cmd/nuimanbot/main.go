@@ -75,6 +75,7 @@ type application struct {
 	ToolRegistry         tool.ToolRegistry
 	Vault                domain.CredentialVault
 	ToolExecutionService *tool.Service
+	DomainUserService    *user.Service // Resolves/creates the domain.User used for RBAC (FR-006, FR-011), shared by ChatService and the Buzz gateway
 	HealthServer         *health.Server
 	WebServer            *web.Server
 	RESTServer           *api.Server                    // REST API server (optional)
@@ -172,6 +173,15 @@ func main() {
 	securityService := security.NewService(vault, inputValidator, auditAdapter)
 	slog.Info("Security service initialized with file-based auditor")
 
+	// 5.5. Initialize domain.User resolution service. ChatService uses this to
+	// resolve/create a RBAC-relevant domain.User for every incoming message,
+	// on every platform (FR-006, FR-011) — not just Buzz, which was
+	// previously the only caller of this pattern. Backed by a dedicated file
+	// (domain_users.json, distinct from users.json's domain.UserProfile admin
+	// data, a different schema).
+	domainUserRepo := storage.NewFileUserRepository(storagePath + "/domain_users.json")
+	domainUserService := user.NewService(domainUserRepo, securityService)
+
 	// 6. Initialize Memory Repository
 	conversationAdapter := &conversationRepositoryAdapter{repo: fileRepos.Conversation}
 
@@ -206,7 +216,7 @@ func main() {
 	toolExecutionService := tool.NewService(&cfg.Tools, toolRegistry, securityService)
 
 	// 10. Initialize Chat Service
-	chatService := chat.NewService(llmService, conversationAdapter, toolExecutionService, securityService)
+	chatService := chat.NewService(llmService, conversationAdapter, toolExecutionService, securityService, domainUserService)
 
 	// Configure LLM defaults from config
 	chatService.SetLLMDefaults(chat.LLMDefaults{
@@ -332,6 +342,7 @@ func main() {
 		ToolRegistry:         toolRegistry,
 		ChatService:          chatService,
 		ToolExecutionService: toolExecutionService,
+		DomainUserService:    domainUserService,
 		HealthServer:         healthServer,
 		RESTServer:           restServer,
 		MemoryCellRepo:       memoryCellRepo,
@@ -970,13 +981,12 @@ func (app *application) Run(ctx context.Context) error {
 
 	// Initialize Buzz gateway if enabled
 	if app.Config.Gateways.Buzz.Enabled {
-		// Buzz is the first gateway to resolve/create domain.User records
-		// from a message-handling path (FR-006); no production
-		// domain.UserRepository existed before, so it's backed here by a
-		// dedicated file (distinct from users.json, which stores
-		// domain.UserProfile admin data, a different schema).
-		domainUserRepo := storage.NewFileUserRepository(dataDir + "/domain_users.json")
-		buzzUserService := user.NewService(domainUserRepo, app.SecurityService)
+		// Buzz's gateway.go still resolves/creates its own domain.User on
+		// first message (FR-006, P1.8) using the same shared
+		// app.DomainUserService ChatService now also uses (P3.1) — this is a
+		// harmless, idempotent double lookup (ChatService.resolveUser finds
+		// the user Buzz's gateway already created), kept as-is rather than
+		// touching already-merged Phase 1 code.
 
 		// Generate-if-absent secp256k1 keypair (FR-007), persisted via the
 		// existing credential vault.
@@ -986,7 +996,7 @@ func (app *application) Run(ctx context.Context) error {
 		} else {
 			app.Config.Gateways.Buzz.PrivateKey = ensuredKey
 
-			buzzGateway, err := buzz.New(&app.Config.Gateways.Buzz, buzzUserService)
+			buzzGateway, err := buzz.New(&app.Config.Gateways.Buzz, app.DomainUserService)
 			if err != nil {
 				slog.Warn("Failed to create Buzz gateway", "error", err)
 			} else {

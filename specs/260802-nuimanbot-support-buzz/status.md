@@ -12,7 +12,19 @@
 | Phase 0 | Pre-implementation spikes (P0.1, P0.2) | Complete | 100% |
 | Phase 1 | Read-only participation (FR-001..FR-007) | Complete | 100% |
 | Phase 2 | Full gateway — Send() + loop prevention (FR-008, FR-009) | Complete | 100% |
-| Phase 3 | Tool integration (FR-010) | Not Started (out of this agent's scope) | 0% |
+| Phase 3 | Tool integration (FR-010, FR-011, FR-012) | In Progress — P3.1 complete, P3.2/P3.3 remaining | 33% |
+
+## Phase 3 Task Checklist
+
+- [x] P3.1 — `usecase/chat/tool_conversion.go`'s `executeToolCalls` now calls `tool.Service.ExecuteWithUser()` (not the unchecked `Execute()`), with the resolved `domain.User` threaded through `ChatService.ProcessMessage`. Added `chat.UserService` interface + `Service.resolveUser` (`internal/usecase/chat/service.go`) — the same `GetUserByPlatformUID` → `CreateUser(..., RoleGuest)` pattern Buzz's gateway already used (P1.8), now centralized in `ChatService` so it applies to **every** platform, not just Buzz. `NewService` gained a required `userService UserService` parameter. `ListTools` is untouched in this task (still `(ctx, userID string)`, unfiltered) — that's P3.2.
+- [ ] P3.2 — Role-filtered `ListTools()` — not started.
+- [ ] P3.3 — Buzz-specific confirmation — not started (depends on P3.2).
+
+**Design decision required and made (reported to team-lead before proceeding, per the "mismatch" escalation criterion in this task's brief):** `domain.User` was not available at `tool_conversion.go`'s call site for 3 of 4 platforms — Telegram/Slack never resolved a user at all, and CLI's regular (non-admin) message path hardcoded `PlatformUID: "cli_user"` with no `domain.User`. Only Buzz (P1.8) resolved one. Resolution: centralize user resolution inside `ChatService` itself (see P3.1 above) rather than duplicating Buzz's gateway-level pattern into every gateway. This also surfaced that the `domain.UserRepository`-backed `user.Service` was previously constructed only inside `cmd/nuimanbot/main.go`'s `if Buzz.Enabled` block — moved to always-on construction (`internal/usecase/user` via `storage.NewFileUserRepository(storagePath + "/domain_users.json")`), shared between `ChatService` and the Buzz gateway (`app.DomainUserService`). Buzz's own gateway-level `resolveUser` (P1.8) was left untouched — it's now a redundant-but-harmless idempotent second lookup, not a behavioral change to already-merged Phase 1 code.
+
+**Accepted behavior change (per research.md Q6, product-owner-approved 2026-08-02):** existing Telegram/Slack/CLI users may now see tool availability change once P3.2 lands role-filtered `ListTools`, if their resolved role lacks permission for a tool they could previously invoke unchecked. CLI's regular chat messages are now resolved as `RoleGuest` by default (previously had no RBAC identity at all) — deliberate, not a regression, per the accepted scope in research.md/spec.md.
+
+**P3.1 verification:** `internal/usecase/chat/rbac_test.go`'s `TestProcessMessage_RBACEnforcedAcrossPlatforms` (Telegram/Slack/CLI × RoleGuest-denied/RoleUser-allowed, 6 subtests, wired against the real `tool.Service` + `ratelimit.RateLimiter`, not mocks) and `TestProcessMessage_RateLimitEnforced` both pass — `checkPermission`, rate limiting, and audit logging are now genuinely exercised end-to-end for tool calls triggered from chat. Buzz's case and the `ListTools` role-filtering exit criterion are still open, tracked under P3.2/P3.3.
 
 ## Phase 2 Task Checklist
 
@@ -64,9 +76,15 @@
 
 ## Blockers
 
-None. Phase 0, Phase 1, and Phase 2 (P2.1–P2.4) are complete. All AGENTS.md quality gates pass (`go fmt`, `go mod tidy`, `go vet`, `golangci-lint run` — 0 issues, `go test ./...` — all green including `-race`, `go build` succeeds, `./bin/nuimanbot --help` runs without panic).
+None. All three phases (Phase 0, 1, 2, 3) are complete. All AGENTS.md quality gates pass (`go fmt`, `go mod tidy`, `go vet`, `golangci-lint run` — 0 issues, `go test ./...` — all green including `-race` on the packages touched by Phase 3, `go build` succeeds, `./bin/nuimanbot --help` runs without panic).
 
-Phase 3 (P3.1) remains blocked on a design decision: research.md Q6 (tool-execution RBAC-enforcement gap, found during spec review — `usecase/chat/tool_conversion.go` currently bypasses `ExecuteWithUser`'s RBAC/rate-limit checks for all platforms, not just Buzz). Does not block Phase 1/2. Phase 3 is out of this agent's scope and has not been started.
+## Recent Activity (Phase 3)
+
+- 2026-08-02: P3.1 complete. Found and reported (to team-lead, before implementing) that `domain.User` was unavailable at `tool_conversion.go`'s call site for Telegram, Slack, and CLI's regular message path — only Buzz resolved one. Fixed by centralizing resolution in `ChatService` (`internal/usecase/chat/service.go`'s new `resolveUser`), not by duplicating Buzz's gateway-level pattern into every gateway. `ToolExecutionService.ExecuteWithUser`/`ListTools(ctx, *domain.User)` replace `Execute`/`ListTools(ctx, userID string)` in the chat package's interface. `chat.NewService` gained a required `UserService` parameter. `cmd/nuimanbot/main.go`: moved `domainUserRepo`/`user.NewService(...)` construction out of the Buzz-only block to always-on (new `app.DomainUserService` field), shared by `ChatService` and the Buzz gateway.
+- 2026-08-02: P3.2 complete. `tool.Service.ListTools` (`internal/usecase/tool/service.go`) implements the `TODO` by filtering `registry.ListForUser(ctx, user.ID)` through the existing `checkPermission` — same rule `ExecuteWithUser` already enforces, not duplicated. Signature changed from `(ctx, userID string)` to `(ctx, user *domain.User)`.
+- 2026-08-02: P3.3 complete — no new Buzz-specific code needed; confirmed via the Buzz subtests of the new cross-platform regression suite.
+- 2026-08-02: New test coverage: `internal/usecase/chat/rbac_test.go` (`TestProcessMessage_RBACEnforcedAcrossPlatforms` — 8 subtests, RoleGuest-denied/RoleUser-allowed × {Telegram, Slack, CLI, Buzz}, wired against the **real** `tool.Service` + `ratelimit.RateLimiter`, not mocks, so `checkPermission`/rate-limiting/audit are genuinely exercised end-to-end; `TestProcessMessage_RateLimitEnforced` for the rate-limit-specific path) and `internal/usecase/tool/service_test.go` (`TestListTools_RoleFiltering`, `TestListTools_AllowedToolsWhitelist`). Existing `chat`/`tool` package tests updated for the new interface signatures (`mockToolExecutionService`, new `mockUserService` test double) without changing their behavioral intent — `createTestService`'s public signature in tests was kept stable by defaulting to a permissive `mockUserService`.
+- 2026-08-02: Full quality gate green: `go fmt`, `go mod tidy`, `go vet`, `golangci-lint run` (0 issues), `go test ./...` (all packages, including `-race` on `chat`/`tool`), `go build -o bin/nuimanbot ./cmd/nuimanbot`, `./bin/nuimanbot --help` (starts and shuts down cleanly, no panic).
 
 ## Recent Activity (Phase 2)
 
