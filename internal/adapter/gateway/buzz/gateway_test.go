@@ -569,6 +569,17 @@ func TestGateway_Send_ProducesVerifiableSignature(t *testing.T) {
 	}
 }
 
+func TestGateway_Send_NilClient_ReturnsErrorNotPanic(t *testing.T) {
+	gw, _ := newTestGateway(t) // constructed but never Start()ed: g.client is nil
+	err := gw.Send(context.Background(), domain.OutgoingMessage{
+		Content:  "hello",
+		Metadata: map[string]any{"channel_id": "channel-uuid-1"},
+	})
+	if err == nil {
+		t.Error("Send() error = nil, want a descriptive error when g.client is nil (FR-001)")
+	}
+}
+
 func TestGateway_Send_MissingChannelID_ReturnsError(t *testing.T) {
 	gw, _ := newTestGateway(t)
 	err := gw.Send(context.Background(), domain.OutgoingMessage{Content: "no channel"})

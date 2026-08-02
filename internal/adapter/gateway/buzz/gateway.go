@@ -174,6 +174,10 @@ func (g *Gateway) Stop(ctx context.Context) error {
 // target channel comes from msg.Metadata["channel_id"] (data-dictionary.md's
 // documented OutgoingMessage.Metadata contract for Buzz).
 func (g *Gateway) Send(ctx context.Context, msg domain.OutgoingMessage) error {
+	if g.client == nil {
+		return fmt.Errorf("Buzz client not initialized: gateway must be started before Send() (FR-001)")
+	}
+
 	channelID, _ := msg.Metadata["channel_id"].(string)
 	if channelID == "" {
 		return fmt.Errorf(`Buzz Send requires metadata["channel_id"]`)
