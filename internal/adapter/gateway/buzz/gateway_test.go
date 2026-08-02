@@ -702,6 +702,66 @@ func TestGateway_Start_NostrClientStartFailure_ReturnsWrappedErrorAndLeavesClien
 	}
 }
 
+// TestGateway_ConcurrentSendStopDuringStart_NoRace exercises Send() and
+// Stop() called concurrently with a live Start() (FR-008). Run with -race:
+// the assertion is the absence of a data race/panic, not any particular
+// return value from Send()/Stop() (outcomes are inherently timing-dependent
+// here).
+func TestGateway_ConcurrentSendStopDuringStart_NoRace(t *testing.T) {
+	relay := newFakeRelay(t, func(conn *websocket.Conn) {
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	})
+
+	privHex, _, err := nostr.GenerateKeypair()
+	if err != nil {
+		t.Fatalf("GenerateKeypair() error = %v", err)
+	}
+	cfg := &config.BuzzConfig{
+		Relays:     []string{wsURL(t, relay)},
+		PrivateKey: domain.NewSecureStringFromString(privHex),
+		ChannelIDs: []string{"channel-uuid-1"},
+	}
+	gw, err := New(cfg, nil)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	gw.OnMessage(func(ctx context.Context, msg domain.IncomingMessage) error { return nil })
+
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		_ = gw.Start(context.Background())
+	}()
+	go func() {
+		defer wg.Done()
+		_ = gw.Send(context.Background(), domain.OutgoingMessage{
+			Content:  "concurrent",
+			Metadata: map[string]any{"channel_id": "channel-uuid-1"},
+		})
+	}()
+	go func() {
+		defer wg.Done()
+		time.Sleep(5 * time.Millisecond)
+		_ = gw.Stop(context.Background())
+	}()
+
+	waitDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(waitDone)
+	}()
+	select {
+	case <-waitDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for concurrent Start/Send/Stop to complete")
+	}
+}
+
 func TestGateway_Start_RelayConnectionsGauge_ReflectsConnectAndDisconnect(t *testing.T) {
 	connCh := make(chan *websocket.Conn, 1)
 	relay := newFakeRelay(t, func(conn *websocket.Conn) {

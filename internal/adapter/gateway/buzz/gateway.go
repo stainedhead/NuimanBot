@@ -75,12 +75,16 @@ type Gateway struct {
 	config      *config.BuzzConfig
 	userService *user.Service
 
+	// mu guards client, messageHandler, cancel, and stopped — written from
+	// Start()/OnMessage()/Stop() and read from Send()/Stop()/handleEvents(),
+	// which can run concurrently with Start() (FR-008: previously plain
+	// fields, a latent data race under any caller that doesn't serialize
+	// Start() before Send()/Stop()/OnMessage()).
+	mu             sync.RWMutex
 	client         nostrClient
 	messageHandler domain.MessageHandler
 	cancel         context.CancelFunc
-
-	stopMu  sync.Mutex
-	stopped bool // guards Stop() so a second call is a safe no-op (FR-002) rather than a double-close panic in nostr.Client.Stop()
+	stopped        bool // guards Stop() so a second call is a safe no-op (FR-002) rather than a double-close panic in nostr.Client.Stop()
 
 	seenMu sync.Mutex
 	seen   map[string]struct{} // dedupe by event ID (FR-004)
@@ -107,6 +111,24 @@ func (g *Gateway) Platform() domain.Platform {
 	return domain.PlatformBuzz
 }
 
+// getClient returns the current nostrClient, or nil if Start() hasn't
+// completed (or the gateway was never started). Safe to call concurrently
+// with Start()/Stop() (FR-008).
+func (g *Gateway) getClient() nostrClient {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.client
+}
+
+// getMessageHandler returns the currently registered handler, or nil if
+// OnMessage() hasn't been called. Safe to call concurrently with OnMessage()
+// (FR-008).
+func (g *Gateway) getMessageHandler() domain.MessageHandler {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return g.messageHandler
+}
+
 // Start connects to configured relays, subscribes to configured channels,
 // and processes incoming events until ctx is canceled. Blocks (mirrors the
 // Slack/Telegram gateways' Start pattern).
@@ -119,7 +141,9 @@ func (g *Gateway) Start(ctx context.Context) error {
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
+	g.mu.Lock()
 	g.cancel = cancel
+	g.mu.Unlock()
 
 	client := newNostrClient(g.config.Relays)
 	if err := client.Start(ctx, buzzSubscriptionID,
@@ -134,7 +158,9 @@ func (g *Gateway) Start(ctx context.Context) error {
 	// (FR-003) — a failed Start() above leaves g.client nil, so a subsequent
 	// Send()/Stop() call hits FR-001's nil-guard instead of operating on a
 	// half-initialized client.
+	g.mu.Lock()
 	g.client = client
+	g.mu.Unlock()
 
 	slog.Info("Gateway started",
 		"platform", "buzz",
@@ -180,7 +206,11 @@ func (g *Gateway) publishAgentProfile(ctx context.Context) error {
 	if err := nostr.Sign(&event, g.config.PrivateKey.Value()); err != nil {
 		return fmt.Errorf("failed to sign Buzz agent profile: %w", err)
 	}
-	if _, err := g.client.Publish(ctx, event); err != nil {
+	client := g.getClient()
+	if client == nil {
+		return fmt.Errorf("Buzz client not initialized")
+	}
+	if _, err := client.Publish(ctx, event); err != nil {
 		return fmt.Errorf("failed to publish Buzz agent profile: %w", err)
 	}
 	return nil
@@ -215,20 +245,22 @@ func (g *Gateway) publishAgentProfileBestEffort(ctx context.Context) {
 // a safe no-op, since nostr.Client.Stop() itself is not safe to call twice
 // (it closes its event channel, which would panic on a repeat close).
 func (g *Gateway) Stop(ctx context.Context) error {
-	g.stopMu.Lock()
+	g.mu.Lock()
 	if g.stopped {
-		g.stopMu.Unlock()
+		g.mu.Unlock()
 		return nil
 	}
 	g.stopped = true
-	g.stopMu.Unlock()
+	cancel := g.cancel
+	client := g.client
+	g.mu.Unlock()
 
-	if g.cancel != nil {
+	if cancel != nil {
 		slog.Info("Stopping gateway", "platform", "buzz")
-		g.cancel()
+		cancel()
 	}
-	if g.client != nil {
-		g.client.Stop()
+	if client != nil {
+		client.Stop()
 	}
 	return nil
 }
@@ -237,7 +269,8 @@ func (g *Gateway) Stop(ctx context.Context) error {
 // target channel comes from msg.Metadata["channel_id"] (data-dictionary.md's
 // documented OutgoingMessage.Metadata contract for Buzz).
 func (g *Gateway) Send(ctx context.Context, msg domain.OutgoingMessage) error {
-	if g.client == nil {
+	client := g.getClient()
+	if client == nil {
 		return fmt.Errorf("Buzz client not initialized: gateway must be started before Send() (FR-001)")
 	}
 
@@ -251,7 +284,7 @@ func (g *Gateway) Send(ctx context.Context, msg domain.OutgoingMessage) error {
 		return err
 	}
 
-	if _, err := g.client.Publish(ctx, event); err != nil {
+	if _, err := client.Publish(ctx, event); err != nil {
 		metrics.BuzzEventsPublishedTotal.WithLabelValues("failure").Inc()
 		return fmt.Errorf("failed to publish Buzz message: %w", err)
 	}
@@ -276,7 +309,9 @@ func (g *Gateway) buildSignedChannelMessage(channelID, content string) (nostr.Ev
 
 // OnMessage registers a handler for incoming messages.
 func (g *Gateway) OnMessage(handler domain.MessageHandler) {
+	g.mu.Lock()
 	g.messageHandler = handler
+	g.mu.Unlock()
 }
 
 // handleEvents reads from client's merged event stream until ctx is canceled
@@ -367,8 +402,8 @@ func (g *Gateway) processChannelMessage(ctx context.Context, recv nostr.Received
 		},
 	}
 
-	if g.messageHandler != nil {
-		if err := g.messageHandler(ctx, incomingMsg); err != nil {
+	if handler := g.getMessageHandler(); handler != nil {
+		if err := handler(ctx, incomingMsg); err != nil {
 			slog.Error("Error handling message", "platform", "buzz", "error", err)
 		}
 	}
