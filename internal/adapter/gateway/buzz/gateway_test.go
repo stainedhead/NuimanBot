@@ -702,6 +702,70 @@ func TestGateway_Start_NostrClientStartFailure_ReturnsWrappedErrorAndLeavesClien
 	}
 }
 
+func TestGateway_Start_RelayConnectionsGauge_ReflectsConnectAndDisconnect(t *testing.T) {
+	connCh := make(chan *websocket.Conn, 1)
+	relay := newFakeRelay(t, func(conn *websocket.Conn) {
+		connCh <- conn
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	})
+
+	privHex, _, err := nostr.GenerateKeypair()
+	if err != nil {
+		t.Fatalf("GenerateKeypair() error = %v", err)
+	}
+	cfg := &config.BuzzConfig{
+		Relays:     []string{wsURL(t, relay)},
+		PrivateKey: domain.NewSecureStringFromString(privHex),
+		ChannelIDs: []string{"channel-uuid-1"},
+	}
+	gw, err := New(cfg, nil)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	gw.OnMessage(func(ctx context.Context, msg domain.IncomingMessage) error { return nil })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		_ = gw.Start(ctx)
+		close(done)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for testutil.ToFloat64(metrics.BuzzRelayConnections) != 1 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := testutil.ToFloat64(metrics.BuzzRelayConnections); got != 1 {
+		t.Fatalf("BuzzRelayConnections = %v after relay connect, want 1", got)
+	}
+
+	var conn *websocket.Conn
+	select {
+	case conn = <-connCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the relay to record the connection")
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("conn.Close() error = %v", err)
+	}
+
+	deadline = time.Now().Add(2 * time.Second)
+	for testutil.ToFloat64(metrics.BuzzRelayConnections) != 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := testutil.ToFloat64(metrics.BuzzRelayConnections); got != 0 {
+		t.Errorf("BuzzRelayConnections = %v after relay disconnect, want 0", got)
+	}
+}
+
 func TestGateway_Stop_CancelsStartAndIsIdempotent(t *testing.T) {
 	relay := newFakeRelay(t, func(conn *websocket.Conn) {
 		for {

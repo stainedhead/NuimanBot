@@ -40,6 +40,14 @@ const (
 	// attempt.
 	buzzProfilePublishMaxAttempts    = 5
 	buzzProfilePublishInitialBackoff = 200 * time.Millisecond
+
+	// buzzRelayConnectionsPollInterval bounds how often Start's background
+	// loop samples client.ConnectedRelayCount() to refresh the
+	// buzz_relay_connections gauge (FR-004). nostrClient exposes only an
+	// aggregate connected-relay count, not connect/disconnect callbacks, so
+	// periodic polling — not event-driven updates — is what's available
+	// from the adapter layer.
+	buzzRelayConnectionsPollInterval = 250 * time.Millisecond
 )
 
 // nostrClient is the subset of *nostr.Client's methods Gateway depends on.
@@ -135,9 +143,25 @@ func (g *Gateway) Start(ctx context.Context) error {
 	)
 
 	go g.publishAgentProfileBestEffort(ctx)
+	go monitorRelayConnections(ctx, client)
 
 	g.handleEvents(ctx, client)
 	return nil
+}
+
+// monitorRelayConnections periodically refreshes the buzz_relay_connections
+// gauge from client.ConnectedRelayCount() until ctx is canceled (FR-004).
+func monitorRelayConnections(ctx context.Context, client nostrClient) {
+	ticker := time.NewTicker(buzzRelayConnectionsPollInterval)
+	defer ticker.Stop()
+	for {
+		metrics.BuzzRelayConnections.Set(float64(client.ConnectedRelayCount()))
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 // publishAgentProfile publishes this agent's kind:10100 profile event once

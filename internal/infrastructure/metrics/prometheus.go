@@ -241,12 +241,19 @@ var (
 	)
 
 	// Buzz Gateway Metrics
-	BuzzRelayConnections = promauto.NewGaugeVec(
+	//
+	// BuzzRelayConnections was originally declared as a GaugeVec labeled
+	// relay_url/status, but the adapter layer (per FR-004's decision to set
+	// it from buzz.Gateway via nostr.Client.ConnectedRelayCount(), not from
+	// internal/infrastructure/nostr directly) only has an aggregate
+	// currently-connected-relay count available, not per-relay connect
+	// state. Re-scoped to a plain Gauge of that count rather than carrying
+	// unused labels.
+	BuzzRelayConnections = promauto.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "buzz_relay_connections",
-			Help: "Current Buzz relay connection status (1 = connected, 0 = disconnected)",
+			Help: "Current number of connected Buzz relays",
 		},
-		[]string{"relay_url", "status"},
 	)
 
 	BuzzEventsReceivedTotal = promauto.NewCounterVec(
