@@ -33,7 +33,7 @@ type MemoryRepository interface {
 // from chat messages are RBAC- and rate-limit-checked for every platform (FR-011).
 type ToolExecutionService interface {
 	ExecuteWithUser(ctx context.Context, user *domain.User, toolName string, params map[string]any) (*domain.ExecutionResult, error)
-	ListTools(ctx context.Context, userID string) ([]domain.Tool, error)
+	ListTools(ctx context.Context, user *domain.User) ([]domain.Tool, error)
 }
 
 // UserService defines the interface for resolving/creating the platform-scoped
@@ -242,9 +242,8 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 		return domain.OutgoingMessage{}, fmt.Errorf("failed to get recent messages: %w", err)
 	}
 
-	// 3. Get available skills and convert to tools
-	// Note: Using PlatformUID as user identifier for skill permissions
-	skills, err := s.toolExecService.ListTools(ctx, incomingMsg.PlatformUID)
+	// 3. Get available skills and convert to tools (role-filtered, FR-012)
+	skills, err := s.toolExecService.ListTools(ctx, user)
 	if err != nil {
 		return domain.OutgoingMessage{}, fmt.Errorf("failed to list skills: %w", err)
 	}

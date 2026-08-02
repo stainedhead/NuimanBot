@@ -54,13 +54,18 @@ func newRealToolService(invoked *bool, auditEvents *[]domain.AuditEvent, rateLim
 // toolCallThenFinalLLM returns a mockLLMService that requests the "weather"
 // tool call on its first invocation and returns a plain final response on
 // every subsequent call (ChatService's tool-calling loop always re-queries
-// the LLM after executing/denying a tool call).
-func toolCallThenFinalLLM() *mockLLMService {
+// the LLM after executing/denying a tool call). If capturedTools is non-nil,
+// the tools list from the first request is captured into it, so callers can
+// assert on ListTools' role-filtered output (FR-012).
+func toolCallThenFinalLLM(capturedTools *[]domain.ToolDefinition) *mockLLMService {
 	callCount := 0
 	return &mockLLMService{
 		completeFunc: func(ctx context.Context, provider domain.LLMProvider, req *domain.LLMRequest) (*domain.LLMResponse, error) {
 			callCount++
 			if callCount == 1 {
+				if capturedTools != nil {
+					*capturedTools = req.Tools
+				}
 				return &domain.LLMResponse{
 					Content: "checking weather",
 					ToolCalls: []domain.ToolCall{
@@ -89,12 +94,23 @@ func hasAuditAction(events []domain.AuditEvent, action string) bool {
 	return false
 }
 
-// TestProcessMessage_RBACEnforcedAcrossPlatforms is the P3.1 regression test:
-// for Telegram, Slack, and CLI, a message that triggers a tool call must
-// route through tool.Service.ExecuteWithUser (not the unchecked Execute), so
-// a RoleGuest caller is denied a RoleUser-gated tool. Before this fix,
-// Execute() silently succeeded regardless of role. Buzz's equivalent case is
-// added in P3.3, once P3.1/P3.2 have both landed.
+func hasToolNamed(tools []domain.ToolDefinition, name string) bool {
+	for _, t := range tools {
+		if t.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// TestProcessMessage_RBACEnforcedAcrossPlatforms is the P3.1/P3.2 regression
+// test: for Telegram, Slack, and CLI, a message that triggers a tool call
+// must route through tool.Service.ExecuteWithUser (not the unchecked
+// Execute), so a RoleGuest caller is denied a RoleUser-gated tool — and that
+// tool must not even be listed for the LLM (FR-012, ListTools role
+// filtering). Before this fix, Execute() silently succeeded regardless of
+// role and ListTools ignored role entirely. Buzz's equivalent case is added
+// in P3.3, once P3.1/P3.2 have both landed.
 func TestProcessMessage_RBACEnforcedAcrossPlatforms(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -117,7 +133,8 @@ func TestProcessMessage_RBACEnforcedAcrossPlatforms(t *testing.T) {
 			var auditEvents []domain.AuditEvent
 			toolExecService := newRealToolService(&invoked, &auditEvents, ratelimit.RateLimit{Requests: 100, Window: time.Minute})
 
-			llmService := toolCallThenFinalLLM()
+			var capturedTools []domain.ToolDefinition
+			llmService := toolCallThenFinalLLM(&capturedTools)
 			memoryRepo := &mockMemoryRepository{}
 			securityService := &mockSecurityService{}
 			userService := &mockUserService{
@@ -142,6 +159,11 @@ func TestProcessMessage_RBACEnforcedAcrossPlatforms(t *testing.T) {
 
 			if _, err := service.ProcessMessage(context.Background(), incomingMsg); err != nil {
 				t.Fatalf("ProcessMessage failed: %v", err)
+			}
+
+			if hasToolNamed(capturedTools, "weather") == tc.wantDenied {
+				t.Errorf("weather tool presence in LLM tool list = %v, want presence = %v (role %s)",
+					hasToolNamed(capturedTools, "weather"), !tc.wantDenied, tc.role)
 			}
 
 			if tc.wantDenied {
@@ -193,7 +215,7 @@ func TestProcessMessage_RateLimitEnforced(t *testing.T) {
 		}
 	}
 
-	service1 := NewService(toolCallThenFinalLLM(), memoryRepo, toolExecService, securityService, userService)
+	service1 := NewService(toolCallThenFinalLLM(nil), memoryRepo, toolExecService, securityService, userService)
 	if _, err := service1.ProcessMessage(context.Background(), makeMsg("rl-1")); err != nil {
 		t.Fatalf("first ProcessMessage failed: %v", err)
 	}
@@ -202,7 +224,7 @@ func TestProcessMessage_RateLimitEnforced(t *testing.T) {
 	}
 
 	invoked = false
-	service2 := NewService(toolCallThenFinalLLM(), memoryRepo, toolExecService, securityService, userService)
+	service2 := NewService(toolCallThenFinalLLM(nil), memoryRepo, toolExecService, securityService, userService)
 	if _, err := service2.ProcessMessage(context.Background(), makeMsg("rl-2")); err != nil {
 		t.Fatalf("second ProcessMessage failed: %v", err)
 	}

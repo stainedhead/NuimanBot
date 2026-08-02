@@ -32,8 +32,9 @@ func (m *MockTool) Config() domain.ToolConfig                { return m.ConfigFu
 
 // MockToolRegistry implements the SkillRegistry interface.
 type MockToolRegistry struct {
-	GetFunc  func(name string) (domain.Tool, error)
-	ListFunc func() []domain.Tool
+	GetFunc         func(name string) (domain.Tool, error)
+	ListFunc        func() []domain.Tool
+	ListForUserFunc func(ctx context.Context, userID string) ([]domain.Tool, error)
 }
 
 func (m *MockToolRegistry) Register(tool domain.Tool) error { return nil } // Not used in these tests
@@ -42,6 +43,9 @@ func (m *MockToolRegistry) Get(name string) (domain.Tool, error) {
 }
 func (m *MockToolRegistry) List() []domain.Tool { return m.ListFunc() }
 func (m *MockToolRegistry) ListForUser(ctx context.Context, userID string) ([]domain.Tool, error) {
+	if m.ListForUserFunc != nil {
+		return m.ListForUserFunc(ctx, userID)
+	}
 	return m.ListFunc(), nil
 }
 
@@ -233,7 +237,8 @@ func TestListSkills(t *testing.T) {
 	svc := NewService(&config.ToolsSystemConfig{}, mockRegistry, mockSecurity)
 
 	ctx := context.Background()
-	listedSkills, err := svc.ListTools(ctx, "user1") // userID is ignored in mock for now
+	adminUser := &domain.User{ID: "user1", Role: domain.RoleAdmin}
+	listedSkills, err := svc.ListTools(ctx, adminUser)
 	if err != nil {
 		t.Errorf("ListSkills returned an unexpected error: %v", err)
 	}
@@ -261,7 +266,8 @@ func TestListSkillsForUser(t *testing.T) {
 	svc := NewService(&config.ToolsSystemConfig{}, mockRegistry, mockSecurity)
 
 	ctx := context.Background()
-	listedSkills, err := svc.ListTools(ctx, "user1")
+	adminUser := &domain.User{ID: "user1", Role: domain.RoleAdmin}
+	listedSkills, err := svc.ListTools(ctx, adminUser)
 
 	if err != nil {
 		t.Errorf("Expected no error, got %v", err)
@@ -271,6 +277,74 @@ func TestListSkillsForUser(t *testing.T) {
 	}
 	if listedSkills[0].Name() != "skill1" || listedSkills[1].Name() != "skill2" {
 		t.Errorf("Listed skills mismatch: got %+v", listedSkills)
+	}
+}
+
+// TestListTools_RoleFiltering verifies ListTools filters the registry's tools
+// by the caller's role (FR-012), using the same permission rule ExecuteWithUser
+// enforces — a tool a role can't execute must not be listed as available.
+func TestListTools_RoleFiltering(t *testing.T) {
+	mockTools := []domain.Tool{
+		&MockTool{NameFunc: func() string { return "calculator" }}, // RoleGuest
+		&MockTool{NameFunc: func() string { return "weather" }},    // RoleUser
+		&MockTool{NameFunc: func() string { return "admin.user" }}, // RoleAdmin
+	}
+	mockRegistry := &MockToolRegistry{
+		ListFunc: func() []domain.Tool { return mockTools },
+	}
+	mockSecurity := &MockSecurityService{
+		AuditFunc: func(ctx context.Context, event *domain.AuditEvent) error { return nil },
+	}
+	svc := NewService(&config.ToolsSystemConfig{}, mockRegistry, mockSecurity)
+	ctx := context.Background()
+
+	guestUser := &domain.User{ID: "guest1", Role: domain.RoleGuest}
+	guestTools, err := svc.ListTools(ctx, guestUser)
+	if err != nil {
+		t.Fatalf("ListTools for guest returned an unexpected error: %v", err)
+	}
+	if len(guestTools) != 1 || guestTools[0].Name() != "calculator" {
+		t.Errorf("Expected guest to see only [calculator], got: %+v", guestTools)
+	}
+
+	adminUser := &domain.User{ID: "admin1", Role: domain.RoleAdmin}
+	adminTools, err := svc.ListTools(ctx, adminUser)
+	if err != nil {
+		t.Fatalf("ListTools for admin returned an unexpected error: %v", err)
+	}
+	if len(adminTools) != len(mockTools) {
+		t.Errorf("Expected admin to see all %d tools, got %d: %+v", len(mockTools), len(adminTools), adminTools)
+	}
+}
+
+// TestListTools_AllowedToolsWhitelist verifies a user's AllowedTools whitelist
+// further restricts ListTools even when their role would otherwise permit a tool.
+func TestListTools_AllowedToolsWhitelist(t *testing.T) {
+	mockTools := []domain.Tool{
+		&MockTool{NameFunc: func() string { return "calculator" }},
+		&MockTool{NameFunc: func() string { return "datetime" }},
+	}
+	mockRegistry := &MockToolRegistry{
+		ListFunc: func() []domain.Tool { return mockTools },
+	}
+	mockSecurity := &MockSecurityService{
+		AuditFunc: func(ctx context.Context, event *domain.AuditEvent) error { return nil },
+	}
+	svc := NewService(&config.ToolsSystemConfig{}, mockRegistry, mockSecurity)
+
+	restrictedUser := &domain.User{
+		ID:           "guest1",
+		Role:         domain.RoleGuest,
+		AllowedTools: []string{"calculator"},
+	}
+
+	ctx := context.Background()
+	listedTools, err := svc.ListTools(ctx, restrictedUser)
+	if err != nil {
+		t.Fatalf("ListTools returned an unexpected error: %v", err)
+	}
+	if len(listedTools) != 1 || listedTools[0].Name() != "calculator" {
+		t.Errorf("Expected whitelist to restrict listing to [calculator], got: %+v", listedTools)
 	}
 }
 

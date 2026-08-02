@@ -74,7 +74,7 @@ func (m *mockMemoryRepository) ListConversations(ctx context.Context, userID str
 
 type mockToolExecutionService struct {
 	executeFunc    func(ctx context.Context, user *domain.User, toolName string, params map[string]any) (*domain.ExecutionResult, error)
-	listSkillsFunc func(ctx context.Context, userID string) ([]domain.Tool, error)
+	listSkillsFunc func(ctx context.Context, user *domain.User) ([]domain.Tool, error)
 }
 
 func (m *mockToolExecutionService) ExecuteWithUser(ctx context.Context, user *domain.User, toolName string, params map[string]any) (*domain.ExecutionResult, error) {
@@ -84,9 +84,9 @@ func (m *mockToolExecutionService) ExecuteWithUser(ctx context.Context, user *do
 	return &domain.ExecutionResult{Output: "mock skill result"}, nil
 }
 
-func (m *mockToolExecutionService) ListTools(ctx context.Context, userID string) ([]domain.Tool, error) {
+func (m *mockToolExecutionService) ListTools(ctx context.Context, user *domain.User) ([]domain.Tool, error) {
 	if m.listSkillsFunc != nil {
-		return m.listSkillsFunc(ctx, userID)
+		return m.listSkillsFunc(ctx, user)
 	}
 	return []domain.Tool{}, nil
 }
@@ -217,7 +217,7 @@ func TestProcessMessage_NoToolCalls(t *testing.T) {
 	}
 
 	toolExecService := &mockToolExecutionService{
-		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+		listSkillsFunc: func(ctx context.Context, user *domain.User) ([]domain.Tool, error) {
 			return []domain.Tool{}, nil
 		},
 	}
@@ -298,7 +298,7 @@ func TestProcessMessage_WithToolCalls(t *testing.T) {
 	}
 
 	toolExecService := &mockToolExecutionService{
-		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+		listSkillsFunc: func(ctx context.Context, user *domain.User) ([]domain.Tool, error) {
 			return []domain.Tool{
 				&mockSkill{
 					name:        "calculator",
@@ -389,7 +389,7 @@ func TestProcessMessage_MultipleToolIterations(t *testing.T) {
 	}
 
 	toolExecService := &mockToolExecutionService{
-		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+		listSkillsFunc: func(ctx context.Context, user *domain.User) ([]domain.Tool, error) {
 			return []domain.Tool{
 				&mockSkill{name: "calculator", description: "Calculator", inputSchema: map[string]any{}},
 			}, nil
@@ -448,7 +448,7 @@ func TestProcessMessage_MaxIterationsExceeded(t *testing.T) {
 	}
 
 	toolExecService := &mockToolExecutionService{
-		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+		listSkillsFunc: func(ctx context.Context, user *domain.User) ([]domain.Tool, error) {
 			return []domain.Tool{
 				&mockSkill{name: "calculator", description: "Calculator", inputSchema: map[string]any{}},
 			}, nil
@@ -514,7 +514,7 @@ func TestProcessMessage_ToolExecutionError(t *testing.T) {
 	}
 
 	toolExecService := &mockToolExecutionService{
-		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+		listSkillsFunc: func(ctx context.Context, user *domain.User) ([]domain.Tool, error) {
 			return []domain.Tool{
 				&mockSkill{name: "calculator", description: "Calculator", inputSchema: map[string]any{}},
 			}, nil
@@ -590,7 +590,7 @@ func TestProcessMessage_SkillListingError(t *testing.T) {
 	}
 
 	toolExecService := &mockToolExecutionService{
-		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+		listSkillsFunc: func(ctx context.Context, user *domain.User) ([]domain.Tool, error) {
 			return nil, errors.New("skill service unavailable")
 		},
 	}
@@ -632,7 +632,7 @@ func TestProcessMessage_LLMCompletionError(t *testing.T) {
 	}
 
 	toolExecService := &mockToolExecutionService{
-		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+		listSkillsFunc: func(ctx context.Context, user *domain.User) ([]domain.Tool, error) {
 			return []domain.Tool{}, nil
 		},
 	}
@@ -758,7 +758,7 @@ func TestProcessMessage_CacheHit(t *testing.T) {
 	}
 
 	toolExecService := &mockToolExecutionService{
-		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+		listSkillsFunc: func(ctx context.Context, user *domain.User) ([]domain.Tool, error) {
 			return []domain.Tool{}, nil
 		},
 	}
@@ -828,7 +828,7 @@ func TestProcessMessage_CacheMiss(t *testing.T) {
 	}
 
 	toolExecService := &mockToolExecutionService{
-		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+		listSkillsFunc: func(ctx context.Context, user *domain.User) ([]domain.Tool, error) {
 			return []domain.Tool{}, nil
 		},
 	}
@@ -910,7 +910,7 @@ func TestProcessMessage_NoCacheForToolCalls(t *testing.T) {
 	}
 
 	toolExecService := &mockToolExecutionService{
-		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+		listSkillsFunc: func(ctx context.Context, user *domain.User) ([]domain.Tool, error) {
 			return []domain.Tool{
 				&mockSkill{name: "calculator", description: "Calculator", inputSchema: map[string]any{}},
 			}, nil
@@ -981,7 +981,7 @@ func TestProcessMessage_CallsMemoryCurator(t *testing.T) {
 	}
 
 	toolExecService := &mockToolExecutionService{
-		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+		listSkillsFunc: func(ctx context.Context, user *domain.User) ([]domain.Tool, error) {
 			return []domain.Tool{}, nil
 		},
 	}
@@ -1046,7 +1046,7 @@ func TestProcessMessage_CuratorErrorDoesNotFailChat(t *testing.T) {
 	}
 
 	toolExecService := &mockToolExecutionService{
-		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+		listSkillsFunc: func(ctx context.Context, user *domain.User) ([]domain.Tool, error) {
 			return []domain.Tool{}, nil
 		},
 	}
@@ -1104,7 +1104,7 @@ func TestProcessMessage_NilCuratorWorks(t *testing.T) {
 	}
 
 	toolExecService := &mockToolExecutionService{
-		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+		listSkillsFunc: func(ctx context.Context, user *domain.User) ([]domain.Tool, error) {
 			return []domain.Tool{}, nil
 		},
 	}
@@ -1153,7 +1153,7 @@ func TestProcessMessage_RecallsMemories(t *testing.T) {
 	}
 
 	toolExecService := &mockToolExecutionService{
-		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+		listSkillsFunc: func(ctx context.Context, user *domain.User) ([]domain.Tool, error) {
 			return []domain.Tool{}, nil
 		},
 	}
@@ -1223,7 +1223,7 @@ func TestProcessMessage_RecallErrorDoesNotFailChat(t *testing.T) {
 	}
 
 	toolExecService := &mockToolExecutionService{
-		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+		listSkillsFunc: func(ctx context.Context, user *domain.User) ([]domain.Tool, error) {
 			return []domain.Tool{}, nil
 		},
 	}
@@ -1280,7 +1280,7 @@ func TestProcessMessage_NilRecallerWorks(t *testing.T) {
 	}
 
 	toolExecService := &mockToolExecutionService{
-		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+		listSkillsFunc: func(ctx context.Context, user *domain.User) ([]domain.Tool, error) {
 			return []domain.Tool{}, nil
 		},
 	}
@@ -1328,7 +1328,7 @@ func TestProcessMessage_EmptyRecallDoesNotModifyPrompt(t *testing.T) {
 	}
 
 	toolExecService := &mockToolExecutionService{
-		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+		listSkillsFunc: func(ctx context.Context, user *domain.User) ([]domain.Tool, error) {
 			return []domain.Tool{}, nil
 		},
 	}
@@ -1398,7 +1398,7 @@ func TestProcessMessage_CuratorReceivesToolOutputs(t *testing.T) {
 	}
 
 	toolExecService := &mockToolExecutionService{
-		listSkillsFunc: func(ctx context.Context, userID string) ([]domain.Tool, error) {
+		listSkillsFunc: func(ctx context.Context, user *domain.User) ([]domain.Tool, error) {
 			return []domain.Tool{
 				&mockSkill{name: "weather", description: "Weather", inputSchema: map[string]any{}},
 			}, nil
