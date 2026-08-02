@@ -16,7 +16,6 @@ import (
 	"nuimanbot/internal/domain"
 	"nuimanbot/internal/infrastructure/metrics"
 	"nuimanbot/internal/infrastructure/nostr"
-	"nuimanbot/internal/usecase/user"
 )
 
 const (
@@ -70,10 +69,20 @@ var newNostrClient = func(relayURLs []string) nostrClient {
 	return nostr.NewClient(relayURLs)
 }
 
+// buzzUserService is the subset of *user.Service's methods Gateway depends
+// on for RBAC user resolution (FR-006). A small consumer-side interface
+// (FR-011) rather than the concrete *user.Service type, matching the
+// interface-segregation pattern chat.UserService already uses in
+// usecase/chat/service.go for the same two methods.
+type buzzUserService interface {
+	GetUserByPlatformUID(ctx context.Context, platform domain.Platform, platformUID string) (*domain.User, error)
+	CreateUser(ctx context.Context, platform domain.Platform, platformUID string, role domain.Role) (*domain.User, error)
+}
+
 // Gateway implements domain.Gateway for Buzz.
 type Gateway struct {
 	config      *config.BuzzConfig
-	userService *user.Service
+	userService buzzUserService
 
 	// mu guards client, messageHandler, cancel, and stopped — written from
 	// Start()/OnMessage()/Stop() and read from Send()/Stop()/handleEvents(),
@@ -95,8 +104,9 @@ type Gateway struct {
 
 // New creates a new Buzz gateway. userService resolves/creates
 // domain.User records for Buzz senders (FR-006); it may be nil in contexts
-// (e.g. some tests) that don't exercise RBAC user resolution.
-func New(cfg *config.BuzzConfig, userService *user.Service) (*Gateway, error) {
+// (e.g. some tests) that don't exercise RBAC user resolution. Callers
+// typically pass a *user.Service, which satisfies buzzUserService.
+func New(cfg *config.BuzzConfig, userService buzzUserService) (*Gateway, error) {
 	return &Gateway{
 		config:      cfg,
 		userService: userService,
