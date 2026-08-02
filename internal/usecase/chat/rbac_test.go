@@ -186,6 +186,93 @@ func TestProcessMessage_RBACEnforcedAcrossPlatforms(t *testing.T) {
 	}
 }
 
+// TestDefaultRoleForPlatform is a direct unit test of the platform-conditional
+// default role: CLI is trusted/local (whoever runs the binary already has
+// full machine access), so it defaults newly-created users to RoleAdmin,
+// preserving the CLI's pre-existing de facto unrestricted access. Every other
+// platform defaults to RoleGuest, since its sender is remote and
+// unauthenticated by default.
+func TestDefaultRoleForPlatform(t *testing.T) {
+	cases := []struct {
+		platform domain.Platform
+		want     domain.Role
+	}{
+		{domain.PlatformCLI, domain.RoleAdmin},
+		{domain.PlatformTelegram, domain.RoleGuest},
+		{domain.PlatformSlack, domain.RoleGuest},
+		{domain.PlatformBuzz, domain.RoleGuest},
+	}
+	for _, tc := range cases {
+		if got := defaultRoleForPlatform(tc.platform); got != tc.want {
+			t.Errorf("defaultRoleForPlatform(%s) = %s, want %s", tc.platform, got, tc.want)
+		}
+	}
+}
+
+// TestProcessMessage_CLIDefaultsToAdminOtherPlatformsToGuest is an
+// integration-level regression test for the same platform-conditional
+// default, exercised through the full resolveUser -> CreateUser -> RBAC
+// path: a brand-new CLI user must be able to invoke a RoleUser-gated tool
+// (created as RoleAdmin), while a brand-new Telegram/Slack/Buzz user must be
+// denied the identical tool (created as RoleGuest).
+func TestProcessMessage_CLIDefaultsToAdminOtherPlatformsToGuest(t *testing.T) {
+	cases := []struct {
+		name       string
+		platform   domain.Platform
+		wantDenied bool
+	}{
+		{"CLI fresh user defaults to RoleAdmin, tool allowed", domain.PlatformCLI, false},
+		{"Telegram fresh user defaults to RoleGuest, tool denied", domain.PlatformTelegram, true},
+		{"Slack fresh user defaults to RoleGuest, tool denied", domain.PlatformSlack, true},
+		{"Buzz fresh user defaults to RoleGuest, tool denied", domain.PlatformBuzz, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			invoked := false
+			var auditEvents []domain.AuditEvent
+			toolExecService := newRealToolService(&invoked, &auditEvents, ratelimit.RateLimit{Requests: 100, Window: time.Minute})
+
+			llmService := toolCallThenFinalLLM(nil)
+			memoryRepo := &mockMemoryRepository{}
+			securityService := &mockSecurityService{}
+			// getUserFunc always reports not-found, forcing resolveUser down
+			// the CreateUser(defaultRoleForPlatform(...)) path — the mock's
+			// default createUserFunc echoes back whatever role it's given,
+			// so the resulting role comes purely from production code.
+			userService := &mockUserService{
+				getUserFunc: func(ctx context.Context, platform domain.Platform, platformUID string) (*domain.User, error) {
+					return nil, domain.ErrUserNotFound
+				},
+			}
+
+			service := NewService(llmService, memoryRepo, toolExecService, securityService, userService)
+
+			incomingMsg := &domain.IncomingMessage{
+				ID:          "default-role-test-" + tc.name,
+				Platform:    tc.platform,
+				PlatformUID: "fresh-user",
+				Text:        "what's the weather",
+				Timestamp:   time.Now(),
+			}
+
+			if _, err := service.ProcessMessage(context.Background(), incomingMsg); err != nil {
+				t.Fatalf("ProcessMessage failed: %v", err)
+			}
+
+			if tc.wantDenied {
+				if invoked {
+					t.Errorf("expected tool NOT to be invoked for a fresh %s user, but it was", tc.platform)
+				}
+			} else {
+				if !invoked {
+					t.Errorf("expected tool to be invoked for a fresh %s user, but it wasn't", tc.platform)
+				}
+			}
+		})
+	}
+}
+
 // TestProcessMessage_RateLimitEnforced verifies tool calls triggered from
 // chat messages are genuinely rate-limited (part of FR-011's "checkPermission,
 // rate limiting, and audit logging all exercised" requirement), not just

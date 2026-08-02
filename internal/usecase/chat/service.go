@@ -181,9 +181,9 @@ func getConversationID(platform domain.Platform, platformUID string) string {
 	return string(platform) + ":" + platformUID
 }
 
-// resolveUser resolves or creates the domain.User for (platform, platformUID),
-// defaulting new users to RoleGuest. This is the platform-agnostic RBAC entry
-// point (FR-006, FR-011) used for every gateway's messages, not just Buzz's.
+// resolveUser resolves or creates the domain.User for (platform, platformUID).
+// This is the platform-agnostic RBAC entry point (FR-006, FR-011) used for
+// every gateway's messages, not just Buzz's.
 func (s *Service) resolveUser(ctx context.Context, platform domain.Platform, platformUID string) (*domain.User, error) {
 	user, err := s.userService.GetUserByPlatformUID(ctx, platform, platformUID)
 	if err == nil {
@@ -193,7 +193,7 @@ func (s *Service) resolveUser(ctx context.Context, platform domain.Platform, pla
 		return nil, fmt.Errorf("failed to look up user: %w", err)
 	}
 
-	user, err = s.userService.CreateUser(ctx, platform, platformUID, domain.RoleGuest)
+	user, err = s.userService.CreateUser(ctx, platform, platformUID, defaultRoleForPlatform(platform))
 	if err != nil {
 		if errors.Is(err, domain.ErrConflict) {
 			// Lost a race with a concurrent first-message create for the same
@@ -203,6 +203,21 @@ func (s *Service) resolveUser(ctx context.Context, platform domain.Platform, pla
 		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
 	return user, nil
+}
+
+// defaultRoleForPlatform returns the role assigned to a newly-created user on
+// first message from platform. CLI is deliberately special-cased to
+// RoleAdmin rather than RoleGuest: it's inherently local/trusted — whoever
+// can run the binary already has full machine access, so gating tool access
+// behind RBAC there adds friction without adding real security. This
+// preserves the CLI's pre-existing de facto unrestricted access. Every other
+// platform (Telegram, Slack, Buzz) defaults to RoleGuest, since the sender is
+// a remote, unauthenticated-by-default party.
+func defaultRoleForPlatform(platform domain.Platform) domain.Role {
+	if platform == domain.PlatformCLI {
+		return domain.RoleAdmin
+	}
+	return domain.RoleGuest
 }
 
 // ProcessMessage processes an incoming message, interacts with LLM/skills/memory, and returns an outgoing message.
