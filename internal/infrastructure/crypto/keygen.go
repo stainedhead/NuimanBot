@@ -32,6 +32,18 @@ func EncodeKeyToBase64(key []byte) string {
 	return base64.StdEncoding.EncodeToString(key)
 }
 
+// DecodeKeyFromBase64 decodes a base64 string produced by EncodeKeyToBase64
+// back into the raw key bytes. Callers that read NUIMANBOT_ENCRYPTION_KEY
+// from the environment or .env file must decode it with this function before
+// using it as a raw AES key.
+func DecodeKeyFromBase64(encoded string) ([]byte, error) {
+	key, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode base64 encryption key: %w", err)
+	}
+	return key, nil
+}
+
 // SaveEncryptionKeyToEnv saves the encryption key to the .env file with appropriate warnings.
 // If the .env file exists, it appends to it. If not, it creates a new one.
 func SaveEncryptionKeyToEnv(envPath string, key []byte) error {

@@ -139,6 +139,35 @@ func TestSaveEncryptionKeyToEnv_AppendsToExisting(t *testing.T) {
 	}
 }
 
+// TestFirstRunEncryptionKeyRoundTrip reproduces the first-run flow: a key is
+// generated, base64-encoded for .env storage exactly as SaveEncryptionKeyToEnv
+// does, then read back from the environment variable string (as main.go does
+// on subsequent access via config) and must decode to the original 32-byte
+// raw key so that vault construction succeeds.
+func TestFirstRunEncryptionKeyRoundTrip(t *testing.T) {
+	key, err := GenerateEncryptionKey()
+	if err != nil {
+		t.Fatalf("GenerateEncryptionKey failed: %v", err)
+	}
+
+	// Simulate what gets written to .env / NUIMANBOT_ENCRYPTION_KEY and what
+	// gets read back from the environment on the next call to config.LoadConfig().
+	envValue := EncodeKeyToBase64(key)
+
+	decoded, err := DecodeKeyFromBase64(envValue)
+	if err != nil {
+		t.Fatalf("DecodeKeyFromBase64 failed: %v", err)
+	}
+
+	if len(decoded) != EncryptionKeyLength {
+		t.Fatalf("Expected decoded key length %d, got %d", EncryptionKeyLength, len(decoded))
+	}
+
+	if string(decoded) != string(key) {
+		t.Error("Decoded key does not match originally generated key")
+	}
+}
+
 func TestIsEncryptionKeySet(t *testing.T) {
 	tests := []struct {
 		name     string

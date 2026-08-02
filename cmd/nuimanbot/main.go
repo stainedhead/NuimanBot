@@ -141,7 +141,11 @@ func main() {
 	if vaultPath == "" {
 		vaultPath = "./data/vault.enc" // Default path
 	}
-	vault, err := crypto.NewFileCredentialVault(vaultPath, []byte(cfg.Security.EncryptionKey))
+	vaultKey, err := crypto.DecodeKeyFromBase64(cfg.Security.EncryptionKey)
+	if err != nil {
+		log.Fatalf("Failed to decode encryption key: %v", err)
+	}
+	vault, err := crypto.NewFileCredentialVault(vaultPath, vaultKey)
 	if err != nil {
 		log.Fatalf("Failed to create credential vault: %v", err)
 	}
@@ -768,11 +772,15 @@ func (app *application) Run(ctx context.Context) error {
 	slog.Info("User profile management initialized", "file", usersFilePath)
 
 	// Initialize Bot Config Repository and Service (Phase 3)
-	// Get encryption key from security config
+	// Get encryption key from security config. The config value is the
+	// base64-encoded key as read from NUIMANBOT_ENCRYPTION_KEY, so it must be
+	// decoded back to the raw 32-byte key before use.
 	encryptionKey := app.Config.Security.EncryptionKey
-	if len(encryptionKey) != 32 {
-		slog.Warn("Encryption key must be 32 bytes for AES-256, using default (INSECURE)")
-		encryptionKey = "default-32-byte-key-changeme!!"
+	if decodedKey, err := crypto.DecodeKeyFromBase64(encryptionKey); err == nil && len(decodedKey) == 32 {
+		encryptionKey = string(decodedKey)
+	} else {
+		slog.Warn("Encryption key must decode to 32 bytes for AES-256, using default (INSECURE)")
+		encryptionKey = "default-32-byte-key-changeme!!!!"
 	}
 	botEncryption := infrasecurity.NewEncryptionService(encryptionKey)
 	botConfigRepo := storage.NewFileBotConfigRepository(botsFilePath, botEncryption)
