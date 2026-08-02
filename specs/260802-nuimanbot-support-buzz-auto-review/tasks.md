@@ -5,7 +5,7 @@
 
 ## Progress Summary
 
-0/14 tasks complete (14 tasked FRs; FR-006 deferred/excluded, FR-015 informational/no task).
+14/14 tasks complete (14 tasked FRs; FR-006 deferred/excluded, FR-015 informational/no task). Clusters A (A.1-A.8), B (B.1), C (C.1-C.3), D (D.1-D.2) all complete as of 2026-08-02 — see status.md for per-cluster activity log and implementation-notes.md for design decisions. Remaining: I.1 cross-cluster integration verification.
 
 ## Scope Notes
 

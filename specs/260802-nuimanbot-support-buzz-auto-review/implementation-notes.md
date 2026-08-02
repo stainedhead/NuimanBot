@@ -12,9 +12,10 @@ This document records decisions, edge cases, and lessons learned during implemen
 
 - FR-009: chosen TTL/capacity bound for `agentCache` eviction, and rationale. **Done — see below.**
 - FR-010: per-relay vs. gateway-wide high-water-mark choice for `Since`, and rationale. **Done — see below.**
-- FR-004: ticker vs. callback-driven gauge update mechanism, and rationale.
-- FR-007: implement-env-var vs. document-only resolution, and rationale.
-- FR-016: remove vs. document-only resolution, and rationale.
+- FR-004: ticker vs. callback-driven gauge update mechanism, and rationale. **Done — see below.**
+- FR-007: implement-env-var vs. document-only resolution, and rationale. (Cluster C)
+- FR-016: remove vs. document-only resolution, and rationale. **Done — see below.**
+- FR-003: testability seam for `nostr.Client.Start`'s otherwise-unreachable failure path. **Done — see below.**
 
 ### FR-009 — `agentCache` TTL + capacity bound (Cluster D)
 
@@ -39,6 +40,32 @@ No existing cache-eviction pattern elsewhere in this codebase to match (confirme
 - **`since` value = the last processed event's `created_at` exactly, not `+1`.** NIP-01 timestamps are second-resolution, so multiple distinct events can legitimately share one `created_at`. Using `last + 1` risks silently skipping same-second siblings of the last-seen event. Using the exact value means the relay will re-send that last event once more on reconnect (inclusive `since` semantics), but that's a harmless duplicate: `gateway.go`'s existing `seen`/`seenMu` dedupe-by-event-ID already exists specifically to absorb this kind of at-least-once redelivery.
 - **Only reconnects get `since` populated — the first connection to each relay does not.** This preserves existing behavior (full backlog on process startup) and matches the acceptance criteria's framing ("populate on reconnect"); `Client.Start`'s initial dial still uses the caller-supplied filters unmodified.
 - **Scope boundary:** "last successfully processed event" is interpreted at the transport layer as "last event this `Client` successfully parsed and handed off on `Events()`," not "last event `gateway.go`'s business logic (signature verification, dedupe, RBAC) accepted." Threading a processing-outcome acknowledgment back down into `nostr.Client` would cross the adapter/infrastructure boundary this branch's other findings (e.g. FR-011) are actively trying to clean up, and `gateway.go` was off-limits for this cluster. A forged/invalid event that reaches `Client.Events()` still advances `since` — acceptable because `gateway.go` would reject it identically on redelivery post-reconnect (no correctness gap, just an unnecessary but harmless resend).
+
+### FR-003 — testability seam for `Start()`'s `nostr.Client.Start` failure path (Cluster A)
+
+**Files:** `internal/adapter/gateway/buzz/gateway.go`, `gateway_test.go`
+
+`nostr.Client.Start`'s only failure mode is `NewSubscriptionRequest`'s `json.Marshal` erroring, which cannot happen for any `Filter` built from `gateway.go`'s own inputs (`NewChannelFilter`/`NewMembershipFilter`/`NewAgentProfileFilter` only ever produce plain int/string slices — none of `json.Marshal`'s failure modes: cycles, channels, funcs, NaN/Inf floats). This path was genuinely untestable without a seam.
+
+**Chosen: a small `nostrClient` interface (`Start`/`Stop`/`Publish`/`Events`/`ConnectedRelayCount`) plus a package-level `newNostrClient` factory var**, rather than e.g. exporting an error-injection hook on `nostr.Client` itself. `*nostr.Client` satisfies the interface unmodified, so production code is unaffected; tests substitute a fake whose `Start` always fails. This also let `Gateway.client`'s field type change from `*nostr.Client` to `nostrClient`, which subsequently made FR-011's `buzzUserService` interface pattern feel consistent rather than one-off.
+
+**Side effect used for FR-001/FR-003 acceptance criteria:** `Start()` now assigns `g.client` only *after* a successful `client.Start()` call (previously assigned before). A failed `Start()` — for any of the three guard/error paths — now leaves `g.client` nil, so a subsequent `Send()`/`Stop()` hits FR-001's nil-guard cleanly instead of operating on a half-initialized client.
+
+### FR-004 — `buzz_relay_connections` gauge update mechanism (Cluster B)
+
+**Files:** `internal/adapter/gateway/buzz/gateway.go`, `internal/infrastructure/metrics/prometheus.go`
+
+**Chosen: ticker-driven polling** (`monitorRelayConnections`, 250ms interval), not callback-driven updates. `nostrClient.ConnectedRelayCount()` is the only connection-state signal the adapter layer has available (per the product owner's FR-004 decision to keep `internal/infrastructure/nostr` Prometheus-agnostic) — there's no connect/disconnect callback/event to react to, only a poll-able aggregate count. A ticker is the natural fit for a poll-only signal; building a callback mechanism into `nostr.Client` to support this would have meant touching a file (`internal/infrastructure/nostr/client.go`) outside this task's scope.
+
+**`BuzzRelayConnections` re-scoped from `GaugeVec{relay_url,status}` to a plain `Gauge`.** `ConnectedRelayCount()` returns only an aggregate int, not a per-relay URL/connect-state breakdown, so the original two labels carried no information the adapter layer can actually populate correctly. Keeping the labels and, e.g., always passing an empty `relay_url` would have been actively misleading (implies per-relay granularity that doesn't exist). This is a metric-shape change from the original declaration — flagged here since a dashboard querying by `relay_url`/`status` would need updating, though none was found to exist yet (metric was never previously set).
+
+### FR-016 — remove vs. document-only resolution for redundant `resolveUser` (Cluster A)
+
+**Files:** `internal/adapter/gateway/buzz/gateway.go`
+
+Confirmed via `cmd/nuimanbot/main.go:375-377` that `gw.OnMessage`'s handler always dispatches to `app.ChatService.ProcessMessage`, which (per this branch's own RBAC work) calls `chat.Service.resolveUser` for every platform including Buzz. `Gateway.resolveUser`'s return value is discarded by its only caller (`processChannelMessage`) — it has no effect on message handling, loop-guard behavior, or agentCache; its only observable effect is potentially creating the `domain.User` row slightly earlier than `ChatService` otherwise would.
+
+**Chosen: document, don't remove.** A clean removal would drop `New()`'s `userService` parameter entirely, but `cmd/nuimanbot/main.go`'s `buzz.New(&app.Config.Gateways.Buzz, app.DomainUserService)` call site depends on that parameter and was out of this task's file scope (`gateway.go`/`gateway_test.go`/`prometheus.go` only — `main.go` belongs to no cluster in this remediation pass and touching it risked conflicting with concurrent parallel work). Expanded the doc comments on the `userService` field and `resolveUser` to explain the duplication, confirm it's harmless, and flag it as safe to delete in a follow-up that also updates `main.go`.
 
 ## Edge Cases & Solutions
 
