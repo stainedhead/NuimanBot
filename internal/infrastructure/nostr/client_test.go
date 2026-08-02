@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -235,6 +236,101 @@ func TestClient_Publish_NoConnectedRelays_ReturnsError(t *testing.T) {
 	_, err := client.Publish(ctx, nostr.Event{ID: "x"})
 	if err == nil {
 		t.Error("Publish() error = nil, want error when no relays are connected")
+	}
+}
+
+// FR-010: reconnects must populate Filter.Since from the last successfully
+// processed event so a relay that drops and reconnects backfills events
+// published while it was down, instead of silently missing them.
+func TestClient_ReconnectBackfillsMissedEventsViaSince(t *testing.T) {
+	var connNum int32
+	var sinceMu sync.Mutex
+	var observedSince int64 = -1
+	var sawSince bool
+
+	relay := newFakeRelay(t, func(conn *websocket.Conn) {
+		n := atomic.AddInt32(&connNum, 1)
+		_, data, err := conn.ReadMessage() // REQ frame
+		if err != nil {
+			return
+		}
+
+		if n == 1 {
+			// First connection: deliver one event, then drop (simulate a
+			// disconnect) without ever sending EOSE/further events.
+			ev := sampleWireEventJSON("initial")
+			ev["created_at"] = 1000
+			frame, ferr := json.Marshal([]any{"EVENT", "sub-1", ev})
+			if ferr != nil {
+				t.Errorf("failed to marshal fake EVENT frame: %v", ferr)
+				return
+			}
+			_ = conn.WriteMessage(websocket.TextMessage, frame)
+			time.Sleep(50 * time.Millisecond)
+			return // handler returns -> connection closes, simulating a drop
+		}
+
+		// Reconnect: the REQ frame's filter should now carry the last
+		// processed event's created_at as "since", so this fake relay can
+		// "backfill" the events it received while the client was away.
+		var reqFrame []json.RawMessage
+		if err := json.Unmarshal(data, &reqFrame); err != nil || len(reqFrame) < 3 {
+			t.Errorf("failed to unmarshal reconnect REQ frame: %v (err=%v)", string(data), err)
+			return
+		}
+		var filterObj map[string]any
+		if err := json.Unmarshal(reqFrame[2], &filterObj); err != nil {
+			t.Errorf("failed to unmarshal reconnect filter: %v", err)
+			return
+		}
+		sinceMu.Lock()
+		if sv, ok := filterObj["since"]; ok {
+			sawSince = true
+			observedSince = int64(sv.(float64))
+		}
+		sinceMu.Unlock()
+
+		for i, id := range []string{"missed-1", "missed-2", "missed-3"} {
+			ev := sampleWireEventJSON(id)
+			ev["created_at"] = 1001 + i
+			frame, ferr := json.Marshal([]any{"EVENT", "sub-1", ev})
+			if ferr != nil {
+				t.Errorf("failed to marshal fake EVENT frame: %v", ferr)
+				return
+			}
+			_ = conn.WriteMessage(websocket.TextMessage, frame)
+		}
+		time.Sleep(300 * time.Millisecond) // keep connection open for the client to read
+	})
+
+	client := nostr.NewClient([]string{wsURL(t, relay)}, nostr.WithBackoff(20*time.Millisecond, 100*time.Millisecond))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := client.Start(ctx, "sub-1", nostr.NewChannelFilter([]string{"channel-uuid-1"})); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer client.Stop()
+
+	wantIDs := map[string]bool{"initial": true, "missed-1": true, "missed-2": true, "missed-3": true}
+	got := make(map[string]bool)
+	deadline := time.After(3 * time.Second)
+	for len(got) < len(wantIDs) {
+		select {
+		case recv := <-client.Events():
+			got[recv.Event.ID] = true
+		case <-deadline:
+			t.Fatalf("timed out waiting for all events; got %v, want %v", got, wantIDs)
+		}
+	}
+
+	sinceMu.Lock()
+	defer sinceMu.Unlock()
+	if !sawSince {
+		t.Error("reconnect REQ frame did not carry a \"since\" field, want it populated from the last processed event")
+	}
+	if observedSince != 1000 {
+		t.Errorf("reconnect REQ since = %d, want 1000 (created_at of the last event processed before the drop)", observedSince)
 	}
 }
 

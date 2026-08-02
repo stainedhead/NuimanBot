@@ -38,6 +38,19 @@ func WithBackoff(initial, max time.Duration) ClientOption {
 // while connected, one short-lived watcher goroutine to unblock a pending
 // read on Stop), so N configured relays cause bounded, not unbounded,
 // resource growth.
+//
+// FR-010 reconnect backfill: Client tracks a per-relay high-water mark (the
+// created_at of the last event successfully parsed from that relay) and
+// populates Filter.Since with it on every reconnect (not the initial
+// connect), so a relay that drops and reconnects resumes from where it left
+// off instead of silently missing events published during the outage.
+// Per-relay, not gateway-wide, because relays may deliver events out of
+// order relative to each other — a shared high-water mark could skip events
+// on a slower relay after a faster relay's timestamp advances it. See
+// specs/260802-nuimanbot-support-buzz-auto-review/implementation-notes.md
+// for the full rationale, including why "since" uses the last event's exact
+// created_at (relying on gateway.go's existing seen/seenMu dedupe to absorb
+// the resulting harmless re-delivery) rather than created_at+1.
 type Client struct {
 	relayURLs      []string
 	events         chan ReceivedEvent
@@ -45,11 +58,17 @@ type Client struct {
 	maxBackoff     time.Duration
 	dialer         *websocket.Dialer
 
+	subscriptionID string
+	filters        []Filter
+
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
 	connsMu sync.Mutex
 	conns   map[string]*relayConn
+
+	sinceMu     sync.Mutex
+	lastEventAt map[string]int64 // relayURL -> created_at of last event parsed from that relay
 }
 
 // relayConn pairs a live relay WebSocket connection with a write mutex.
@@ -89,19 +108,25 @@ func (c *Client) Events() <-chan ReceivedEvent {
 // Start connects to all configured relays and subscribes with filters
 // (OR'd together per NIP-01), launching one goroutine per relay. Unreachable
 // relays are retried with backoff in the background and do not fail Start —
-// partial connectivity is not a startup failure (NFR).
+// partial connectivity is not a startup failure (NFR). The initial
+// subscription to each relay uses filters unmodified (no Since); subsequent
+// reconnects populate Since per relay for backfill (FR-010, see Client's doc
+// comment).
 func (c *Client) Start(ctx context.Context, subscriptionID string, filters ...Filter) error {
-	reqFrame, err := NewSubscriptionRequest(subscriptionID, filters...)
-	if err != nil {
+	if _, err := NewSubscriptionRequest(subscriptionID, filters...); err != nil {
 		return fmt.Errorf("failed to build subscription request: %w", err)
 	}
+
+	c.subscriptionID = subscriptionID
+	c.filters = filters
+	c.lastEventAt = make(map[string]int64)
 
 	ctx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 
 	for _, relayURL := range c.relayURLs {
 		c.wg.Add(1)
-		go c.runRelay(ctx, relayURL, reqFrame)
+		go c.runRelay(ctx, relayURL)
 	}
 	return nil
 }
@@ -118,14 +143,26 @@ func (c *Client) Stop() {
 
 // runRelay owns the reconnect loop for a single relay: dial, subscribe, read
 // until the connection drops or ctx is canceled, then retry with bounded
-// exponential backoff.
-func (c *Client) runRelay(ctx context.Context, relayURL string, reqFrame []byte) {
+// exponential backoff. The subscription request is rebuilt on every dial
+// attempt (not just once at Start) so a reconnect can carry an updated Since
+// value reflecting this relay's own high-water mark (FR-010).
+func (c *Client) runRelay(ctx context.Context, relayURL string) {
 	defer c.wg.Done()
 
 	backoff := c.initialBackoff
 	for ctx.Err() == nil {
 		conn, _, err := c.dialer.DialContext(ctx, relayURL, nil)
 		if err != nil {
+			if !sleepOrDone(ctx, backoff) {
+				return
+			}
+			backoff = nextBackoff(backoff, c.maxBackoff)
+			continue
+		}
+
+		reqFrame, err := c.buildReqFrame(relayURL)
+		if err != nil {
+			_ = conn.Close()
 			if !sleepOrDone(ctx, backoff) {
 				return
 			}
@@ -143,6 +180,47 @@ func (c *Client) runRelay(ctx context.Context, relayURL string, reqFrame []byte)
 			return
 		}
 		backoff = nextBackoff(backoff, c.maxBackoff)
+	}
+}
+
+// buildReqFrame builds the REQ frame for relayURL's next subscription
+// attempt, applying that relay's own high-water mark (if any) as Since on
+// every filter. The first connection to a relay has no recorded high-water
+// mark yet, so Since is left unset (full backlog), matching prior behavior.
+func (c *Client) buildReqFrame(relayURL string) ([]byte, error) {
+	since := c.sinceForRelay(relayURL)
+
+	filters := c.filters
+	if since != nil {
+		filters = make([]Filter, len(c.filters))
+		for i, f := range c.filters {
+			f.Since = since
+			filters[i] = f
+		}
+	}
+
+	return NewSubscriptionRequest(c.subscriptionID, filters...)
+}
+
+// sinceForRelay returns relayURL's current high-water mark, or nil if none
+// has been recorded yet.
+func (c *Client) sinceForRelay(relayURL string) *int64 {
+	c.sinceMu.Lock()
+	defer c.sinceMu.Unlock()
+	ts, ok := c.lastEventAt[relayURL]
+	if !ok {
+		return nil
+	}
+	return &ts
+}
+
+// recordEventSeen advances relayURL's high-water mark to createdAt if it's
+// newer than what's already recorded.
+func (c *Client) recordEventSeen(relayURL string, createdAt int64) {
+	c.sinceMu.Lock()
+	defer c.sinceMu.Unlock()
+	if createdAt > c.lastEventAt[relayURL] {
+		c.lastEventAt[relayURL] = createdAt
 	}
 }
 
@@ -180,6 +258,7 @@ func (c *Client) runConnection(ctx context.Context, conn *websocket.Conn, relayU
 		if err != nil || !ok {
 			continue // ignore malformed frames and non-EVENT relay messages (EOSE/NOTICE/OK)
 		}
+		c.recordEventSeen(relayURL, event.CreatedAt)
 
 		select {
 		case c.events <- ReceivedEvent{Event: event, RelayURL: relayURL}:

@@ -57,7 +57,12 @@ const (
 type Filter struct {
 	Kinds      []int
 	ChannelIDs []string
-	Since      *int64
+	// Since is left unset by the New*Filter constructors below (initial
+	// connect gets the full backlog). Client populates it per relay on
+	// reconnect, from that relay's own high-water mark, for backfill of
+	// events missed during a disconnect (FR-010; see client.go's Client doc
+	// comment for the full per-relay rationale).
+	Since *int64
 }
 
 // NewChannelFilter builds a Filter matching Buzz channel messages
