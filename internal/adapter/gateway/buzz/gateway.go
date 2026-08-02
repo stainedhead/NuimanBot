@@ -81,7 +81,12 @@ type buzzUserService interface {
 
 // Gateway implements domain.Gateway for Buzz.
 type Gateway struct {
-	config      *config.BuzzConfig
+	config *config.BuzzConfig
+
+	// userService is used solely by resolveUser (FR-006), which is a
+	// deliberately retained duplicate of chat.Service.resolveUser
+	// (usecase/chat/service.go) — see resolveUser's doc comment (FR-016)
+	// for why it wasn't removed in the auto-review remediation pass.
 	userService buzzUserService
 
 	// mu guards client, messageHandler, cancel, and stopped — written from
@@ -466,6 +471,20 @@ func (g *Gateway) isDuplicate(eventID string) bool {
 // defaulting new users to RoleGuest (FR-006). A conflict (another event for
 // the same brand-new pubkey won the race to create it first) is treated as
 // success, not an error.
+//
+// This duplicates chat.Service.resolveUser (usecase/chat/service.go), which
+// now performs the identical (platform, platformUID) resolution/creation
+// for every gateway's message once OnMessage's handler dispatches to
+// ChatService.ProcessMessage (see cmd/nuimanbot/main.go's gw.OnMessage
+// wiring) — so this call's return value is discarded and has no effect on
+// message handling; the second resolveUser call typically just finds the
+// user ChatService already created. FR-016 (see
+// specs/260802-nuimanbot-support-buzz-auto-review/) flagged this as a minor
+// architectural asymmetry worth removing. It's kept here rather than
+// removed because doing so would require dropping New()'s userService
+// parameter, which cmd/nuimanbot/main.go's construction call depends on —
+// out of scope for this fix to touch. Safe to delete in a follow-up that
+// also updates that call site.
 func (g *Gateway) resolveUser(ctx context.Context, pubkey string) error {
 	if _, err := g.userService.GetUserByPlatformUID(ctx, domain.PlatformBuzz, pubkey); err == nil {
 		return nil
