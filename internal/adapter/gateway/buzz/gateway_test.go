@@ -3,6 +3,7 @@ package buzz
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -1080,6 +1081,41 @@ func TestGateway_ProcessEvent_MembershipNoRoleTag_DoesNotChangeCache(t *testing.
 	}
 }
 
+// TestGateway_ProcessEvent_ForgedMembershipEvent_DoesNotChangeAgentCache
+// covers FR-012: existing forgery tests only exercise kind:9; this confirms
+// the same verify-before-dispatch choke point in processEvent also rejects
+// a tampered kind:9000 event before it can corrupt agentCache.
+func TestGateway_ProcessEvent_ForgedMembershipEvent_DoesNotChangeAgentCache(t *testing.T) {
+	gw, _ := newTestGateway(t)
+	gw.OnMessage(func(ctx context.Context, msg domain.IncomingMessage) error { return nil })
+
+	target := "target-pubkey-hex"
+	e := signedMembershipEvent(t, "channel-uuid-1", target, nostr.RoleBot)
+	e.Tags = append(e.Tags, []string{"tampered", "true"}) // mutated post-signing: ID/Sig no longer match
+
+	gw.processEvent(context.Background(), nostr.ReceivedEvent{Event: e, RelayURL: "wss://relay.example.com"})
+
+	if gw.agentCache.IsAgent(target) {
+		t.Error("agentCache.IsAgent(target) = true after a forged kind:9000 event, want false (forgery must be rejected before agentCache is touched)")
+	}
+}
+
+// TestGateway_ProcessEvent_ForgedAgentProfileEvent_DoesNotChangeAgentCache
+// is the kind:10100 counterpart (FR-012).
+func TestGateway_ProcessEvent_ForgedAgentProfileEvent_DoesNotChangeAgentCache(t *testing.T) {
+	gw, _ := newTestGateway(t)
+	gw.OnMessage(func(ctx context.Context, msg domain.IncomingMessage) error { return nil })
+
+	e, pubkey := signedAgentProfileEvent(t)
+	e.Content = `{"channel_add_policy":"anyone"}` // mutated post-signing: ID/Sig no longer match
+
+	gw.processEvent(context.Background(), nostr.ReceivedEvent{Event: e, RelayURL: "wss://relay.example.com"})
+
+	if gw.agentCache.IsAgent(pubkey) {
+		t.Error("agentCache.IsAgent(pubkey) = true after a forged kind:10100 event, want false (forgery must be rejected before agentCache is touched)")
+	}
+}
+
 func TestGateway_ProcessEvent_AgentProfileEvent_MarksPublisherAsAgent(t *testing.T) {
 	gw, _ := newTestGateway(t)
 	gw.OnMessage(func(ctx context.Context, msg domain.IncomingMessage) error { return nil })
@@ -1229,5 +1265,88 @@ func TestGateway_ProcessEvent_HumanToAgentExchange_NotSuppressed(t *testing.T) {
 	want := 2 * (buzzLoopGuardMaxConsecutiveAgent + 3)
 	if handlerCalls != want {
 		t.Errorf("handler invoked %d times for a human/agent alternating exchange, want %d (guard must not suppress a legitimate human-to-agent exchange)", handlerCalls, want)
+	}
+}
+
+// --- FR-012: publishAgentProfileBestEffort retry-exhaustion, resolveUser
+// conflict/lookup-error branches ---
+
+// TestGateway_PublishAgentProfileBestEffort_ReturnsAfterExhaustingRetries
+// covers the retry-exhaustion path (FR-012), previously only exercised on
+// the happy path. A Gateway that was never Start()ed has a nil client, so
+// every attempt fails immediately without needing network I/O — this
+// exercises the full backoff loop deterministically.
+func TestGateway_PublishAgentProfileBestEffort_ReturnsAfterExhaustingRetries(t *testing.T) {
+	gw, _ := newTestGateway(t)
+
+	done := make(chan struct{})
+	go func() {
+		gw.publishAgentProfileBestEffort(context.Background())
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("publishAgentProfileBestEffort did not return after exhausting its retries")
+	}
+}
+
+// fakeUserService lets resolveUser tests drive its GetUserByPlatformUID/
+// CreateUser branches directly, without a real repository (FR-012).
+type fakeUserService struct {
+	getUser   *domain.User
+	getErr    error
+	createErr error
+}
+
+func (f *fakeUserService) GetUserByPlatformUID(ctx context.Context, platform domain.Platform, platformUID string) (*domain.User, error) {
+	return f.getUser, f.getErr
+}
+
+func (f *fakeUserService) CreateUser(ctx context.Context, platform domain.Platform, platformUID string, role domain.Role) (*domain.User, error) {
+	return nil, f.createErr
+}
+
+// TestGateway_ResolveUser_LookupErrorNotNotFound_ReturnsWrappedError covers
+// resolveUser's lookup-failure branch (FR-012): a GetUserByPlatformUID error
+// other than domain.ErrUserNotFound must be surfaced, not swallowed.
+func TestGateway_ResolveUser_LookupErrorNotNotFound_ReturnsWrappedError(t *testing.T) {
+	gw := &Gateway{userService: &fakeUserService{getErr: errors.New("lookup boom")}}
+
+	err := gw.resolveUser(context.Background(), "some-pubkey")
+	if err == nil {
+		t.Fatal("resolveUser() error = nil, want a wrapped lookup error")
+	}
+}
+
+// TestGateway_ResolveUser_CreateConflict_TreatedAsSuccess covers
+// resolveUser's create-conflict branch (FR-012): losing a race to create a
+// brand-new pubkey's user (domain.ErrConflict) must be treated as success,
+// not an error.
+func TestGateway_ResolveUser_CreateConflict_TreatedAsSuccess(t *testing.T) {
+	gw := &Gateway{userService: &fakeUserService{
+		getErr:    domain.ErrUserNotFound,
+		createErr: domain.ErrConflict,
+	}}
+
+	err := gw.resolveUser(context.Background(), "some-pubkey")
+	if err != nil {
+		t.Errorf("resolveUser() error = %v, want nil (ErrConflict on create is treated as success)", err)
+	}
+}
+
+// TestGateway_ResolveUser_CreateErrorNotConflict_ReturnsWrappedError covers
+// resolveUser's create-failure branch (FR-012): a CreateUser error other
+// than domain.ErrConflict must be surfaced.
+func TestGateway_ResolveUser_CreateErrorNotConflict_ReturnsWrappedError(t *testing.T) {
+	gw := &Gateway{userService: &fakeUserService{
+		getErr:    domain.ErrUserNotFound,
+		createErr: errors.New("create boom"),
+	}}
+
+	err := gw.resolveUser(context.Background(), "some-pubkey")
+	if err == nil {
+		t.Fatal("resolveUser() error = nil, want a wrapped create error")
 	}
 }
