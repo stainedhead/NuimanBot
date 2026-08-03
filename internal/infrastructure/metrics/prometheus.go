@@ -239,4 +239,50 @@ var (
 		},
 		[]string{"action", "outcome"},
 	)
+
+	// Buzz Gateway Metrics
+	//
+	// BuzzRelayConnections was originally declared as a GaugeVec labeled
+	// relay_url/status, but the adapter layer (per FR-004's decision to set
+	// it from buzz.Gateway via nostr.Client.ConnectedRelayCount(), not from
+	// internal/infrastructure/nostr directly) only has an aggregate
+	// currently-connected-relay count available, not per-relay connect
+	// state. Re-scoped to a plain Gauge of that count rather than carrying
+	// unused labels.
+	BuzzRelayConnections = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "buzz_relay_connections",
+			Help: "Current number of connected Buzz relays",
+		},
+	)
+
+	// BuzzEventsReceivedTotal's help text originally described "verified Buzz
+	// events received" generically, but it is only ever incremented in
+	// processChannelMessage for kind:9 channel messages — not for the
+	// kind:9000/kind:10100 agent-status events that also flow through the
+	// same verified pipeline in processEvent (FR-013). Re-scoped the help
+	// text to make that explicit, rather than adding a companion counter for
+	// a volume nothing currently needs to alert on.
+	BuzzEventsReceivedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "buzz_events_received_total",
+			Help: "Total number of verified Buzz kind:9 channel messages received (excludes kind:9000/kind:10100 agent-status events)",
+		},
+		[]string{"channel_id", "sender_is_agent"},
+	)
+
+	BuzzEventsPublishedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "buzz_events_published_total",
+			Help: "Total number of Buzz events published",
+		},
+		[]string{"status"},
+	)
+
+	BuzzSignatureVerificationFailuresTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "buzz_signature_verification_failures_total",
+			Help: "Total number of Buzz events dropped for failing signature verification",
+		},
+	)
 )

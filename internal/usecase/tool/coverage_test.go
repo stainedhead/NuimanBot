@@ -132,10 +132,12 @@ func TestExecuteWithUser_RulesEnforcer_Blocked(t *testing.T) {
 	}
 
 	mockTool := &MockTool{
-		NameFunc:                func() string { return "some-tool" },
-		DescriptionFunc:         func() string { return "tool" },
-		InputSchemaFunc:         func() map[string]any { return nil },
-		ExecuteFunc:             func(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) { return &domain.ExecutionResult{}, nil },
+		NameFunc:        func() string { return "some-tool" },
+		DescriptionFunc: func() string { return "tool" },
+		InputSchemaFunc: func() map[string]any { return nil },
+		ExecuteFunc: func(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) {
+			return &domain.ExecutionResult{}, nil
+		},
 		RequiredPermissionsFunc: func() []domain.Permission { return nil },
 		ConfigFunc:              func() domain.ToolConfig { return domain.ToolConfig{Enabled: true} },
 	}
@@ -169,10 +171,12 @@ func TestExecuteWithUser_RulesEnforcer_RequiresConfirmation(t *testing.T) {
 	}
 
 	mockTool := &MockTool{
-		NameFunc:                func() string { return "some-tool" },
-		DescriptionFunc:         func() string { return "tool" },
-		InputSchemaFunc:         func() map[string]any { return nil },
-		ExecuteFunc:             func(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) { return &domain.ExecutionResult{}, nil },
+		NameFunc:        func() string { return "some-tool" },
+		DescriptionFunc: func() string { return "tool" },
+		InputSchemaFunc: func() map[string]any { return nil },
+		ExecuteFunc: func(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) {
+			return &domain.ExecutionResult{}, nil
+		},
 		RequiredPermissionsFunc: func() []domain.Permission { return nil },
 		ConfigFunc:              func() domain.ToolConfig { return domain.ToolConfig{Enabled: true} },
 	}
@@ -206,10 +210,12 @@ func TestExecuteWithUser_RulesEnforcer_Error(t *testing.T) {
 	}
 
 	mockTool := &MockTool{
-		NameFunc:                func() string { return "some-tool" },
-		DescriptionFunc:         func() string { return "tool" },
-		InputSchemaFunc:         func() map[string]any { return nil },
-		ExecuteFunc:             func(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) { return &domain.ExecutionResult{}, nil },
+		NameFunc:        func() string { return "some-tool" },
+		DescriptionFunc: func() string { return "tool" },
+		InputSchemaFunc: func() map[string]any { return nil },
+		ExecuteFunc: func(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) {
+			return &domain.ExecutionResult{}, nil
+		},
 		RequiredPermissionsFunc: func() []domain.Permission { return nil },
 		ConfigFunc:              func() domain.ToolConfig { return domain.ToolConfig{Enabled: true} },
 	}

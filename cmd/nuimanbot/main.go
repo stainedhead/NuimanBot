@@ -14,6 +14,7 @@ import (
 	"nuimanbot/internal/adapter/api"
 	cliadapter "nuimanbot/internal/adapter/cli"
 	memoryfactory "nuimanbot/internal/adapter/factory"
+	"nuimanbot/internal/adapter/gateway/buzz"
 	"nuimanbot/internal/adapter/gateway/cli"
 	"nuimanbot/internal/adapter/gateway/slack"
 	"nuimanbot/internal/adapter/gateway/telegram"
@@ -59,6 +60,7 @@ import (
 	"nuimanbot/internal/usecase/tool/github"
 	"nuimanbot/internal/usecase/tool/repo_search"
 	"nuimanbot/internal/usecase/tool/summarize"
+	"nuimanbot/internal/usecase/user"
 )
 
 // application represents the core NuimanBot application.
@@ -73,6 +75,7 @@ type application struct {
 	ToolRegistry         tool.ToolRegistry
 	Vault                domain.CredentialVault
 	ToolExecutionService *tool.Service
+	DomainUserService    *user.Service // Resolves/creates the domain.User used for RBAC (FR-006, FR-011), shared by ChatService and the Buzz gateway
 	HealthServer         *health.Server
 	WebServer            *web.Server
 	RESTServer           *api.Server                    // REST API server (optional)
@@ -139,7 +142,11 @@ func main() {
 	if vaultPath == "" {
 		vaultPath = "./data/vault.enc" // Default path
 	}
-	vault, err := crypto.NewFileCredentialVault(vaultPath, []byte(cfg.Security.EncryptionKey))
+	vaultKey, err := crypto.DecodeKeyFromBase64(cfg.Security.EncryptionKey)
+	if err != nil {
+		log.Fatalf("Failed to decode encryption key: %v", err)
+	}
+	vault, err := crypto.NewFileCredentialVault(vaultPath, vaultKey)
 	if err != nil {
 		log.Fatalf("Failed to create credential vault: %v", err)
 	}
@@ -165,6 +172,15 @@ func main() {
 	auditAdapter := &auditRepositoryAdapter{repo: fileRepos.Audit}
 	securityService := security.NewService(vault, inputValidator, auditAdapter)
 	slog.Info("Security service initialized with file-based auditor")
+
+	// 5.5. Initialize domain.User resolution service. ChatService uses this to
+	// resolve/create a RBAC-relevant domain.User for every incoming message,
+	// on every platform (FR-006, FR-011) — not just Buzz, which was
+	// previously the only caller of this pattern. Backed by a dedicated file
+	// (domain_users.json, distinct from users.json's domain.UserProfile admin
+	// data, a different schema).
+	domainUserRepo := storage.NewFileUserRepository(storagePath + "/domain_users.json")
+	domainUserService := user.NewService(domainUserRepo, securityService)
 
 	// 6. Initialize Memory Repository
 	conversationAdapter := &conversationRepositoryAdapter{repo: fileRepos.Conversation}
@@ -200,7 +216,7 @@ func main() {
 	toolExecutionService := tool.NewService(&cfg.Tools, toolRegistry, securityService)
 
 	// 10. Initialize Chat Service
-	chatService := chat.NewService(llmService, conversationAdapter, toolExecutionService, securityService)
+	chatService := chat.NewService(llmService, conversationAdapter, toolExecutionService, securityService, domainUserService)
 
 	// Configure LLM defaults from config
 	chatService.SetLLMDefaults(chat.LLMDefaults{
@@ -326,6 +342,7 @@ func main() {
 		ToolRegistry:         toolRegistry,
 		ChatService:          chatService,
 		ToolExecutionService: toolExecutionService,
+		DomainUserService:    domainUserService,
 		HealthServer:         healthServer,
 		RESTServer:           restServer,
 		MemoryCellRepo:       memoryCellRepo,
@@ -766,11 +783,15 @@ func (app *application) Run(ctx context.Context) error {
 	slog.Info("User profile management initialized", "file", usersFilePath)
 
 	// Initialize Bot Config Repository and Service (Phase 3)
-	// Get encryption key from security config
+	// Get encryption key from security config. The config value is the
+	// base64-encoded key as read from NUIMANBOT_ENCRYPTION_KEY, so it must be
+	// decoded back to the raw 32-byte key before use.
 	encryptionKey := app.Config.Security.EncryptionKey
-	if len(encryptionKey) != 32 {
-		slog.Warn("Encryption key must be 32 bytes for AES-256, using default (INSECURE)")
-		encryptionKey = "default-32-byte-key-changeme!!"
+	if decodedKey, err := crypto.DecodeKeyFromBase64(encryptionKey); err == nil && len(decodedKey) == 32 {
+		encryptionKey = string(decodedKey)
+	} else {
+		slog.Warn("Encryption key must decode to 32 bytes for AES-256, using default (INSECURE)")
+		encryptionKey = "default-32-byte-key-changeme!!!!"
 	}
 	botEncryption := infrasecurity.NewEncryptionService(encryptionKey)
 	botConfigRepo := storage.NewFileBotConfigRepository(botsFilePath, botEncryption)
@@ -955,6 +976,41 @@ func (app *application) Run(ctx context.Context) error {
 					slog.Error("Slack gateway error", "error", err)
 				}
 			}()
+		}
+	}
+
+	// Initialize Buzz gateway if enabled
+	if app.Config.Gateways.Buzz.Enabled {
+		// Buzz's gateway.go still resolves/creates its own domain.User on
+		// first message (FR-006, P1.8) using the same shared
+		// app.DomainUserService ChatService now also uses (P3.1) — this is a
+		// harmless, idempotent double lookup (ChatService.resolveUser finds
+		// the user Buzz's gateway already created), kept as-is rather than
+		// touching already-merged Phase 1 code.
+
+		// Generate-if-absent secp256k1 keypair (FR-007), persisted via the
+		// existing credential vault.
+		ensuredKey, err := crypto.EnsureBuzzKeypair(ctx, app.Vault, "buzz_private_key", app.Config.Gateways.Buzz.PrivateKey)
+		if err != nil {
+			slog.Warn("Failed to ensure Buzz keypair", "error", err)
+		} else {
+			app.Config.Gateways.Buzz.PrivateKey = ensuredKey
+
+			buzzGateway, err := buzz.New(&app.Config.Gateways.Buzz, app.DomainUserService)
+			if err != nil {
+				slog.Warn("Failed to create Buzz gateway", "error", err)
+			} else {
+				app.connectGateway(buzzGateway)
+				gateways = append(gateways, buzzGateway) //nolint:ineffassign,staticcheck // Reserved for future shutdown handling
+
+				// Start Buzz gateway in background
+				go func() {
+					slog.Info("Starting gateway", "platform", "buzz")
+					if err := buzzGateway.Start(ctx); err != nil {
+						slog.Error("Buzz gateway error", "error", err)
+					}
+				}()
+			}
 		}
 	}
 

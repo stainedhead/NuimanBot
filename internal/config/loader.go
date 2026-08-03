@@ -68,6 +68,13 @@ func LoadConfig(configPaths ...string) (*NuimanBotConfig, error) {
 			delete(ingatanSettings, "api_key")
 		}
 	}
+	// Remove SecureString fields from gateways.buzz to handle them manually after decode
+	// (mapstructure cannot decode a plain YAML string into domain.SecureString's struct shape).
+	if gwSettings, ok := allSettings["gateways"].(map[string]interface{}); ok {
+		if buzzSettings, ok := gwSettings["buzz"].(map[string]interface{}); ok {
+			delete(buzzSettings, "private_key")
+		}
+	}
 
 	decoderConfig := &mapstructure.DecoderConfig{
 		Metadata: nil,
@@ -177,6 +184,9 @@ func LoadConfig(configPaths ...string) (*NuimanBotConfig, error) {
 	if v.IsSet("gateways.slack.app_token") {
 		cfg.Gateways.Slack.AppToken = domain.NewSecureStringFromString(v.GetString("gateways.slack.app_token"))
 	}
+	if v.IsSet("gateways.buzz.private_key") {
+		cfg.Gateways.Buzz.PrivateKey = domain.NewSecureStringFromString(v.GetString("gateways.buzz.private_key"))
+	}
 	if v.IsSet("external_api.openai.api_key") {
 		cfg.ExternalAPI.OpenAI.APIKey = domain.NewSecureStringFromString(v.GetString("external_api.openai.api_key"))
 	}
@@ -271,6 +281,11 @@ func applyEnvOverrides(cfg *NuimanBotConfig) {
 	if val := os.Getenv("NUIMANBOT_GATEWAYS_CLI_DEBUGMODE"); val != "" {
 		if b, err := strconv.ParseBool(val); err == nil {
 			cfg.Gateways.CLI.DebugMode = b
+		}
+	}
+	if val := os.Getenv("NUIMANBOT_GATEWAYS_BUZZ_ENABLED"); val != "" {
+		if b, err := strconv.ParseBool(val); err == nil {
+			cfg.Gateways.Buzz.Enabled = b
 		}
 	}
 

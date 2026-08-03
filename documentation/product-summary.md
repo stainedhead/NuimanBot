@@ -17,7 +17,7 @@ NuimanBot is a **security-hardened personal AI agent** built in Go, designed as 
 
 - ✅ Core functionality complete
 - ✅ Comprehensive security hardening (TLS, JWT, rate limiting, RBAC)
-- ✅ Multi-platform support (CLI, Telegram, Slack)
+- ✅ Multi-platform support (CLI, Telegram, Slack, Buzz)
 - ✅ Multi-LLM integration (Anthropic, OpenAI, AWS Bedrock, Ollama)
 - ✅ Self-organizing memory with Ingatan backend support
 - ✅ MCP (Model Context Protocol) client for external tool integration
@@ -49,6 +49,7 @@ NuimanBot is a **security-hardened personal AI agent** built in Go, designed as 
 - **CLI Gateway**: Interactive REPL for development and admin tasks
 - **Telegram Gateway**: Long-polling and webhook support with user allowlists
 - **Slack Gateway**: Socket Mode (no public endpoint required)
+- **Buzz Gateway**: Nostr-based, relay-transported multi-agent channel participation — decentralized transport (no single API endpoint) and cryptographically-identified agent/human participants, distinct from the other three request/response-style gateways
 
 All gateways support concurrent operation with unified conversation history.
 
@@ -112,7 +113,7 @@ Infrastructure → Adapter → Use Case → Domain
 
 - **Domain Layer**: Pure entities (User, Message, Tool) with zero external dependencies
 - **Use Case Layer**: Business logic orchestration (Chat, Tool Execution, Security)
-- **Adapter Layer**: Gateway implementations (CLI, Telegram, Slack) and repositories (SQLite)
+- **Adapter Layer**: Gateway implementations (CLI, Telegram, Slack, Buzz) and repositories (SQLite)
 - **Infrastructure Layer**: External service clients (LLM providers, encryption, APIs)
 
 ### Test-Driven Development
@@ -350,6 +351,10 @@ MCP tools are loaded at startup from `mcp.json`. Servers that fail to initialize
 - ✅ **IMS Phase 7**: Integration Test Suite
   - //go:build integration tagged tests across storage, web, memoryv2
 - ✅ **Post-review fixes**: 17 hardening items (token validation, goroutine leak fix, JWT secret strength enforcement, rate limiter eviction, MCP timeout, JSON array input validation, store prefix validation)
+- ✅ **Buzz Gateway** (3 phases): Nostr-based multi-agent chat gateway
+  - **Phase 1 — Read-only participation**: hand-rolled NIP-01 client (`internal/infrastructure/nostr/`), multi-relay WebSocket transport with bounded exponential-backoff reconnect, signature verification, cross-relay event dedupe, generate-if-absent secp256k1 keypair via the existing credential vault
+  - **Phase 2 — Full gateway**: signed `kind:9` channel message publishing, `kind:10100` agent-profile self-declaration, `kind:9000`/`kind:10100`-derived agent-identity cache, consecutive-message loop-prevention guard
+  - **Phase 3 — Tool integration + cross-platform RBAC fix**: Buzz channel messages trigger existing tools under RBAC; fixed a pre-existing gap where tool execution was unenforced for *every* platform (`ExecuteWithUser` now used uniformly, `ListTools` now role-filtered)
 
 ---
 

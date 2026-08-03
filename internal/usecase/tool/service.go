@@ -257,8 +257,21 @@ func (s *Service) isToolWhitelisted(toolName string, allowedTools []string) bool
 	return false
 }
 
-// ListTools returns all registered tools for a given user.
-func (s *Service) ListTools(ctx context.Context, userID string) ([]domain.Tool, error) {
-	// TODO: Implement user-specific tool filtering using registry.ListForUser
-	return s.registry.List(), nil
+// ListTools returns the tools user is permitted to execute: the registry's
+// tools for user.ID, filtered by the same role/whitelist rule checkPermission
+// applies to Execute (FR-012) — a tool that would be denied by ExecuteWithUser
+// is never listed as available in the first place.
+func (s *Service) ListTools(ctx context.Context, user *domain.User) ([]domain.Tool, error) {
+	allTools, err := s.registry.ListForUser(ctx, user.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list tools for user '%s': %w", user.ID, err)
+	}
+
+	allowed := make([]domain.Tool, 0, len(allTools))
+	for _, t := range allTools {
+		if s.checkPermission(user, t.Name()) == nil {
+			allowed = append(allowed, t)
+		}
+	}
+	return allowed, nil
 }

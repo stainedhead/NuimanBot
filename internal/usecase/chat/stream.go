@@ -39,6 +39,14 @@ func (s *Service) ProcessMessageStream(ctx context.Context, incomingMsg *domain.
 		// Generate conversation ID
 		conversationID := getConversationID(incomingMsg.Platform, incomingMsg.PlatformUID)
 
+		// 1.5. Resolve the RBAC-relevant domain.User (FR-006, FR-012) so the
+		// tool list below is role-filtered like ProcessMessage's.
+		user, err := s.resolveUser(ctx, incomingMsg.Platform, incomingMsg.PlatformUID)
+		if err != nil {
+			outCh <- domain.StreamChunk{Error: fmt.Errorf("failed to resolve user: %w", err)}
+			return
+		}
+
 		// 2. Load conversation history
 		recentMessages, err := s.memoryRepo.GetRecentMessages(ctx, conversationID, 4096)
 		if err != nil {
@@ -46,8 +54,8 @@ func (s *Service) ProcessMessageStream(ctx context.Context, incomingMsg *domain.
 			return
 		}
 
-		// 3. Get available skills and convert to tools
-		skills, err := s.toolExecService.ListTools(ctx, incomingMsg.PlatformUID)
+		// 3. Get available skills and convert to tools (role-filtered, FR-012)
+		skills, err := s.toolExecService.ListTools(ctx, user)
 		if err != nil {
 			outCh <- domain.StreamChunk{Error: fmt.Errorf("failed to list skills: %w", err)}
 			return

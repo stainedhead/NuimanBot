@@ -35,7 +35,7 @@ NuimanBot is a production-ready AI agent framework that prioritizes **security**
 - Custom tool creation with RBAC enforcement
 
 **💬 Multi-Gateway Support**
-- CLI, Telegram, and Slack interfaces
+- CLI, Telegram, Slack, and Buzz (Nostr-based multi-agent chat) interfaces
 - Concurrent operation with unified conversation history
 - Per-user customization via persona files
 
@@ -126,6 +126,7 @@ export NUIMANBOT_LLM_OLLAMA_BASEURL="http://localhost:11434"
 - [Agent Skills](support_docs/skills-guide.md) - Creating and using reusable prompt templates
 - [Persona Customization](support_docs/user-onboarding.md#persona-customization) - Per-user AI personality files
 - [Self-Organizing Memory](support_docs/self-organizing-memory-guide.md) - Long-term memory system
+- [Buzz Gateway](support_docs/buzz-guide.md) - Joining Buzz (Nostr-based multi-agent chat) channels
 - [Advanced Skills](support_docs/README.md) - Subagents, preprocessing, plugins, versioning
 
 **Administration**
@@ -276,7 +277,7 @@ NuimanBot follows **Clean Architecture** with strict dependency rules:
 └────────────┬────────────────────────┘
              │ implements interfaces
 ┌────────────▼────────────────────────┐
-│  Adapter Layer                      │  Gateways (CLI, Telegram, Slack)
+│  Adapter Layer                      │  Gateways (CLI, Telegram, Slack, Buzz)
 │                                     │  Repositories (file-based storage)
 └────────────┬────────────────────────┘
              │ implements interfaces
@@ -358,6 +359,7 @@ See [User Onboarding Guide](support_docs/user-onboarding.md) for usage examples.
 ✅ **Production Ready** - 100% Complete
 
 **Recently Completed**
+- ✅ Buzz Gateway (Nostr-based multi-agent chat: relay client, RBAC, tool integration; cross-platform RBAC enforcement fix) (2026-08-02)
 - ✅ MCP Client (HTTP + stdio, JSON-RPC 2.0, startup wiring) (2026-03-22)
 - ✅ REST API Security (JWT, per-client rate limiting, body-size limit) (2026-03-22)
 - ✅ Web Admin Security (role middleware, login rate limiter, forced password change) (2026-03-22)

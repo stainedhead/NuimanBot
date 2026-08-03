@@ -23,12 +23,15 @@ func convertSkillsToTools(skills []domain.Tool) []domain.ToolDefinition {
 	return tools
 }
 
-// executeToolCalls executes a list of tool calls and returns their results
-func (s *Service) executeToolCalls(ctx context.Context, toolCalls []domain.ToolCall) []domain.ToolResult {
+// executeToolCalls executes a list of tool calls on behalf of user and
+// returns their results. Uses ExecuteWithUser (not the unchecked Execute) so
+// RBAC, rate limiting, and audit logging are enforced for every platform
+// (FR-011).
+func (s *Service) executeToolCalls(ctx context.Context, user *domain.User, toolCalls []domain.ToolCall) []domain.ToolResult {
 	results := make([]domain.ToolResult, 0, len(toolCalls))
 
 	for _, toolCall := range toolCalls {
-		result, err := s.toolExecService.Execute(ctx, toolCall.ToolName, toolCall.Arguments)
+		result, err := s.toolExecService.ExecuteWithUser(ctx, user, toolCall.ToolName, toolCall.Arguments)
 
 		toolResult := domain.ToolResult{
 			ToolName: toolCall.ToolName,
