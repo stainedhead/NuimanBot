@@ -278,6 +278,39 @@ func TestMCPToolAdapter_Execute_Timeout(t *testing.T) {
 	assert.Contains(t, err.Error(), "timed out")
 }
 
+// --- TrustLevel (Phase 6 / Part F, P6.2) ---
+
+func TestMCPToolAdapter_TrustLevel_DefaultsToUnknown(t *testing.T) {
+	transport := &mockTransport{
+		sendFn: func(_ context.Context, method string, _ json.RawMessage) (json.RawMessage, error) {
+			if method == "initialize" {
+				return initResponse(), nil
+			}
+			return nil, errors.New("unexpected")
+		},
+	}
+	client := newInitializedClient(t, transport)
+	adapter := NewMCPToolAdapter(client, infra.MCPTool{Name: "search"}, "my-server")
+
+	assert.Equal(t, infra.TrustUnknown, adapter.TrustLevel())
+}
+
+func TestMCPToolAdapter_TrustLevel_WithTrustLevelOption(t *testing.T) {
+	transport := &mockTransport{
+		sendFn: func(_ context.Context, method string, _ json.RawMessage) (json.RawMessage, error) {
+			if method == "initialize" {
+				return initResponse(), nil
+			}
+			return nil, errors.New("unexpected")
+		},
+	}
+	client := newInitializedClient(t, transport)
+	adapter := NewMCPToolAdapter(client, infra.MCPTool{Name: "pr_merge"}, "github-mcp",
+		WithTrustLevel(infra.TrustWrite))
+
+	assert.Equal(t, infra.TrustWrite, adapter.TrustLevel())
+}
+
 // --- InputSchema ---
 
 func TestMCPToolAdapter_InputSchema(t *testing.T) {

@@ -52,8 +52,12 @@ type Server struct {
 // NewServer creates a new REST API Server.
 // cfg provides the API key used by the auth endpoint.
 // jwtSecret is the HS256 signing secret for issued JWTs.
+// confirmationStore and confirmationResolver back the
+// GET/POST /api/v1/confirmations/{id}[/resolve] endpoints (Part C, FR-011,
+// P5.9); pass nil for either if the confirmation endpoints are not needed
+// (they will return 500 for any request if invoked with a nil dependency).
 // It returns an error if jwtSecret is shorter than minJWTSecretLength bytes.
-func NewServer(cfg config.ExternalAPIRestConfig, jwtSecret string) (*Server, error) {
+func NewServer(cfg config.ExternalAPIRestConfig, jwtSecret string, confirmationStore ConfirmationStore, confirmationResolver ConfirmationResolver) (*Server, error) {
 	if len(jwtSecret) < minJWTSecretLength {
 		return nil, fmt.Errorf(
 			"api server: jwt secret must be at least %d bytes, got %d; "+
@@ -88,12 +92,18 @@ func NewServer(cfg config.ExternalAPIRestConfig, jwtSecret string) (*Server, err
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
+	// Confirmation endpoints (Part C, FR-011, P5.9): each route gets its own
+	// protectedChain instance and therefore its own independent rate-limit
+	// registry, matching the per-route rate-limiting already established by
+	// this pattern (see protectedChain's doc comment above).
+	confirmationHandler := newConfirmationHandler(confirmationStore, confirmationResolver)
+	mux.Handle("GET /api/v1/confirmations/{id}", protectedChain(http.HandlerFunc(confirmationHandler.handleGet)))
+	mux.Handle("POST /api/v1/confirmations/{id}/resolve", protectedChain(http.HandlerFunc(confirmationHandler.handleResolve)))
+
 	// Protected routes placeholder — add handlers here as the API grows.
 	mux.Handle("GET /api/v1/", protectedChain(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not_found"})
 	})))
-
-	_ = protectedChain // suppress unused if no protected routes added yet
 
 	httpServer := &http.Server{
 		Handler:      mux,

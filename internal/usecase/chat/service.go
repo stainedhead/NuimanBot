@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 	"time" // For time.Now()
 
 	"nuimanbot/internal/domain"
 	"nuimanbot/internal/infrastructure/requestid"
+	"nuimanbot/internal/usecase/security"
 )
 
 // LLMService defines the interface for LLM interactions required by the ChatService.
@@ -32,7 +35,18 @@ type MemoryRepository interface {
 // ExecuteWithUser (not the unchecked Execute) is used so tool calls triggered
 // from chat messages are RBAC- and rate-limit-checked for every platform (FR-011).
 type ToolExecutionService interface {
-	ExecuteWithUser(ctx context.Context, user *domain.User, toolName string, params map[string]any) (*domain.ExecutionResult, error)
+	// Execute runs a tool with no RBAC/permission checks applied. Used only
+	// by the confirmation-approval re-invocation path (see
+	// resolveConfirmationApproved), which has already been approved and must
+	// not be re-gated — every other call site must use ExecuteWithUser (see
+	// specs/260803-improve-nuimanbot-security-auto-review's FR-001 fix).
+	Execute(ctx context.Context, toolName string, params map[string]any) (*domain.ExecutionResult, error)
+	// ExecuteWithUser runs a tool after applying RBAC (role/AllowedTools) and
+	// Part C's confirmation gate. This is the entry point ChatService's
+	// tool-calling loop must use for any tool call originating from live LLM
+	// output (FR-001 fix). conversationID scopes Part C's confirmation gate.
+	ExecuteWithUser(ctx context.Context, user *domain.User, conversationID, toolName string, params map[string]any) (*domain.ExecutionResult, error)
+	// ListTools returns the tools user's role permits (FR-002 fix, FR-012).
 	ListTools(ctx context.Context, user *domain.User) ([]domain.Tool, error)
 }
 
@@ -108,6 +122,23 @@ type Service struct {
 	memoryRecaller  MemoryRecaller // Optional memory recaller for context injection
 	promptComposer  PromptComposer // Optional persona-aware prompt composer
 	llmDefaults     LLMDefaults    // Default LLM parameters from config
+
+	// confirmationStore backs Part C's confirmation-reply detection
+	// (specs/260802-improve-nuimanbot-security, FR-013): at the start of
+	// every ProcessMessage call, it's used to check whether the incoming
+	// message resolves an open confirmation for (PlatformUID, conversationID)
+	// before the message is treated as a new chat turn. Optional — when nil,
+	// ProcessMessage skips confirmation-reply detection entirely (every
+	// message is processed as a new turn, matching pre-Phase-5 behavior).
+	//
+	// Independently of this field, ProcessMessage always attaches a
+	// security.ConfirmationIdentity to the tool-loop's context (see
+	// security.WithConfirmationIdentity) so that
+	// ToolExecutionService.Execute can apply the confirmation *gate* even
+	// when this specific ChatService instance has no store reference of its
+	// own for reply *detection* — the two concerns are independent, and in
+	// production DI wiring both are set to the same underlying store.
+	confirmationStore security.ConfirmationStore
 }
 
 // NewService creates a new ChatService instance.
@@ -150,6 +181,13 @@ func (s *Service) SetPromptComposer(composer PromptComposer) {
 // SetLLMDefaults sets default LLM parameters from configuration.
 func (s *Service) SetLLMDefaults(defaults LLMDefaults) {
 	s.llmDefaults = defaults
+}
+
+// SetConfirmationStore sets the ConfirmationStore used for Part C's
+// confirmation-reply detection (FR-013). Optional — see the confirmationStore
+// field's doc comment for what happens when it's never called.
+func (s *Service) SetConfirmationStore(store security.ConfirmationStore) {
+	s.confirmationStore = store
 }
 
 // defaultModel returns the configured default model or a sensible fallback.
@@ -242,11 +280,29 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 	conversationID := getConversationID(incomingMsg.Platform, incomingMsg.PlatformUID)
 
 	// 1.5. Resolve the RBAC-relevant domain.User for this platform/UID (FR-006,
-	// FR-011). This must happen before listing/executing tools so those calls
-	// are genuinely permission-checked, not just labeled with a raw UID.
+	// FR-011). This must happen before confirmation-reply detection and before
+	// listing/executing tools: ExecuteWithUser keys pending confirmations on
+	// user.ID (the persisted domain.User's UUID, not PlatformUID), so
+	// confirmation-reply detection below must look up using that same user.ID
+	// or it would never find what ExecuteWithUser created
+	// (specs/260803-improve-nuimanbot-security-auto-review's FR-001 fix +
+	// the UserService/domain.User reconciliation — see implementation-notes.md).
 	user, err := s.resolveUser(ctx, incomingMsg.Platform, incomingMsg.PlatformUID)
 	if err != nil {
 		return domain.OutgoingMessage{}, fmt.Errorf("failed to resolve user: %w", err)
+	}
+
+	// 1.6. Confirmation-reply detection (Part C, FR-013): before treating
+	// this message as a new chat turn, check whether it resolves an open
+	// confirmation for (user.ID, conversationID).
+	if s.confirmationStore != nil {
+		outgoing, handled, resolveErr := s.tryResolveConfirmationReply(ctx, incomingMsg, user, conversationID, reqID, logger)
+		if resolveErr != nil {
+			return domain.OutgoingMessage{}, resolveErr
+		}
+		if handled {
+			return outgoing, nil
+		}
 	}
 
 	// 2. Load Conversation History
@@ -257,7 +313,8 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 		return domain.OutgoingMessage{}, fmt.Errorf("failed to get recent messages: %w", err)
 	}
 
-	// 3. Get available skills and convert to tools (role-filtered, FR-012)
+	// 3. Get available skills and convert to tools, filtered by the
+	// resolved user's role (FR-002 fix, FR-012).
 	skills, err := s.toolExecService.ListTools(ctx, user)
 	if err != nil {
 		return domain.OutgoingMessage{}, fmt.Errorf("failed to list skills: %w", err)
@@ -265,29 +322,7 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 	tools := convertSkillsToTools(skills)
 
 	// 4. Compose system prompt with persona files (graceful degradation)
-	systemPrompt := "You are a helpful AI assistant." // Default fallback
-	if s.promptComposer != nil {
-		composerOutput, composeErr := s.promptComposer.Compose(ctx, PromptComposerInput{
-			UserID:   incomingMsg.PlatformUID,
-			Platform: string(incomingMsg.Platform),
-		})
-		if composeErr != nil {
-			logger.Error("Failed to compose persona prompt",
-				"user_id", incomingMsg.PlatformUID,
-				"error", composeErr,
-			)
-			// Fallback to default prompt
-		} else {
-			systemPrompt = composerOutput.SystemPrompt
-			if composerOutput.Truncated {
-				logger.Warn("Persona prompt was truncated",
-					"user_id", incomingMsg.PlatformUID,
-					"tokens_used", composerOutput.TokensUsed,
-					"truncated_files", composerOutput.TruncatedFiles,
-				)
-			}
-		}
-	}
+	systemPrompt := s.composeSystemPrompt(ctx, incomingMsg, logger)
 
 	// 5. Recall long-term memories for context injection (graceful degradation)
 	if s.memoryRecaller != nil {
@@ -303,12 +338,7 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 	}
 
 	// 6. Prepare LLM Request with tools
-	llmMessages := []domain.Message{}
-	// Add history
-	for i := range recentMessages {
-		llmMessages = append(llmMessages, domain.Message{Role: recentMessages[i].Role, Content: recentMessages[i].Content})
-	}
-	// Add current message
+	llmMessages := historyToMessages(recentMessages)
 	llmMessages = append(llmMessages, domain.Message{Role: "user", Content: incomingMsg.Text})
 
 	llmRequest := &domain.LLMRequest{
@@ -320,10 +350,100 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 		SystemPrompt: systemPrompt,
 	}
 
-	// 7. Tool calling loop (max 5 iterations)
+	// 7. Tool calling loop (max 5 iterations). user/conversationID are
+	// threaded through so every tool call in the loop is executed via
+	// ExecuteWithUser (FR-001 fix) — RBAC and Part C's confirmation gate are
+	// both applied per call, keyed on (user.ID, conversationID). user.ID is
+	// always incomingMsg.PlatformUID (see resolveUser's doc comment), so
+	// Part C's confirmation-gate keying and reply detection
+	// (tryResolveConfirmationReply) are unaffected by this fix.
+	finalResponse, collectedToolOutputs, pending, err := s.runToolLoop(ctx, user, conversationID, llmRequest, logger)
+	if err != nil {
+		return domain.OutgoingMessage{}, err
+	}
+
+	// FR-013: a pending confirmation ends the current turn immediately,
+	// surfacing its Summary as this turn's reply — it does not consume a
+	// tool-loop iteration or count as "max iterations exceeded".
+	if pending != nil {
+		return s.finishPendingConfirmationTurn(ctx, incomingMsg, conversationID, reqID, pending, logger)
+	}
+
+	return s.finishTurn(ctx, incomingMsg, conversationID, reqID, finalResponse, collectedToolOutputs, logger)
+}
+
+// pendingConfirmationInfo captures a tool call's pending-confirmation
+// details as surfaced by runToolLoop (Part C, FR-013).
+type pendingConfirmationInfo struct {
+	ID      string
+	Summary string
+}
+
+// historyToMessages converts stored conversation history into the
+// domain.Message shape the LLM request expects.
+func historyToMessages(history []domain.StoredMessage) []domain.Message {
+	messages := make([]domain.Message, 0, len(history))
+	for i := range history {
+		messages = append(messages, domain.Message{Role: history[i].Role, Content: history[i].Content})
+	}
+	return messages
+}
+
+// composeSystemPrompt builds the system prompt from persona files, falling
+// back to a default prompt if no PromptComposer is configured or composition
+// fails (graceful degradation — never blocks the turn).
+func (s *Service) composeSystemPrompt(ctx context.Context, incomingMsg *domain.IncomingMessage, logger *slog.Logger) string {
+	systemPrompt := "You are a helpful AI assistant." // Default fallback
+	if s.promptComposer == nil {
+		return systemPrompt
+	}
+
+	composerOutput, err := s.promptComposer.Compose(ctx, PromptComposerInput{
+		UserID:   incomingMsg.PlatformUID,
+		Platform: string(incomingMsg.Platform),
+	})
+	if err != nil {
+		logger.Error("Failed to compose persona prompt",
+			"user_id", incomingMsg.PlatformUID,
+			"error", err,
+		)
+		return systemPrompt
+	}
+
+	systemPrompt = composerOutput.SystemPrompt
+	if composerOutput.Truncated {
+		logger.Warn("Persona prompt was truncated",
+			"user_id", incomingMsg.PlatformUID,
+			"tokens_used", composerOutput.TokensUsed,
+			"truncated_files", composerOutput.TruncatedFiles,
+		)
+	}
+	return systemPrompt
+}
+
+// runToolLoop runs the LLM/tool-calling loop for llmRequest, up to
+// maxToolIterations rounds, starting from llmRequest.Messages (mutated in
+// place as the loop progresses, same as the pre-Phase-5 inline loop this
+// replaces). Every tool call is executed via ExecuteWithUser(ctx, user,
+// conversationID, ...) — not the RBAC-free Execute — so RBAC and Part C's
+// confirmation gate are both enforced for the resolved user (FR-001 fix, see
+// resolveUser).
+//
+// If any tool call in a round returns a pending-confirmation result (Part C,
+// FR-013 — see pendingConfirmationFrom), the round's results are still fully
+// recorded (collectedToolOutputs/llmMessages) exactly as any other round
+// would be — see FR-010/FR-R10
+// (specs/260803-improve-nuimanbot-security-auto-review): a pending
+// confirmation on one call must gate only the loop's flow-continuation, not
+// the visibility of its already-completed round-mates' real results — before
+// the loop returns immediately with pending populated instead of continuing
+// to iterate. Returning early this way does NOT consume one of the
+// maxToolIterations rounds as a normal tool round-trip would, and must never
+// be reported as "max tool calling iterations exceeded" even if detected on
+// the final allowed iteration.
+func (s *Service) runToolLoop(ctx context.Context, user *domain.User, conversationID string, llmRequest *domain.LLMRequest, logger *slog.Logger) (finalResponse *domain.LLMResponse, collectedToolOutputs []string, pending *pendingConfirmationInfo, err error) {
 	const maxToolIterations = 5
-	var finalResponse *domain.LLMResponse
-	var collectedToolOutputs []string
+	llmMessages := llmRequest.Messages
 
 	for iteration := 0; iteration < maxToolIterations; iteration++ {
 		// Check cache before first LLM call (if cache is available)
@@ -338,10 +458,9 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 
 		// Get LLM Response if not cached
 		if llmResponse == nil {
-			var err error
 			llmResponse, err = s.llmService.Complete(ctx, "", llmRequest) // Provider auto-resolved from model
 			if err != nil {
-				return domain.OutgoingMessage{}, fmt.Errorf("LLM completion failed: %w", err)
+				return nil, collectedToolOutputs, nil, fmt.Errorf("LLM completion failed: %w", err)
 			}
 		}
 
@@ -357,12 +476,35 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 			break
 		}
 
-		// Execute tool calls and collect outputs for memory extraction
-		toolResults := s.executeToolCalls(ctx, user, llmResponse.ToolCalls)
+		// Execute tool calls and collect outputs for memory extraction. Output
+		// flagged by OutputValidator (injection_flagged in Metadata) is excluded
+		// from collectedToolOutputs so it can never resurface in a future
+		// conversation's system prompt via the memory-curation pipeline (FR-005).
+		toolResults := s.executeToolCalls(ctx, user, conversationID, llmResponse.ToolCalls)
+
+		// FR-010/FR-R10 (specs/260803-improve-nuimanbot-security-auto-review):
+		// determine whether this round produced a pending confirmation, but do
+		// NOT return before recording the round's results below — a pending
+		// confirmation on one call must only gate this loop's
+		// flow-continuation (not iterating further), never the visibility of
+		// its already-completed round-mates' real results.
+		pendingID, pendingSummary, hasPending := firstPendingConfirmation(toolResults)
+
 		for _, tr := range toolResults {
-			if tr.Error != "" {
+			switch {
+			case tr.Error != "":
 				collectedToolOutputs = append(collectedToolOutputs, fmt.Sprintf("Tool %s error: %s", tr.ToolName, tr.Error))
-			} else {
+			case isInjectionFlagged(tr.Metadata):
+				logger.Warn("Excluding injection-flagged tool output from memory curation input",
+					"tool", tr.ToolName,
+				)
+			case pendingConfirmationEntry(tr.Metadata):
+				// This is the call that produced the round's pending
+				// confirmation itself — it has no real Output yet (see
+				// domain.StatusPendingConfirmation's doc comment), so there is
+				// nothing to record for it here; its ID/Summary are surfaced
+				// separately via pendingConfirmationInfo below.
+			default:
 				collectedToolOutputs = append(collectedToolOutputs, fmt.Sprintf("Tool %s: %s", tr.ToolName, tr.Output))
 			}
 		}
@@ -384,17 +526,27 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 
 		// Update request with new messages
 		llmRequest.Messages = llmMessages
+
+		if hasPending {
+			return nil, collectedToolOutputs, &pendingConfirmationInfo{ID: pendingID, Summary: pendingSummary}, nil
+		}
 	}
 
 	// If we hit max iterations, use last response
 	if finalResponse == nil {
-		return domain.OutgoingMessage{}, fmt.Errorf("max tool calling iterations exceeded")
+		return nil, collectedToolOutputs, nil, fmt.Errorf("max tool calling iterations exceeded")
 	}
 
-	// 7. Process final LLM Response
+	return finalResponse, collectedToolOutputs, nil, nil
+}
+
+// finishTurn completes a normal (non-pending) turn: memory-cell extraction,
+// persisting the incoming/outgoing messages, and building the final
+// OutgoingMessage.
+func (s *Service) finishTurn(ctx context.Context, incomingMsg *domain.IncomingMessage, conversationID, reqID string, finalResponse *domain.LLMResponse, collectedToolOutputs []string, logger *slog.Logger) (domain.OutgoingMessage, error) {
 	responseContent := finalResponse.Content
 
-	// 8. Extract memory cells from the interaction (non-blocking, graceful degradation)
+	// Extract memory cells from the interaction (non-blocking, graceful degradation)
 	if s.memoryCurator != nil {
 		if curatorErr := s.memoryCurator.ExtractMemoryCells(ctx, conversationID, incomingMsg.Text, responseContent, collectedToolOutputs); curatorErr != nil {
 			logger.Error("Failed to extract memory cells",
@@ -404,13 +556,102 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 		}
 	}
 
-	// 9. Save new messages to memory (incoming and outgoing)
+	s.saveTurnMessages(ctx, conversationID, incomingMsg, responseContent, finalResponse.Usage.CompletionTokens, logger)
+
+	return domain.OutgoingMessage{
+		RecipientID: incomingMsg.PlatformUID, // Send back to the same user
+		Content:     responseContent,
+		Format:      "markdown",                          // Assuming LLM returns markdown
+		Metadata:    map[string]any{"request_id": reqID}, // Include request ID for correlation
+	}, nil
+}
+
+// finishPendingConfirmationTurn completes a turn that ended on a pending
+// confirmation (Part C, FR-013): persists the turn's messages (using the
+// confirmation Summary as the assistant's reply) and returns it as the
+// OutgoingMessage, tagged with Metadata gateway agents (P5.7-P5.9) can use to
+// render an interactive yes/no prompt.
+func (s *Service) finishPendingConfirmationTurn(ctx context.Context, incomingMsg *domain.IncomingMessage, conversationID, reqID string, pending *pendingConfirmationInfo, logger *slog.Logger) (domain.OutgoingMessage, error) {
+	s.saveTurnMessages(ctx, conversationID, incomingMsg, pending.Summary, 0, logger)
+
+	return domain.OutgoingMessage{
+		RecipientID: incomingMsg.PlatformUID,
+		Content:     pending.Summary,
+		Format:      "markdown",
+		Metadata: map[string]any{
+			"request_id":      reqID,
+			"status":          "pending_confirmation",
+			"confirmation_id": pending.ID,
+		},
+	}, nil
+}
+
+// ResolveConfirmation resolves the confirmation identified by confirmationID
+// — approving or denying it — and, on approval, re-invokes the originally
+// requested tool call and runs a fresh tool-loop turn, exactly like the
+// chat-gateway yes/no reply path (resolveConfirmationApproved/Denied). It is
+// the entry point non-gateway callers use to resolve a confirmation that
+// isn't tied to a live incoming chat message — e.g. the REST API's
+// POST /api/v1/confirmations/{id}/resolve handler (Part C, FR-011, P5.9).
+//
+// Returns an error if no ConfirmationStore is configured for this Service
+// (SetConfirmationStore was never called), or if confirmationID does not
+// identify a resolvable confirmation. security.ErrConfirmationNotFound and
+// security.ErrConfirmationAlreadyResolved propagate unwrapped (checkable via
+// errors.Is) so callers can distinguish "no such confirmation" from "already
+// resolved" — e.g. to map them to distinct HTTP status codes.
+func (s *Service) ResolveConfirmation(ctx context.Context, confirmationID string, approved bool) (domain.OutgoingMessage, error) {
+	if s.confirmationStore == nil {
+		return domain.OutgoingMessage{}, fmt.Errorf("resolve confirmation: no confirmation store configured")
+	}
+
+	ctx, reqID := requestid.MustFromContext(ctx)
+	logger := requestid.Logger(ctx)
+
+	req, err := s.confirmationStore.Get(ctx, confirmationID)
+	if err != nil {
+		return domain.OutgoingMessage{}, err
+	}
+
+	// Synthesize an IncomingMessage carrying just enough identity for
+	// saveTurnMessages/resolveConfirmationApproved/resolveConfirmationDenied
+	// to record the resulting turn against the right conversation —
+	// PlatformUID/ConversationID come from the stored confirmation, not a
+	// live platform message, since this call has no such message.
+	incomingMsg := &domain.IncomingMessage{
+		ID:          "confirmation-resolve-" + confirmationID,
+		Platform:    domain.Platform("api"),
+		PlatformUID: req.UserID,
+		Text:        confirmationResolutionText(approved),
+		Timestamp:   time.Now(),
+	}
+
+	if approved {
+		return s.resolveConfirmationApproved(ctx, incomingMsg, req.ConversationID, reqID, req, logger)
+	}
+	return s.resolveConfirmationDenied(ctx, incomingMsg, req.ConversationID, reqID, req, logger)
+}
+
+// confirmationResolutionText returns the plain-text yes/no vocabulary word
+// recorded as the synthetic user turn for a non-gateway-initiated
+// ResolveConfirmation call, so the conversation history reads naturally.
+func confirmationResolutionText(approved bool) string {
+	if approved {
+		return "yes"
+	}
+	return "no"
+}
+
+// saveTurnMessages persists the incoming user message and an outgoing
+// assistant message (with the given reply content and token count) to
+// memory. Best-effort: failures are logged, not returned, matching the
+// pre-Phase-5 behavior this was extracted from.
+func (s *Service) saveTurnMessages(ctx context.Context, conversationID string, incomingMsg *domain.IncomingMessage, replyContent string, tokenCount int, logger *slog.Logger) {
 	incomingStoredMsg := domain.StoredMessage{
 		ID:        incomingMsg.ID, // Use incoming message ID
 		Role:      "user",
 		Content:   incomingMsg.Text,
 		Timestamp: incomingMsg.Timestamp,
-		// TokenCount:  llmRequest.Tokens(), // TODO: Calculate actual token count
 	}
 	if err := s.memoryRepo.SaveMessage(ctx, conversationID, incomingMsg.PlatformUID, incomingMsg.Platform, incomingStoredMsg); err != nil {
 		logger.Error("Error saving incoming message to memory",
@@ -422,9 +663,9 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 	outgoingStoredMsg := domain.StoredMessage{
 		ID:         "bot-response-" + fmt.Sprintf("%d", time.Now().UnixNano()),
 		Role:       "assistant",
-		Content:    responseContent,
+		Content:    replyContent,
 		Timestamp:  time.Now(),
-		TokenCount: finalResponse.Usage.CompletionTokens, // Using LLM's reported tokens
+		TokenCount: tokenCount,
 	}
 	if err := s.memoryRepo.SaveMessage(ctx, conversationID, incomingMsg.PlatformUID, incomingMsg.Platform, outgoingStoredMsg); err != nil {
 		logger.Error("Error saving outgoing message to memory",
@@ -432,14 +673,180 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 			"error", err,
 		)
 	}
+}
 
-	// 10. Return Outgoing Message
-	outgoingMsg := domain.OutgoingMessage{
-		RecipientID: incomingMsg.PlatformUID, // Send back to the same user
-		Content:     responseContent,
-		Format:      "markdown",                          // Assuming LLM returns markdown
-		Metadata:    map[string]any{"request_id": reqID}, // Include request ID for correlation
+// confirmationReplyResolution classifies whether an incoming message
+// resolves an open confirmation (Part C, FR-013's yes/no heuristic).
+type confirmationReplyResolution int
+
+const (
+	// confirmationReplyAmbiguous means the message neither approves nor
+	// denies the open confirmation — it is left pending and the message is
+	// processed as a normal new turn (FR-013).
+	confirmationReplyAmbiguous confirmationReplyResolution = iota
+	confirmationReplyApprove
+	confirmationReplyDeny
+)
+
+// confirmationApproveWords/confirmationDenyWords are the plain-text yes/no
+// vocabulary (specs/260802-improve-nuimanbot-security §5.3.3's "universal
+// fallback", case-insensitive, exact match after trimming whitespace).
+var (
+	confirmationApproveWords = map[string]bool{"yes": true, "y": true, "approve": true, "confirm": true}
+	confirmationDenyWords    = map[string]bool{"no": true, "n": true, "deny": true, "cancel": true, "reject": true}
+)
+
+// classifyConfirmationReply implements Part C's yes/no heuristic (FR-013).
+func classifyConfirmationReply(text string) confirmationReplyResolution {
+	normalized := strings.ToLower(strings.TrimSpace(text))
+	switch {
+	case confirmationApproveWords[normalized]:
+		return confirmationReplyApprove
+	case confirmationDenyWords[normalized]:
+		return confirmationReplyDeny
+	default:
+		return confirmationReplyAmbiguous
+	}
+}
+
+// tryResolveConfirmationReply checks whether incomingMsg resolves an open
+// confirmation for (user.ID, conversationID) (Part C, FR-013). Looked up by
+// the resolved domain.User's ID — not incomingMsg.PlatformUID — because
+// ExecuteWithUser creates pending confirmations keyed on user.ID, which is a
+// persisted UUID (UserService.CreateUser), not the raw platform identifier;
+// using PlatformUID here would never match what was actually stored. handled
+// is true when it does (approve or deny) — the caller must return
+// outgoing/err directly, without any further normal-turn processing. handled
+// is false when there is no open confirmation, or when one exists but this
+// message doesn't resolve it (left pending; the message must still be
+// processed as a normal new turn per FR-013).
+func (s *Service) tryResolveConfirmationReply(ctx context.Context, incomingMsg *domain.IncomingMessage, user *domain.User, conversationID, reqID string, logger *slog.Logger) (domain.OutgoingMessage, bool, error) {
+	req, open, err := s.confirmationStore.GetOpenByKey(ctx, user.ID, conversationID)
+	if err != nil {
+		// A lookup failure isn't an execution-safety concern (nothing is
+		// about to run unconfirmed) — fail open to normal turn processing
+		// rather than blocking the user's message entirely.
+		logger.Error("Failed to look up open confirmation", "conversation_id", conversationID, "error", err)
+		return domain.OutgoingMessage{}, false, nil
+	}
+	if !open {
+		return domain.OutgoingMessage{}, false, nil
 	}
 
-	return outgoingMsg, nil
+	switch classifyConfirmationReply(incomingMsg.Text) {
+	case confirmationReplyApprove:
+		outgoing, err := s.resolveConfirmationApproved(ctx, incomingMsg, conversationID, reqID, req, logger)
+		return outgoing, true, err
+	case confirmationReplyDeny:
+		outgoing, err := s.resolveConfirmationDenied(ctx, incomingMsg, conversationID, reqID, req, logger)
+		return outgoing, true, err
+	default:
+		logger.Info("Message did not resolve the open confirmation; processing as a new turn",
+			"confirmation_id", req.ID,
+		)
+		return domain.OutgoingMessage{}, false, nil
+	}
+}
+
+// resolveConfirmationDenied resolves req as denied and reports the
+// cancellation to the user. The originally-requested tool call is never
+// executed.
+func (s *Service) resolveConfirmationDenied(ctx context.Context, incomingMsg *domain.IncomingMessage, conversationID, reqID string, req security.ConfirmationRequest, logger *slog.Logger) (domain.OutgoingMessage, error) {
+	if _, err := s.confirmationStore.Resolve(ctx, req.ID, false); err != nil {
+		// The user's intent to deny is unambiguous regardless of whether the
+		// store's bookkeeping succeeded (and denial never executes anything,
+		// so there's no fail-closed *execution* concern here) — log and
+		// still report the cancellation.
+		logger.Error("Failed to resolve confirmation as denied", "confirmation_id", req.ID, "error", err)
+	}
+
+	content := fmt.Sprintf("Cancelled: %s", req.Summary)
+	s.saveTurnMessages(ctx, conversationID, incomingMsg, content, 0, logger)
+
+	return domain.OutgoingMessage{
+		RecipientID: incomingMsg.PlatformUID,
+		Content:     content,
+		Format:      "markdown",
+		Metadata: map[string]any{
+			"request_id":      reqID,
+			"status":          "confirmation_denied",
+			"confirmation_id": req.ID,
+		},
+	}, nil
+}
+
+// resolveConfirmationApproved resolves req as approved, re-invokes the
+// originally-requested tool call directly with its original parameters
+// (bypassing a fresh LLM prompt/re-decision, per FR-013), and feeds that
+// tool's result into a NEW, fresh tool-loop invocation with its own 5-
+// iteration budget so the model can react to the now-completed action.
+func (s *Service) resolveConfirmationApproved(ctx context.Context, incomingMsg *domain.IncomingMessage, conversationID, reqID string, req security.ConfirmationRequest, logger *slog.Logger) (domain.OutgoingMessage, error) {
+	resolved, err := s.confirmationStore.Resolve(ctx, req.ID, true)
+	if err != nil {
+		logger.Error("Failed to resolve confirmation as approved", "confirmation_id", req.ID, "error", err)
+		return domain.OutgoingMessage{}, fmt.Errorf("failed to resolve confirmation: %w", err)
+	}
+
+	// Re-invoke directly via the RBAC/confirmation-free Execute — this call
+	// has already been approved and must not be re-gated. Deliberately does
+	// NOT attach a security.ConfirmationIdentity to ctx here.
+	result, execErr := s.toolExecService.Execute(ctx, resolved.ToolName, resolved.Params)
+	toolResult := domain.ToolResult{ToolName: resolved.ToolName}
+	switch {
+	case execErr != nil:
+		toolResult.Error = execErr.Error()
+	case result.Error != "":
+		toolResult.Error = result.Error
+	default:
+		toolResult.Output = result.Output
+		toolResult.Metadata = result.Metadata
+	}
+
+	recentMessages, err := s.memoryRepo.GetRecentMessages(ctx, conversationID, 4096)
+	if err != nil {
+		return domain.OutgoingMessage{}, fmt.Errorf("failed to get recent messages: %w", err)
+	}
+
+	// Resolve a role-bearing identity for RBAC (FR-001/FR-002 fix) — the
+	// fresh tool-loop invocation below is a normal turn like any other, so
+	// any further tool calls the model makes in reaction to the
+	// now-completed approved action must go through ExecuteWithUser, not
+	// Execute.
+	user, err := s.resolveUser(ctx, incomingMsg.Platform, incomingMsg.PlatformUID)
+	if err != nil {
+		return domain.OutgoingMessage{}, fmt.Errorf("failed to resolve user: %w", err)
+	}
+
+	skills, err := s.toolExecService.ListTools(ctx, user)
+	if err != nil {
+		return domain.OutgoingMessage{}, fmt.Errorf("failed to list skills: %w", err)
+	}
+	tools := convertSkillsToTools(skills)
+
+	systemPrompt := s.composeSystemPrompt(ctx, incomingMsg, logger)
+
+	llmMessages := historyToMessages(recentMessages)
+	llmMessages = append(llmMessages, domain.Message{Role: "user", Content: formatToolResults([]domain.ToolResult{toolResult})})
+
+	llmRequest := &domain.LLMRequest{
+		Model:        s.defaultModel(),
+		Messages:     llmMessages,
+		MaxTokens:    s.defaultMaxTokens(),
+		Temperature:  s.defaultTemperature(),
+		Tools:        tools,
+		SystemPrompt: systemPrompt,
+	}
+
+	finalResponse, collectedToolOutputs, pending, err := s.runToolLoop(ctx, user, conversationID, llmRequest, logger)
+	if err != nil {
+		return domain.OutgoingMessage{}, err
+	}
+	if pending != nil {
+		// Rare but possible: the fresh tool-loop invocation itself triggered
+		// another confirmation-required action. Handle it exactly like any
+		// other pending confirmation rather than erroring.
+		return s.finishPendingConfirmationTurn(ctx, incomingMsg, conversationID, reqID, pending, logger)
+	}
+
+	return s.finishTurn(ctx, incomingMsg, conversationID, reqID, finalResponse, collectedToolOutputs, logger)
 }

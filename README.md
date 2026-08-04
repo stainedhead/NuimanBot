@@ -19,8 +19,10 @@ NuimanBot is a production-ready AI agent framework that prioritizes **security**
 
 **🔒 Security First**
 - Zero credential leakage with AES-256-GCM encryption
-- 80+ attack pattern detection (prompt injection, command injection)
-- Role-based access control (RBAC) with audit logging
+- User-input injection detection: 80+ attack pattern rules (30+ prompt injection, 50+ command injection) applied to direct chat input
+- Tool-output injection filtering: a separate `OutputValidator` scans fetched web content, search results, and MCP tool output for injection patterns before it reaches the LLM (fail-closed reject by default)
+- Side-effecting action confirmation: default-configured actions (e.g. GitHub PR merge, issue close) require human yes/no confirmation before executing
+- Role-based access control (RBAC) with audit logging, enforced end-to-end for every gateway including live chat
 - No external tool imports (100% custom, vetted tools)
 
 **🤖 Multi-LLM Support**
@@ -127,6 +129,7 @@ export NUIMANBOT_LLM_OLLAMA_BASEURL="http://localhost:11434"
 - [Persona Customization](support_docs/user-onboarding.md#persona-customization) - Per-user AI personality files
 - [Self-Organizing Memory](support_docs/self-organizing-memory-guide.md) - Long-term memory system
 - [Buzz Gateway](support_docs/buzz-guide.md) - Joining Buzz (Nostr-based multi-agent chat) channels
+- [Security Hardening Guide](support_docs/security-hardening-guide.md) - Action confirmations, tool-output scanning, SSRF protection, and RBAC config
 - [Advanced Skills](support_docs/README.md) - Subagents, preprocessing, plugins, versioning
 
 **Administration**
@@ -304,21 +307,28 @@ NuimanBot addresses critical vulnerabilities found in similar AI agent framework
 
 **Threat Protection**
 - ✅ Credential leakage → AES-256-GCM encryption, no plaintext secrets
-- ✅ Prompt injection → 30+ pattern detection, input sanitization
+- ✅ User-input prompt injection → 30+ pattern detection on direct chat input, input sanitization
+- ✅ Tool-output prompt injection → `OutputValidator` scans fetched web pages, search results, and MCP tool output for injection patterns before it re-enters the LLM's context; flagged content is rejected by default
 - ✅ Command injection → 50+ pattern detection, output sandboxing
 - ✅ Malicious tools → Custom tools only, no external imports
 - ✅ Supply chain attacks → Minimal dependencies, security scanning
-- ✅ Privilege escalation → Strict RBAC enforcement at all layers
+- ✅ Privilege escalation → RBAC roles are defined and enforced per tool via `ExecuteWithUser`/`checkPermission`, backed by a CI guard ensuring every registered tool has an explicit role; the live chat tool-calling loop (both the main tool-calling loop and the confirmation-approval re-invocation path) calls `ExecuteWithUser` directly, resolving each user's persisted `domain.User` via `UserService` (`GetUserByPlatformUID`/`CreateUser`) before enforcing permissions — the side-effecting-action confirmation gate remains an additional, independent safeguard on top of this
 
 **Security Features**
-- Input validation with comprehensive attack pattern detection
+- Two distinct, separately-implemented injection defenses: a ~30-pattern detector on direct user chat input (`internal/usecase/security/input_validation.go`), and a separate `OutputValidator` that scans all tool-sourced content — fetched web/document pages, web-search results, and MCP tool output — before it reaches the LLM (`internal/usecase/security/output_validation.go`)
+- Prompt-boundary guardrail: every tool result is wrapped in `<tool_output source="...">` delimiters, and a fixed, non-overridable system-prompt instruction tells the model to treat tool output as data, never as instructions
+- Side-effecting action confirmation: plain-text yes/no by default in every chat gateway, with native Slack Block Kit / Telegram inline-keyboard buttons where those integrations support it (not a universal rich UI); unresolved confirmations expire (default 5m) and are treated as denied
+- SSRF hardening: fetch tools (`summarize`, `doc_summarize`) resolve and validate the target IP — rejecting loopback, RFC 1918 private ranges, link-local addresses (including the `169.254.169.254` cloud metadata endpoint), and multicast/reserved ranges — before dialing, and re-validate on every redirect hop by dialing the validated IP directly
+- MCP tool trust classification: each MCP server (and optionally individual tools) is tagged `read_only` / `write` / `unknown` in `mcp.json`; `write`/`unknown`-trust tools are treated as admin-only and confirmation-required, the same as built-in write tools
+- MCP (and all other) tool output passes through both secret redaction (`OutputSanitizer`) and injection-pattern detection (`OutputValidator`) — two distinct mechanisms, neither of which alone covers what the other does
 - Encrypted credential vault with key rotation support
-- Comprehensive audit logging for compliance
+- Comprehensive audit logging for compliance, including `injection_flagged`/`matched_patterns` fields on flagged tool calls
 - Rate limiting (token bucket algorithm): per-user tool limits, per-IP login limits, per-client REST API limits
 - REST API JWT authentication (HS256, minimum 32-byte secret enforced)
 - TLS auto-generation for admin web and health servers
 - Web admin: forced password change on default credentials, CSRF protection, role middleware
-- MCP tool output sanitized before injection into LLM context
+
+**RBAC enforcement in live chat (fixed)**: the live chat conversation loop (`chat.Service.ProcessMessage`) executes tools via `ToolExecutionService.ExecuteWithUser` — both the main tool-calling loop and the confirmation-approval re-invocation path call this method, which runs the role-based RBAC check (`checkPermission`). Each incoming message's role-bearing `*domain.User` is resolved via `UserService` (`GetUserByPlatformUID`/`CreateUser`), defaulting new non-CLI identities to `RoleGuest` and CLI to `RoleAdmin`; an unresolvable or unregistered platform identity fails closed to `domain.RoleGuest` rather than failing open. The tool list offered to the LLM is also role-filtered (`ListTools` now filters `registry.List()` by the resolved caller's role, rather than returning every registered tool). Role-based restrictions such as `coding_agent`/`github` writes being admin-only are defined in code, unit-tested, CI-guarded, and enforced end-to-end for a live conversation — see the regression test `TestProcessMessage_RBAC_NonAdminCannotInvokeGitHubPRMerge` in `internal/usecase/chat/rbac_test.go`, which proves a non-admin chat user's attempt to invoke `github.pr_merge` is denied at the RBAC layer. The side-effecting-action confirmation gate described above remains independently wired and is fully live for real conversations as an additional layer on top of this.
 
 See [Product Details](documentation/product-details.md#security-requirements) for complete security documentation.
 
@@ -346,9 +356,10 @@ See [Product Details](documentation/product-details.md#security-requirements) fo
 - Any tool exposed by an MCP-compatible server defined in `mcp.json`
 - Registered at startup under the namespace `mcp:<server>:<tool>`
 - HTTP and stdio transports; bad servers skipped with logged warning
-- 30-second per-tool timeout; output sanitized before LLM injection
+- 30-second per-tool timeout; output passes through secret redaction (`OutputSanitizer`) and injection-pattern detection (`OutputValidator`)
+- Each server (and optionally individual tools) carries a trust classification (`read_only`/`write`/`unknown`); `write`/`unknown`-trust tools are treated as admin-only and confirmation-required
 
-All built-in tools include RBAC enforcement, rate limiting, timeout enforcement, and output sanitization.
+All built-in tools have an assigned RBAC role, rate limiting, timeout enforcement, and output sanitization (secret redaction + injection-pattern filtering); see [Security](#security) for how role enforcement is wired into live chat via `ExecuteWithUser`.
 
 See [User Onboarding Guide](support_docs/user-onboarding.md) for usage examples.
 
@@ -360,6 +371,8 @@ See [User Onboarding Guide](support_docs/user-onboarding.md) for usage examples.
 
 **Recently Completed**
 - ✅ Buzz Gateway (Nostr-based multi-agent chat: relay client, RBAC, tool integration; cross-platform RBAC enforcement fix) (2026-08-02)
+- ✅ Security Hardening — Parts A-G: tool-output injection filtering (`OutputValidator`), prompt-boundary guardrails, side-effecting action confirmation flow, RBAC correction with CI guard, SSRF hardening (IP-resolution + redirect revalidation), MCP trust classification, documentation parity (2026-08-02)
+- ✅ FR-001/FR-002 — RBAC bypass in live chat fixed (P0), reconciled with the Buzz gateway's independent cross-platform RBAC fix onto one unified model: `chat.Service` resolves each user's persisted `domain.User` via `UserService` (`GetUserByPlatformUID`/`CreateUser`, defaulting new non-CLI identities to `RoleGuest`) and calls `ExecuteWithUser` — with `conversationID` threaded through for Part C's confirmation gate — for both the main tool-calling loop and the confirmation-approval re-invocation path; `ListTools` filters by caller role, including the action-aware `github` split and MCP trust classification; confirmation-reply detection is keyed on the resolved user's persisted ID, not raw platform UID (2026-08-04)
 - ✅ MCP Client (HTTP + stdio, JSON-RPC 2.0, startup wiring) (2026-03-22)
 - ✅ REST API Security (JWT, per-client rate limiting, body-size limit) (2026-03-22)
 - ✅ Web Admin Security (role middleware, login rate limiter, forced password change) (2026-03-22)

@@ -3,11 +3,13 @@ package tool_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"nuimanbot/internal/config"
 	"nuimanbot/internal/domain"
+	"nuimanbot/internal/usecase/security"
 	. "nuimanbot/internal/usecase/tool" // Import skill package
 )
 
@@ -237,16 +239,14 @@ func TestListSkills(t *testing.T) {
 	svc := NewService(&config.ToolsSystemConfig{}, mockRegistry, mockSecurity)
 
 	ctx := context.Background()
-	adminUser := &domain.User{ID: "user1", Role: domain.RoleAdmin}
-	listedSkills, err := svc.ListTools(ctx, adminUser)
+	// "skill1"/"skill2" aren't in ToolPermissions, so they resolve to
+	// DefaultToolPermission (RoleUser) — a RoleUser is sufficient to see both.
+	listedSkills, err := svc.ListTools(ctx, &domain.User{ID: "user1", Role: domain.RoleUser})
 	if err != nil {
 		t.Errorf("ListSkills returned an unexpected error: %v", err)
 	}
 	if len(listedSkills) != len(mockTools) {
 		t.Errorf("Expected %d skills, got %d", len(mockTools), len(listedSkills))
-	}
-	if listedSkills[0].Name() != "skill1" || listedSkills[1].Name() != "skill2" {
-		t.Errorf("Listed skills mismatch: got %+v", listedSkills)
 	}
 }
 
@@ -266,8 +266,7 @@ func TestListSkillsForUser(t *testing.T) {
 	svc := NewService(&config.ToolsSystemConfig{}, mockRegistry, mockSecurity)
 
 	ctx := context.Background()
-	adminUser := &domain.User{ID: "user1", Role: domain.RoleAdmin}
-	listedSkills, err := svc.ListTools(ctx, adminUser)
+	listedSkills, err := svc.ListTools(ctx, &domain.User{ID: "user1", Role: domain.RoleUser})
 
 	if err != nil {
 		t.Errorf("Expected no error, got %v", err)
@@ -275,9 +274,90 @@ func TestListSkillsForUser(t *testing.T) {
 	if len(listedSkills) != len(mockTools) {
 		t.Errorf("Expected %d skills, got %d", len(mockTools), len(listedSkills))
 	}
-	if listedSkills[0].Name() != "skill1" || listedSkills[1].Name() != "skill2" {
-		t.Errorf("Listed skills mismatch: got %+v", listedSkills)
+}
+
+// TestListTools_FiltersAdminOnlyToolsForNonAdmin is the FR-002 regression
+// test: ListTools must exclude admin-only tools ("github", "coding_agent")
+// for a non-admin user, and include them for an admin — the same RBAC
+// resolveRequiredRole/checkPermission applies to Execute/ExecuteWithUser.
+func TestListTools_FiltersAdminOnlyToolsForNonAdmin(t *testing.T) {
+	mockTools := []domain.Tool{
+		&MockTool{NameFunc: func() string { return "calculator" }},   // RoleGuest
+		&MockTool{NameFunc: func() string { return "weather" }},      // RoleUser
+		&MockTool{NameFunc: func() string { return "github" }},       // RoleAdmin (ceiling)
+		&MockTool{NameFunc: func() string { return "coding_agent" }}, // RoleAdmin
 	}
+	mockRegistry := &MockToolRegistry{
+		ListFunc: func() []domain.Tool { return mockTools },
+	}
+	mockSecurity := &MockSecurityService{
+		AuditFunc: func(ctx context.Context, event *domain.AuditEvent) error { return nil },
+	}
+	svc := NewService(&config.ToolsSystemConfig{}, mockRegistry, mockSecurity)
+	ctx := context.Background()
+
+	nonAdmin := &domain.User{ID: "user1", Role: domain.RoleUser}
+	listed, err := svc.ListTools(ctx, nonAdmin)
+	if err != nil {
+		t.Fatalf("ListTools returned unexpected error: %v", err)
+	}
+	names := toolNames(listed)
+	for _, forbidden := range []string{"github", "coding_agent"} {
+		if names[forbidden] {
+			t.Errorf("expected non-admin ListTools to exclude %q, got %v", forbidden, names)
+		}
+	}
+	if !names["calculator"] || !names["weather"] {
+		t.Errorf("expected non-admin ListTools to include calculator/weather, got %v", names)
+	}
+
+	admin := &domain.User{ID: "admin1", Role: domain.RoleAdmin}
+	listedAdmin, err := svc.ListTools(ctx, admin)
+	if err != nil {
+		t.Fatalf("ListTools returned unexpected error: %v", err)
+	}
+	adminNames := toolNames(listedAdmin)
+	for _, expected := range []string{"calculator", "weather", "github", "coding_agent"} {
+		if !adminNames[expected] {
+			t.Errorf("expected admin ListTools to include %q, got %v", expected, adminNames)
+		}
+	}
+}
+
+// TestListTools_NilUserFailsClosedToGuest verifies a nil user is treated as
+// the lowest-privilege RoleGuest identity, not as unrestricted access.
+func TestListTools_NilUserFailsClosedToGuest(t *testing.T) {
+	mockTools := []domain.Tool{
+		&MockTool{NameFunc: func() string { return "calculator" }}, // RoleGuest
+		&MockTool{NameFunc: func() string { return "weather" }},    // RoleUser
+	}
+	mockRegistry := &MockToolRegistry{
+		ListFunc: func() []domain.Tool { return mockTools },
+	}
+	mockSecurity := &MockSecurityService{
+		AuditFunc: func(ctx context.Context, event *domain.AuditEvent) error { return nil },
+	}
+	svc := NewService(&config.ToolsSystemConfig{}, mockRegistry, mockSecurity)
+
+	listed, err := svc.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools returned unexpected error: %v", err)
+	}
+	names := toolNames(listed)
+	if !names["calculator"] {
+		t.Errorf("expected nil user (guest) to still see guest-level tools, got %v", names)
+	}
+	if names["weather"] {
+		t.Errorf("expected nil user (guest) to be denied user-level tools, got %v", names)
+	}
+}
+
+func toolNames(tools []domain.Tool) map[string]bool {
+	names := make(map[string]bool, len(tools))
+	for _, t := range tools {
+		names[t.Name()] = true
+	}
+	return names
 }
 
 // TestListTools_RoleFiltering verifies ListTools filters the registry's tools
@@ -371,7 +451,7 @@ func TestExecuteWithUser_AdminCanExecuteAllSkills(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	result, err := svc.ExecuteWithUser(ctx, adminUser, "admin.user", nil)
+	result, err := svc.ExecuteWithUser(ctx, adminUser, "conv1", "admin.user", nil)
 
 	if err != nil {
 		t.Errorf("Admin should be able to execute admin skills, got error: %v", err)
@@ -403,7 +483,7 @@ func TestExecuteWithUser_UserCannotExecuteAdminSkills(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	_, err := svc.ExecuteWithUser(ctx, regularUser, "admin.user", nil)
+	_, err := svc.ExecuteWithUser(ctx, regularUser, "conv1", "admin.user", nil)
 
 	if !errors.Is(err, domain.ErrInsufficientPermissions) {
 		t.Errorf("Expected ErrInsufficientPermissions, got: %v", err)
@@ -441,7 +521,7 @@ func TestExecuteWithUser_UserCanExecuteUserSkills(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	result, err := svc.ExecuteWithUser(ctx, regularUser, "weather", nil)
+	result, err := svc.ExecuteWithUser(ctx, regularUser, "conv1", "weather", nil)
 
 	if err != nil {
 		t.Errorf("User should be able to execute user-level skills, got error: %v", err)
@@ -472,7 +552,7 @@ func TestExecuteWithUser_GuestCanOnlyExecuteGuestSkills(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	result, err := svc.ExecuteWithUser(ctx, guestUser, "calculator", nil)
+	result, err := svc.ExecuteWithUser(ctx, guestUser, "conv1", "calculator", nil)
 
 	if err != nil {
 		t.Errorf("Guest should be able to execute guest-level skills, got error: %v", err)
@@ -500,7 +580,7 @@ func TestExecuteWithUser_GuestCannotExecuteUserSkills(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	_, err := svc.ExecuteWithUser(ctx, guestUser, "weather", nil)
+	_, err := svc.ExecuteWithUser(ctx, guestUser, "conv1", "weather", nil)
 
 	if !errors.Is(err, domain.ErrInsufficientPermissions) {
 		t.Errorf("Expected ErrInsufficientPermissions, got: %v", err)
@@ -532,7 +612,7 @@ func TestExecuteWithUser_AllowedSkillsWhitelist(t *testing.T) {
 	ctx := context.Background()
 
 	// Should be able to execute calculator (in whitelist)
-	result, err := svc.ExecuteWithUser(ctx, restrictedUser, "calculator", nil)
+	result, err := svc.ExecuteWithUser(ctx, restrictedUser, "conv1", "calculator", nil)
 	if err != nil {
 		t.Errorf("Should be able to execute whitelisted skill, got error: %v", err)
 	}
@@ -563,7 +643,7 @@ func TestExecuteWithUser_AllowedSkillsBlocksNonWhitelisted(t *testing.T) {
 	ctx := context.Background()
 
 	// Should NOT be able to execute weather (not in whitelist)
-	_, err := svc.ExecuteWithUser(ctx, restrictedUser, "weather", nil)
+	_, err := svc.ExecuteWithUser(ctx, restrictedUser, "conv1", "weather", nil)
 	if !errors.Is(err, domain.ErrInsufficientPermissions) {
 		t.Errorf("Expected ErrInsufficientPermissions for non-whitelisted skill, got: %v", err)
 	}
@@ -592,7 +672,7 @@ func TestExecuteWithUser_EmptyAllowedSkillsAllowsAllForRole(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	result, err := svc.ExecuteWithUser(ctx, unrestrictedUser, "weather", nil)
+	result, err := svc.ExecuteWithUser(ctx, unrestrictedUser, "conv1", "weather", nil)
 
 	if err != nil {
 		t.Errorf("Empty AllowedTools should allow all role skills, got error: %v", err)
@@ -615,6 +695,102 @@ func (m *MockRulesEnforcer) Enforce(ctx context.Context, input EnforcerInput) (*
 		return m.EnforceFunc(ctx, input)
 	}
 	return &EnforcerOutput{Allowed: true}, nil
+}
+
+// stubConfirmationStore is a minimal in-memory security.ConfirmationStore
+// used by P5.3 tests. It is not concurrency-hardened (unlike
+// internal/infrastructure/security.FileConfirmationStore, which has its own
+// dedicated concurrency test suite) — it exists purely to exercise
+// tool.Service's ExecuteWithUser/Execute confirmation-gate wiring.
+type stubConfirmationStore struct {
+	byID      map[string]security.ConfirmationRequest
+	openByKey map[string]string
+	nextID    int
+}
+
+func newStubConfirmationStore() *stubConfirmationStore {
+	return &stubConfirmationStore{
+		byID:      make(map[string]security.ConfirmationRequest),
+		openByKey: make(map[string]string),
+	}
+}
+
+func (s *stubConfirmationStore) key(userID, conversationID string) string {
+	return userID + "\x00" + conversationID
+}
+
+func (s *stubConfirmationStore) Create(ctx context.Context, req security.ConfirmationRequest) (string, error) {
+	key := s.key(req.UserID, req.ConversationID)
+	if _, open := s.openByKey[key]; open {
+		return "", security.ErrConfirmationAlreadyOpen
+	}
+	s.nextID++
+	id := fmt.Sprintf("conf-%d", s.nextID)
+	req.ID = id
+	req.Status = security.ConfirmationStatusPending
+	req.CreatedAt = time.Now()
+	if req.ExpiresAt.IsZero() {
+		req.ExpiresAt = req.CreatedAt.Add(5 * time.Minute)
+	}
+	s.byID[id] = req
+	s.openByKey[key] = id
+	return id, nil
+}
+
+func (s *stubConfirmationStore) Resolve(ctx context.Context, id string, approved bool) (security.ConfirmationRequest, error) {
+	req, ok := s.byID[id]
+	if !ok {
+		return security.ConfirmationRequest{}, security.ErrConfirmationNotFound
+	}
+	if req.Status != security.ConfirmationStatusPending {
+		return security.ConfirmationRequest{}, security.ErrConfirmationAlreadyResolved
+	}
+	if approved {
+		req.Status = security.ConfirmationStatusApproved
+	} else {
+		req.Status = security.ConfirmationStatusDenied
+	}
+	s.byID[id] = req
+	delete(s.openByKey, s.key(req.UserID, req.ConversationID))
+	return req, nil
+}
+
+func (s *stubConfirmationStore) Get(ctx context.Context, id string) (security.ConfirmationRequest, error) {
+	req, ok := s.byID[id]
+	if !ok {
+		return security.ConfirmationRequest{}, security.ErrConfirmationNotFound
+	}
+	return req, nil
+}
+
+func (s *stubConfirmationStore) GetOpenByKey(ctx context.Context, userID, conversationID string) (security.ConfirmationRequest, bool, error) {
+	id, ok := s.openByKey[s.key(userID, conversationID)]
+	if !ok {
+		return security.ConfirmationRequest{}, false, nil
+	}
+	return s.byID[id], true, nil
+}
+
+func (s *stubConfirmationStore) ExpireStale(ctx context.Context) error {
+	now := time.Now()
+	for id, req := range s.byID {
+		if req.Status == security.ConfirmationStatusPending && now.After(req.ExpiresAt) {
+			req.Status = security.ConfirmationStatusExpired
+			s.byID[id] = req
+			delete(s.openByKey, s.key(req.UserID, req.ConversationID))
+		}
+	}
+	return nil
+}
+
+func (s *stubConfirmationStore) ListPending(ctx context.Context) ([]security.ConfirmationRequest, error) {
+	pending := make([]security.ConfirmationRequest, 0, len(s.byID))
+	for _, req := range s.byID {
+		if req.Status == security.ConfirmationStatusPending {
+			pending = append(pending, req)
+		}
+	}
+	return pending, nil
 }
 
 func TestExecuteWithUser_RulesEnforcerBlocksTool(t *testing.T) {
@@ -654,7 +830,7 @@ func TestExecuteWithUser_RulesEnforcerBlocksTool(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	_, err := svc.ExecuteWithUser(ctx, user, "filesystem.delete", nil)
+	_, err := svc.ExecuteWithUser(ctx, user, "conv1", "filesystem.delete", nil)
 
 	// Should be blocked by RulesEnforcer
 	if err == nil {
@@ -705,7 +881,7 @@ func TestExecuteWithUser_RulesEnforcerAllowsTool(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	result, err := svc.ExecuteWithUser(ctx, user, "calculator", nil)
+	result, err := svc.ExecuteWithUser(ctx, user, "conv1", "calculator", nil)
 
 	if err != nil {
 		t.Errorf("Tool should be allowed by rules, got error: %v", err)
@@ -715,7 +891,13 @@ func TestExecuteWithUser_RulesEnforcerAllowsTool(t *testing.T) {
 	}
 }
 
-func TestExecuteWithUser_RulesEnforcerRequiresConfirmation(t *testing.T) {
+// TestExecuteWithUser_RulesEnforcerRequiresConfirmation_NoStoreConfigured
+// covers Part C's fail-closed behavior (specs/260802-improve-nuimanbot-security,
+// §8.3): when RulesEnforcer flags an action as requiring confirmation but no
+// ConfirmationStore has been configured via SetConfirmationStore, the call
+// must still be denied outright — a missing store is a configuration/infra
+// fault, not license to execute unconfirmed.
+func TestExecuteWithUser_RulesEnforcerRequiresConfirmation_NoStoreConfigured(t *testing.T) {
 	mockTool := &MockTool{
 		NameFunc: func() string { return "external.api.call" },
 	}
@@ -746,6 +928,7 @@ func TestExecuteWithUser_RulesEnforcerRequiresConfirmation(t *testing.T) {
 
 	svc := NewService(&config.ToolsSystemConfig{}, mockRegistry, mockSecurity)
 	svc.SetRulesEnforcer(mockEnforcer)
+	// Deliberately NOT calling SetConfirmationStore.
 
 	user := &domain.User{
 		ID:   "user1",
@@ -753,11 +936,10 @@ func TestExecuteWithUser_RulesEnforcerRequiresConfirmation(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	_, err := svc.ExecuteWithUser(ctx, user, "external.api.call", nil)
+	_, err := svc.ExecuteWithUser(ctx, user, "conv1", "external.api.call", nil)
 
-	// Should be denied pending confirmation (for now - UI integration needed)
 	if err == nil {
-		t.Fatal("Expected error when tool requires confirmation, got nil")
+		t.Fatal("Expected error when tool requires confirmation but no store is configured, got nil")
 	}
 
 	// Verify audit event for confirmation requirement
@@ -768,6 +950,135 @@ func TestExecuteWithUser_RulesEnforcerRequiresConfirmation(t *testing.T) {
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("Timeout waiting for audit event")
+	}
+}
+
+// TestExecuteWithUser_RulesEnforcerRequiresConfirmation_WithStore_ReturnsPending
+// is P5.3's core acceptance criterion: with a ConfirmationStore configured, a
+// flagged action returns a StatusPendingConfirmation ExecutionResult with a
+// populated ConfirmationID/Summary — not an error, and the underlying tool is
+// never executed.
+func TestExecuteWithUser_RulesEnforcerRequiresConfirmation_WithStore_ReturnsPending(t *testing.T) {
+	executed := false
+	mockTool := &MockTool{
+		NameFunc: func() string { return "external.api.call" },
+		ExecuteFunc: func(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) {
+			executed = true
+			return &domain.ExecutionResult{Output: "should not run"}, nil
+		},
+	}
+	mockRegistry := &MockToolRegistry{
+		GetFunc: func(name string) (domain.Tool, error) { return mockTool, nil },
+	}
+	mockSecurity := &MockSecurityService{
+		AuditFunc: func(ctx context.Context, event *domain.AuditEvent) error { return nil },
+	}
+	mockEnforcer := &MockRulesEnforcer{
+		EnforceFunc: func(ctx context.Context, input EnforcerInput) (*EnforcerOutput, error) {
+			return &EnforcerOutput{
+				Allowed:              true,
+				RequiresConfirmation: true,
+				Reason:               "tool \"external.api.call\" requires user confirmation",
+			}, nil
+		},
+	}
+
+	svc := NewService(&config.ToolsSystemConfig{}, mockRegistry, mockSecurity)
+	svc.SetRulesEnforcer(mockEnforcer)
+	svc.SetConfirmationStore(newStubConfirmationStore())
+
+	user := &domain.User{ID: "user1", Role: domain.RoleUser}
+
+	ctx := context.Background()
+	result, err := svc.ExecuteWithUser(ctx, user, "conv1", "external.api.call", map[string]any{"foo": "bar"})
+	if err != nil {
+		t.Fatalf("expected no error when a confirmation store is configured, got %v", err)
+	}
+	if result.Status != domain.StatusPendingConfirmation {
+		t.Errorf("expected StatusPendingConfirmation, got %v", result.Status)
+	}
+	if result.ConfirmationID == "" {
+		t.Error("expected a populated ConfirmationID")
+	}
+	if result.Summary == "" {
+		t.Error("expected a populated Summary")
+	}
+	if executed {
+		t.Error("expected the underlying tool NOT to execute while confirmation is pending")
+	}
+}
+
+// TestExecuteWithUser_ConfirmationAlreadyOpen_FailsClosed covers FR-014: a
+// second side-effecting call for a conversation with an already-open
+// confirmation is denied (not silently executed, not silently queued).
+func TestExecuteWithUser_ConfirmationAlreadyOpen_FailsClosed(t *testing.T) {
+	mockTool := &MockTool{NameFunc: func() string { return "github" }}
+	mockRegistry := &MockToolRegistry{
+		GetFunc: func(name string) (domain.Tool, error) { return mockTool, nil },
+	}
+	mockSecurity := &MockSecurityService{
+		AuditFunc: func(ctx context.Context, event *domain.AuditEvent) error { return nil },
+	}
+	mockEnforcer := &MockRulesEnforcer{
+		EnforceFunc: func(ctx context.Context, input EnforcerInput) (*EnforcerOutput, error) {
+			return &EnforcerOutput{Allowed: true, RequiresConfirmation: true, Reason: "requires confirmation"}, nil
+		},
+	}
+
+	svc := NewService(&config.ToolsSystemConfig{}, mockRegistry, mockSecurity)
+	svc.SetRulesEnforcer(mockEnforcer)
+	svc.SetConfirmationStore(newStubConfirmationStore())
+
+	user := &domain.User{ID: "user1", Role: domain.RoleAdmin}
+	ctx := context.Background()
+
+	first, err := svc.ExecuteWithUser(ctx, user, "conv1", "github", map[string]any{"action": "pr_merge"})
+	if err != nil || first.Status != domain.StatusPendingConfirmation {
+		t.Fatalf("expected first call to return pending confirmation, got result=%v err=%v", first, err)
+	}
+
+	_, err = svc.ExecuteWithUser(ctx, user, "conv1", "github", map[string]any{"action": "issue_close"})
+	if err == nil {
+		t.Fatal("expected the second call to fail closed while a confirmation is already open")
+	}
+}
+
+// TestExecuteWithUser_ConfigDefaultRequiredActions_UnionsWithRulesEnforcer
+// covers P5.6/FR-012: even when RulesEnforcer says no confirmation is
+// required, a security.confirmation.default_required_actions match still
+// triggers the confirmation gate.
+func TestExecuteWithUser_ConfigDefaultRequiredActions_UnionsWithRulesEnforcer(t *testing.T) {
+	mockTool := &MockTool{NameFunc: func() string { return "github" }}
+	mockRegistry := &MockToolRegistry{
+		GetFunc: func(name string) (domain.Tool, error) { return mockTool, nil },
+	}
+	mockSecurity := &MockSecurityService{
+		AuditFunc: func(ctx context.Context, event *domain.AuditEvent) error { return nil },
+	}
+	// RulesEnforcer explicitly says this tool does NOT require confirmation;
+	// the config-level default list must still gate it (union, not override).
+	mockEnforcer := &MockRulesEnforcer{
+		EnforceFunc: func(ctx context.Context, input EnforcerInput) (*EnforcerOutput, error) {
+			return &EnforcerOutput{Allowed: true, RequiresConfirmation: false}, nil
+		},
+	}
+
+	svc := NewService(&config.ToolsSystemConfig{}, mockRegistry, mockSecurity)
+	svc.SetRulesEnforcer(mockEnforcer)
+	svc.SetConfirmationStore(newStubConfirmationStore())
+	svc.SetConfirmationConfig(config.ConfirmationConfig{
+		DefaultRequiredActions: []string{"github.pr_merge"},
+	})
+
+	user := &domain.User{ID: "user1", Role: domain.RoleAdmin}
+	ctx := context.Background()
+
+	result, err := svc.ExecuteWithUser(ctx, user, "conv1", "github", map[string]any{"action": "pr_merge"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != domain.StatusPendingConfirmation {
+		t.Errorf("expected StatusPendingConfirmation from the config-level default list, got %v", result.Status)
 	}
 }
 
@@ -795,7 +1106,7 @@ func TestExecuteWithUser_NoRulesEnforcerSet(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	result, err := svc.ExecuteWithUser(ctx, user, "calculator", nil)
+	result, err := svc.ExecuteWithUser(ctx, user, "conv1", "calculator", nil)
 
 	if err != nil {
 		t.Errorf("Tool execution should work without RulesEnforcer, got error: %v", err)

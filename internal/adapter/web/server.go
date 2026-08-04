@@ -32,13 +32,14 @@ const (
 
 // Server represents the web admin server
 type Server struct {
-	addr           string
-	httpServer     *http.Server
-	templates      *template.Template
-	auth           *AuthService
-	loginLimiter   *loginRateLimiterStore
-	profileService ProfileService
-	botService     BotService
+	addr                string
+	httpServer          *http.Server
+	templates           *template.Template
+	auth                *AuthService
+	loginLimiter        *loginRateLimiterStore
+	profileService      ProfileService
+	botService          BotService
+	confirmationService ConfirmationService
 }
 
 // NewServer creates a new web admin server
@@ -143,6 +144,26 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.Handle("/admin/llm", adminHandler(s.handleLLMConfig))
 	mux.Handle("/admin/config", adminHandler(s.handleServerConfig))
 	mux.Handle("/admin/logs", adminHandler(s.handleLogs))
+
+	// Confirmation routes (Part C, P5.8): RoleUser is sufficient here — access
+	// is scoped to the requesting user's own pending confirmations, with
+	// RoleAdmin additionally able to see/resolve everyone's (enforced inside
+	// the handlers, not by this route-level role check).
+	confirmationHandler := func(h http.HandlerFunc) http.Handler {
+		return s.requireRole(domain.RoleUser)(s.requirePasswordChange(h))
+	}
+	mux.Handle("/admin/confirmations", confirmationHandler(s.handleConfirmations))
+	mux.Handle("/admin/confirmations/", confirmationHandler(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/approve"):
+			s.handleConfirmationApprove(w, r)
+		case strings.HasSuffix(r.URL.Path, "/deny"):
+			s.handleConfirmationDeny(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+
 	mux.Handle("/admin/", adminHandler(s.handleAdminIndex))
 }
 

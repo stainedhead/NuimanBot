@@ -241,12 +241,18 @@ func TestPersonaIntegration_TokenBudgetTruncation(t *testing.T) {
 		}
 	}
 
-	// Compose with strict token budget
+	// Compose with strict token budget. MaxTotal is 300 rather than the
+	// pre-Phase-2 200: PromptComposer.Compose() now always prepends a fixed,
+	// non-truncatable prompt-boundary guardrail (~90 tokens, FR-007,
+	// specs/260802-improve-nuimanbot-security), so a 200-token total budget
+	// no longer leaves enough headroom for the token-estimation heuristic's
+	// rounding margin. 300 still forces truncation (asserted below) while
+	// accommodating the fixed guardrail overhead.
 	composer := personausecase.NewPromptComposer(
 		repo,
 		"",
 		personausecase.WithTokenBudget(personausecase.TokenBudget{
-			MaxTotal:   200, // Very low to force truncation
+			MaxTotal:   300, // Low enough to force truncation, high enough for guardrail overhead
 			MaxPerFile: 100,
 		}),
 	)
@@ -274,8 +280,8 @@ func TestPersonaIntegration_TokenBudgetTruncation(t *testing.T) {
 	}
 
 	// Verify total tokens under budget
-	if output.TokensUsed > 200 {
-		t.Errorf("Token budget exceeded: %d > 200", output.TokensUsed)
+	if output.TokensUsed > 300 {
+		t.Errorf("Token budget exceeded: %d > 300", output.TokensUsed)
 	}
 
 	t.Logf("✓ Token budget truncation test passed")

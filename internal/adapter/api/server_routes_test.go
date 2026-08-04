@@ -23,7 +23,7 @@ func buildSrvConfig(apiKey string) config.ExternalAPIRestConfig {
 
 // TestNewServer_HealthEndpoint exercises the health route registered in NewServer.
 func TestNewServer_HealthEndpoint(t *testing.T) {
-	srv, err := NewServer(buildSrvConfig("key"), strings.Repeat("x", 32))
+	srv, err := NewServer(buildSrvConfig("key"), strings.Repeat("x", 32), nil, nil)
 	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
@@ -37,7 +37,7 @@ func TestNewServer_HealthEndpoint(t *testing.T) {
 // TestNewServer_AuthEndpointRegistered exercises the auth token route.
 func TestNewServer_AuthEndpointRegistered(t *testing.T) {
 	const apiKey = "my-api-key-for-test"
-	srv, err := NewServer(buildSrvConfig(apiKey), strings.Repeat("y", 32))
+	srv, err := NewServer(buildSrvConfig(apiKey), strings.Repeat("y", 32), nil, nil)
 	require.NoError(t, err)
 
 	body := `{"api_key":"` + apiKey + `"}`
@@ -52,7 +52,7 @@ func TestNewServer_AuthEndpointRegistered(t *testing.T) {
 
 // TestNewServer_ProtectedRouteWithoutJWT_Returns401 exercises the protected route middleware chain.
 func TestNewServer_ProtectedRouteWithoutJWT_Returns401(t *testing.T) {
-	srv, err := NewServer(buildSrvConfig("key"), strings.Repeat("z", 32))
+	srv, err := NewServer(buildSrvConfig("key"), strings.Repeat("z", 32), nil, nil)
 	require.NoError(t, err)
 
 	// Accessing a protected route without a JWT should return 401.

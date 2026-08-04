@@ -36,7 +36,8 @@ func startTestAPIServer(t *testing.T) string {
 		APIKey:  domain.NewSecureStringFromString(testAPIKey),
 	}
 
-	srv := api.NewServer(cfg, testJWTSecret)
+	srv, err := api.NewServer(cfg, testJWTSecret, nil, nil)
+	require.NoError(t, err)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)

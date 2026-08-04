@@ -1,6 +1,11 @@
 package config
 
-import "nuimanbot/internal/domain"
+import (
+	"strings"
+	"time"
+
+	"nuimanbot/internal/domain"
+)
 
 // ServerConfig holds server-related configuration.
 type ServerConfig struct {
@@ -11,10 +16,157 @@ type ServerConfig struct {
 
 // SecurityConfig holds security-related configuration.
 type SecurityConfig struct {
-	InputMaxLength     int    `yaml:"input_max_length"`
-	TokenRotationHours int    `yaml:"token_rotation_hours"`
-	VaultPath          string `yaml:"vault_path"`
-	EncryptionKey      string `yaml:"encryption_key"`
+	InputMaxLength       int                        `yaml:"input_max_length"`
+	TokenRotationHours   int                        `yaml:"token_rotation_hours"`
+	VaultPath            string                     `yaml:"vault_path"`
+	EncryptionKey        string                     `yaml:"encryption_key"`
+	ToolOutputValidation ToolOutputValidationConfig `yaml:"tool_output_validation"`
+	Fetch                FetchSecurityConfig        `yaml:"fetch"`
+	Confirmation         ConfirmationConfig         `yaml:"confirmation"`
+}
+
+// ConfirmationConfig configures Part C's side-effecting-action confirmation
+// gate (specs/260802-improve-nuimanbot-security, FR-012, FR-015). See
+// internal/usecase/security.ConfirmationStore and
+// internal/usecase/tool.Service, which the cmd/nuimanbot DI wiring drives
+// from this config (config intentionally has no dependency on the usecase
+// layer's security/tool packages).
+type ConfirmationConfig struct {
+	// Enabled activates the confirmation subsystem. A nil pointer (the
+	// config key omitted) defaults to true — see IsEnabled. When disabled, a
+	// tool/action that would otherwise require confirmation is denied
+	// outright instead — disabling this subsystem never means "skip
+	// confirmation and execute unconfirmed" (fail-closed default, matching
+	// the security NFR in specs/260802-improve-nuimanbot-security/spec.md).
+	Enabled *bool `yaml:"enabled"`
+	// Timeout is how long an unresolved confirmation remains open before it
+	// is treated as expired/denied (FR-015), as a duration string (e.g.
+	// "5m"). Empty or unparseable resolves to DefaultConfirmationTimeout.
+	Timeout string `yaml:"timeout"`
+	// DefaultRequiredActions lists tool/action pairs that require
+	// confirmation by default, formatted as "<tool>.<action>" (e.g.
+	// "github.pr_merge") or, for tools with no action concept, just
+	// "<tool>". Unioned with any per-user RULES.md requires_confirmation
+	// entries (FR-012) — this list is never a replacement for RULES.md, only
+	// an additional, deployment-wide floor.
+	DefaultRequiredActions []string `yaml:"default_required_actions"`
+}
+
+// DefaultConfirmationTimeout is the fallback applied when Timeout is empty
+// or fails to parse as a time.Duration.
+const DefaultConfirmationTimeout = 5 * time.Minute
+
+// IsEnabled reports whether the confirmation subsystem is active. Unset
+// (nil) defaults to true (fail-closed / secure-by-default); only an explicit
+// `enabled: false` disables it.
+func (c ConfirmationConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
+}
+
+// ResolvedTimeout parses Timeout as a time.Duration, defaulting to
+// DefaultConfirmationTimeout for an empty or unparseable value.
+func (c ConfirmationConfig) ResolvedTimeout() time.Duration {
+	if c.Timeout == "" {
+		return DefaultConfirmationTimeout
+	}
+	d, err := time.ParseDuration(c.Timeout)
+	if err != nil || d <= 0 {
+		return DefaultConfirmationTimeout
+	}
+	return d
+}
+
+// RequiresConfirmationByDefault reports whether toolName/action (action may
+// be empty for tools with no action concept) appears in
+// DefaultRequiredActions, matched case-insensitively against
+// "<toolName>.<action>" (or bare "<toolName>" when action is empty).
+// Returns false whenever the confirmation subsystem is disabled (IsEnabled
+// == false), since a disabled subsystem must never be interpreted as "no
+// action requires confirmation, so proceed" versus "confirmation isn't
+// available, so this specific gate is inert" — callers combine this with
+// RulesEnforcer output and are responsible for failing closed overall when
+// disabled but a RulesEnforcer-driven confirmation was still requested.
+func (c ConfirmationConfig) RequiresConfirmationByDefault(toolName, action string) bool {
+	if !c.IsEnabled() {
+		return false
+	}
+	key := toolName
+	if action != "" {
+		key = toolName + "." + action
+	}
+	for _, configured := range c.DefaultRequiredActions {
+		if strings.EqualFold(strings.TrimSpace(configured), key) {
+			return true
+		}
+	}
+	return false
+}
+
+// FetchSecurityConfig configures SSRF protection for the tools that fetch
+// third-party-controlled URLs (summarize, doc_summarize). See
+// internal/usecase/tool/common.ValidateFetchURL, which the cmd/nuimanbot DI
+// wiring drives from this config (config intentionally has no dependency on
+// the usecase layer's tool/common package).
+type FetchSecurityConfig struct {
+	// SSRFProtection activates IP-resolution-based validation of fetch
+	// targets — on the initial request and on every redirect hop — rejecting
+	// loopback, RFC 1918 private, link-local (including cloud metadata), and
+	// multicast/reserved ranges. A nil pointer (the config key omitted)
+	// defaults to true — see SSRFProtectionEnabled. Fail-closed default per
+	// the security NFR in specs/260802-improve-nuimanbot-security/spec.md.
+	SSRFProtection *bool `yaml:"ssrf_protection"`
+	// FollowRedirects controls whether the fetch HTTP clients follow HTTP
+	// redirects at all. A nil pointer defaults to true. When explicitly set
+	// to false, redirects are not followed: the 3xx response is returned to
+	// the caller as-is rather than being validated and followed.
+	FollowRedirects *bool `yaml:"follow_redirects"`
+}
+
+// SSRFProtectionEnabled reports whether SSRF validation is active. Unset
+// (nil) defaults to true (fail-closed / secure-by-default); only an explicit
+// `ssrf_protection: false` disables it.
+func (c FetchSecurityConfig) SSRFProtectionEnabled() bool {
+	return c.SSRFProtection == nil || *c.SSRFProtection
+}
+
+// FollowRedirectsEnabled reports whether the fetch HTTP clients follow
+// redirects. Unset (nil) defaults to true; only an explicit
+// `follow_redirects: false` disables redirect-following.
+func (c FetchSecurityConfig) FollowRedirectsEnabled() bool {
+	return c.FollowRedirects == nil || *c.FollowRedirects
+}
+
+// ToolOutputValidationConfig configures how third-party tool output (fetched web
+// pages, search results, MCP responses) is scanned for prompt-injection patterns
+// before it re-enters the LLM's conversation loop. See
+// internal/usecase/security.OutputValidator, which the cmd/nuimanbot DI wiring
+// constructs from this config (config intentionally has no dependency on the
+// usecase layer's security package).
+type ToolOutputValidationConfig struct {
+	// Enabled activates tool-output injection scanning. A nil pointer (the
+	// config key omitted) defaults to true — see IsEnabled. Fail-closed default
+	// per the security NFR in specs/260802-improve-nuimanbot-security/spec.md.
+	Enabled *bool `yaml:"enabled"`
+	// Action is "reject" (default, fail closed) or "annotate" (pass flagged
+	// content through wrapped with a visible warning marker instead of failing
+	// the tool call). Any other/empty value resolves to "reject".
+	Action string `yaml:"action"`
+}
+
+// IsEnabled reports whether tool-output validation is active. Unset (nil)
+// defaults to true (fail-closed / secure-by-default); only an explicit
+// `enabled: false` disables it.
+func (c ToolOutputValidationConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
+}
+
+// ResolvedAction returns the configured action ("reject" or "annotate"),
+// defaulting to "reject" for any unset or unrecognized value (fail closed).
+func (c ToolOutputValidationConfig) ResolvedAction() string {
+	if c.Action == "annotate" {
+		return "annotate"
+	}
+	return "reject"
 }
 
 // LLMProviderConfig configures a specific LLM provider instance.
@@ -122,7 +274,20 @@ type ToolConfig struct {
 // ToolsSystemConfig defines global settings for the tool system.
 type ToolsSystemConfig struct {
 	Entries map[string]ToolConfig `yaml:"entries"`
-	Load    struct {
+	// Permissions is a per-tool override of the code-level ToolPermissions
+	// defaults (internal/usecase/tool/permissions.go), keyed by tool name and
+	// valued by role string ("guest" | "user" | "admin", case-insensitive).
+	// When set for a tool, it applies uniformly to that tool's permission
+	// check (including overriding github's action-aware read/write split),
+	// letting an operator adjust RBAC without a code change — e.g.
+	// `tools.permissions.github: user` reverts Phase 3's admin-only
+	// github-write default for a deployment that relied on the old
+	// permissive behavior (see FR-018a,
+	// specs/260802-improve-nuimanbot-security/spec.md). An unrecognized role
+	// string is ignored (falls back to the next precedence level) rather
+	// than silently granting or denying access.
+	Permissions map[string]string `yaml:"permissions"`
+	Load        struct {
 		ExtraDirs []string `yaml:"extra_dirs"`
 		Watch     bool     `yaml:"watch"`
 	} `yaml:"load"`

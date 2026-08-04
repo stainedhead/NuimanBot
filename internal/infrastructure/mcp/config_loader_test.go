@@ -217,6 +217,146 @@ func TestLoadMCPConfig_EmptyServers(t *testing.T) {
 	}
 }
 
+// --- Trust classification (Phase 6 / Part F, P6.1) ---
+
+func TestLoadMCPConfig_TrustDefaultsToUnknown(t *testing.T) {
+	data := `{
+		"servers": [
+			{
+				"name": "no-trust-server",
+				"transport": "http",
+				"url": "https://example.com/mcp"
+			}
+		]
+	}`
+	path := writeTempFile(t, data)
+
+	cfg, err := LoadMCPConfig(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Servers[0].Trust != TrustUnknown {
+		t.Errorf("expected Trust to default to %q, got %q", TrustUnknown, cfg.Servers[0].Trust)
+	}
+}
+
+func TestLoadMCPConfig_TrustExplicitValue(t *testing.T) {
+	data := `{
+		"servers": [
+			{
+				"name": "write-server",
+				"transport": "http",
+				"url": "https://example.com/mcp",
+				"trust": "write"
+			}
+		]
+	}`
+	path := writeTempFile(t, data)
+
+	cfg, err := LoadMCPConfig(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Servers[0].Trust != TrustWrite {
+		t.Errorf("expected Trust %q, got %q", TrustWrite, cfg.Servers[0].Trust)
+	}
+}
+
+func TestLoadMCPConfig_TrustReadOnlyValue_CaseInsensitiveAndTrimmed(t *testing.T) {
+	data := `{
+		"servers": [
+			{
+				"name": "readonly-server",
+				"transport": "http",
+				"url": "https://example.com/mcp",
+				"trust": "  Read_Only  "
+			}
+		]
+	}`
+	path := writeTempFile(t, data)
+
+	cfg, err := LoadMCPConfig(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Servers[0].Trust != TrustReadOnly {
+		t.Errorf("expected Trust %q, got %q", TrustReadOnly, cfg.Servers[0].Trust)
+	}
+}
+
+func TestLoadMCPConfig_InvalidTrustValue_FailsClosedToUnknownWithoutError(t *testing.T) {
+	data := `{
+		"servers": [
+			{
+				"name": "typo-server",
+				"transport": "http",
+				"url": "https://example.com/mcp",
+				"trust": "totally-bogus"
+			}
+		]
+	}`
+	path := writeTempFile(t, data)
+
+	cfg, err := LoadMCPConfig(path)
+	if err != nil {
+		t.Fatalf("an invalid trust value must not fail config loading / abort startup, got error: %v", err)
+	}
+	if cfg.Servers[0].Trust != TrustUnknown {
+		t.Errorf("expected invalid trust value to fail closed to %q, got %q", TrustUnknown, cfg.Servers[0].Trust)
+	}
+}
+
+func TestLoadMCPConfig_ToolOverrides_ParsedAndNormalized(t *testing.T) {
+	data := `{
+		"servers": [
+			{
+				"name": "github-mcp",
+				"transport": "http",
+				"url": "https://example.com/mcp",
+				"trust": "unknown",
+				"tool_overrides": {
+					"issue_list": "read_only",
+					"pr_merge": "WRITE",
+					"weird_tool": "not-a-real-value"
+				}
+			}
+		]
+	}`
+	path := writeTempFile(t, data)
+
+	cfg, err := LoadMCPConfig(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	overrides := cfg.Servers[0].ToolOverrides
+	if overrides["issue_list"] != TrustReadOnly {
+		t.Errorf("expected issue_list override %q, got %q", TrustReadOnly, overrides["issue_list"])
+	}
+	if overrides["pr_merge"] != TrustWrite {
+		t.Errorf("expected pr_merge override %q (case-insensitive), got %q", TrustWrite, overrides["pr_merge"])
+	}
+	if overrides["weird_tool"] != TrustUnknown {
+		t.Errorf("expected an invalid override value to fail closed to %q, got %q", TrustUnknown, overrides["weird_tool"])
+	}
+}
+
+func TestResolvedToolTrust_OverridePrecedence(t *testing.T) {
+	entry := MCPServerEntry{
+		Name:  "github-mcp",
+		Trust: TrustReadOnly,
+		ToolOverrides: map[string]string{
+			"pr_merge": TrustWrite,
+		},
+	}
+
+	if got := ResolvedToolTrust(entry, "pr_merge"); got != TrustWrite {
+		t.Errorf("expected tool_overrides entry to take precedence, got %q", got)
+	}
+	if got := ResolvedToolTrust(entry, "issue_list"); got != TrustReadOnly {
+		t.Errorf("expected server default for a tool with no override, got %q", got)
+	}
+}
+
 func TestLoadMCPConfig_FileNotFound(t *testing.T) {
 	_, err := LoadMCPConfig("/nonexistent/path/mcp.json")
 	if err == nil {

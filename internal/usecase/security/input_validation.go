@@ -11,12 +11,9 @@ import (
 
 // DefaultInputValidator implements the InputValidator interface.
 type DefaultInputValidator struct {
-	// Pre-allocated patterns for prompt injection detection
-	jailbreakPatterns  []string
-	rolePatterns       []string
-	disclosurePatterns []string
-	outputPatterns     []string
-	promptPatterns     []string // Combined patterns for prompt injection
+	// Pre-combined prompt injection patterns, shared with DefaultOutputValidator
+	// via detectPromptInjectionPatterns (see prompt_injection_patterns.go).
+	promptPatterns []string
 
 	// Pre-allocated patterns for command injection detection
 	metacharacters    []string
@@ -28,61 +25,8 @@ type DefaultInputValidator struct {
 func NewDefaultInputValidator() *DefaultInputValidator {
 	v := &DefaultInputValidator{}
 
-	// Initialize prompt injection patterns once
-	v.jailbreakPatterns = []string{
-		"ignore previous instructions",
-		"ignore all previous",
-		"disregard previous",
-		"forget previous",
-		"new instructions:",
-		"system override",
-		"reset instructions",
-		"clear instructions",
-		"override previous",
-	}
-
-	v.rolePatterns = []string{
-		"you are now",
-		"act as if you are",
-		"pretend you are",
-		"as an ai model",
-		"you must now",
-		"from now on",
-		"act as",
-		"behave as",
-		"roleplay as",
-	}
-
-	v.disclosurePatterns = []string{
-		"reveal your prompt",
-		"show your instructions",
-		"what are your rules",
-		"repeat your system prompt",
-		"tell me your guidelines",
-		"print your configuration",
-		"show your system prompt",
-		"repeat your instructions",
-		"what is your system message",
-		"show me your prompt",
-	}
-
-	v.outputPatterns = []string{
-		"output raw",
-		"return unfiltered",
-		"bypass filter",
-		"skip validation",
-		"ignore safety",
-		"disable safety",
-		"without filter",
-		"unfiltered response",
-	}
-
-	// Pre-combine all prompt patterns for faster lookup
-	v.promptPatterns = make([]string, 0, len(v.jailbreakPatterns)+len(v.rolePatterns)+len(v.disclosurePatterns)+len(v.outputPatterns))
-	v.promptPatterns = append(v.promptPatterns, v.jailbreakPatterns...)
-	v.promptPatterns = append(v.promptPatterns, v.rolePatterns...)
-	v.promptPatterns = append(v.promptPatterns, v.disclosurePatterns...)
-	v.promptPatterns = append(v.promptPatterns, v.outputPatterns...)
+	// Initialize prompt injection patterns once, from the shared pattern set.
+	v.promptPatterns = defaultPromptInjectionPatterns().all()
 
 	// Initialize command injection patterns once
 	v.metacharacters = []string{
@@ -182,17 +126,11 @@ func (v *DefaultInputValidator) ValidateInput(ctx context.Context, input string,
 
 // detectPromptInjection detects prompt injection patterns using comprehensive keyword matching.
 // This implementation uses pattern matching for common jailbreak and manipulation attempts.
+// It delegates to the shared detectPromptInjectionPatterns helper (see
+// prompt_injection_patterns.go), which also backs DefaultOutputValidator.
 func (v *DefaultInputValidator) detectPromptInjection(input string) bool {
-	lowerInput := strings.ToLower(input)
-
-	// Check pre-allocated combined patterns
-	for _, pattern := range v.promptPatterns {
-		if strings.Contains(lowerInput, pattern) {
-			return true
-		}
-	}
-
-	return false
+	flagged, _ := detectPromptInjectionPatterns(v.promptPatterns, input)
+	return flagged
 }
 
 // detectCommandInjection detects command injection patterns using comprehensive checks

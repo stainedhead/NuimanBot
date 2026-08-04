@@ -1,7 +1,7 @@
 # NuimanBot Configuration Reference
 
-**Version:** 1.0
-**Last Updated:** 2026-02-08
+**Version:** 1.1
+**Last Updated:** 2026-08-03
 **Configuration Format:** YAML
 
 ---
@@ -215,6 +215,65 @@ security:
 **Description:** Path to encrypted credential vault file.
 
 **Environment Variable:** `NUIMANBOT_SECURITY_VAULT_PATH`
+
+#### `security.tool_output_validation`
+
+**Type:** object
+**Description:** Scans content fetched by tools (web pages, search results, MCP responses) for prompt-injection patterns before it reaches the LLM. See the [Security Hardening Guide](security-hardening-guide.md) for background.
+
+**Subfields:**
+- `enabled` (boolean): Enables tool-output injection scanning. Omitted/unset defaults to `true` (fail-closed/secure-by-default) — only an explicit `false` disables it.
+- `action` (string): `reject` (default) fails the tool call when flagged content is detected; `annotate` passes the content through wrapped with a visible `[SECURITY WARNING: possible injected instructions detected]` marker instead of failing.
+
+**Examples:**
+```yaml
+security:
+  tool_output_validation:
+    enabled: true
+    action: reject
+```
+
+#### `security.confirmation`
+
+**Type:** object
+**Description:** Configures the side-effecting-action confirmation gate — certain tool actions (GitHub PR merges, issue create/close, `coding_agent` yolo mode, write/unknown-trust MCP tools) pause and require explicit human yes/no approval before executing. See the [Security Hardening Guide](security-hardening-guide.md) for the user-facing behavior.
+
+**Subfields:**
+- `enabled` (boolean): Activates the confirmation subsystem. Omitted/unset defaults to `true`. Disabling this does **not** mean gated actions run unconfirmed — a `RULES.md`-driven confirmation requirement is still denied, not silently allowed, when this is `false`.
+- `timeout` (string): Duration string (e.g. `"5m"`, `"90s"`) for how long an unresolved confirmation stays open before it expires and is treated as denied. Empty or unparseable resolves to the default.
+- `default_required_actions` (array of strings): Tool/action pairs requiring confirmation by default, formatted `"<tool>.<action>"` (e.g. `"github.pr_merge"`) or a bare `"<tool>"` for tools with no action concept. Unioned with (not a replacement for) any per-user `RULES.md` `requires_confirmation` entries.
+
+**Default:** `timeout: "5m"`
+
+**Examples:**
+```yaml
+security:
+  confirmation:
+    enabled: true
+    timeout: "5m"
+    default_required_actions:
+      - "github.pr_merge"
+      - "github.issue_close"
+      - "github.issue_create"
+      - "coding_agent.yolo_mode"
+```
+
+#### `security.fetch`
+
+**Type:** object
+**Description:** Configures SSRF (Server-Side Request Forgery) protection for tools that fetch third-party URLs (`summarize`, `doc_summarize`).
+
+**Subfields:**
+- `ssrf_protection` (boolean): Rejects fetch targets that resolve to loopback, RFC 1918 private, link-local (including cloud metadata addresses like `169.254.169.254`), or multicast/reserved IP ranges, on both the initial request and every redirect hop. Omitted/unset defaults to `true`.
+- `follow_redirects` (boolean): Whether the fetch tools follow HTTP redirects at all. Omitted/unset defaults to `true`. Setting to `false` returns the 3xx response as-is instead of following it (restores Go's stock, non-SSRF-aware default redirect policy rather than a custom one).
+
+**Examples:**
+```yaml
+security:
+  fetch:
+    ssrf_protection: true
+    follow_redirects: true
+```
 
 ### Encryption Key (Required)
 
@@ -572,6 +631,30 @@ tools:
 
 User note-taking functionality.
 
+#### `tools.permissions`
+
+**Type:** object (map of tool name to role)
+**Description:** Overrides the default RBAC role required to execute a specific tool, without a code change. Applies at whole-tool granularity (all of that tool's actions), taking precedence over both the built-in action-aware split (e.g. `github`'s read/write distinction) and the static default role table.
+
+**Breaking change note:** `github` and `coding_agent` require the `admin` role by default as of the security-hardening update (previously they fell through to the general `user` default). Use this section to revert that for a specific deployment, or grant affected users the Admin role instead.
+
+**Valid values:** `guest`, `user`, `admin` (case-insensitive, whitespace-trimmed). An unrecognized value is logged as a warning and ignored — it falls through to the built-in default rather than silently granting or denying access.
+
+**Environment Variables:**
+```bash
+export NUIMANBOT_TOOLS_PERMISSIONS_GITHUB=user
+```
+
+**Examples:**
+```yaml
+tools:
+  permissions:
+    github: user          # revert github to the pre-hardening default
+    coding_agent: admin    # explicit (already the default)
+```
+
+See the [Security Hardening Guide](security-hardening-guide.md) for full context.
+
 ---
 
 ## Skills Configuration
@@ -656,6 +739,51 @@ mcp:
 
 **Format:** Duration string (e.g., "30s", "1m", "500ms")
 
+### Per-Server Trust Classification (`mcp.json`)
+
+MCP server definitions (tokens, transport, URL/command) live in a separate
+`mcp.json` file, not `config.yaml` — see `mcp.client.timeout` above for the
+one MCP-related setting that does live in `config.yaml`. Each server entry in
+`mcp.json` supports an optional `trust` field and `tool_overrides` map, used
+to determine RBAC role and confirmation requirements for that server's tools
+under the dynamic `mcp:<server>:<tool>` namespace (built-in tools use
+`tools.permissions` instead — see [Tools Configuration](#tools-configuration)).
+
+#### `trust`
+
+**Type:** string
+**Options:** `read_only`, `write`, `unknown`
+**Default:** `unknown` (omitted or any unrecognized value normalizes to this)
+**Description:** Classifies this server's tools overall. `read_only` tools are available to regular users with no confirmation required. `write` and `unknown` tools are permission-checked as admin-only and require confirmation before executing — `unknown` exists specifically as the safe default for a server you haven't explicitly classified, so it is treated identically to `write`, not as a looser third tier.
+
+#### `tool_overrides`
+
+**Type:** object (map of tool name to trust level)
+**Description:** Sets a per-tool trust exception overriding the server-wide `trust` value for one specific tool reported by that server (same `read_only`/`write`/`unknown` values and normalization rules as `trust`).
+
+**Known limitation:** the map key is the tool name exactly as the MCP server self-reports it via `tools/list` — NuimanBot cannot independently verify that this name refers to the tool the operator actually intended. If you use `tool_overrides` to grant a specific MCP tool `read_only` trust, only do so for MCP servers you fully trust to correctly and honestly name their tools — a malicious server could exploit an override meant for a different tool by registering its own write-capable tool under that same name. The server-wide `trust` default (used when no `tool_overrides` entry matches) is unaffected by this, since it applies uniformly regardless of tool name.
+
+**Example `mcp.json` entry:**
+```json
+{
+  "servers": [
+    {
+      "name": "my-mcp-server",
+      "transport": "http",
+      "url": "https://mcp.example.com",
+      "trust": "read_only",
+      "tool_overrides": {
+        "delete_record": "write"
+      }
+    }
+  ]
+}
+```
+
+A malformed/unrecognized `trust` or `tool_overrides` value is logged as a
+warning and normalized to `unknown` — it never fails startup and never
+silently resolves to a looser classification.
+
 ---
 
 ## Environment Variables
@@ -683,6 +811,12 @@ mcp:
 |----------|---------|-------------|
 | `NUIMANBOT_SECURITY_INPUT_MAX_LENGTH` | 4096 | Max input length |
 | `NUIMANBOT_SECURITY_VAULT_PATH` | ./data/vault.enc | Vault file path |
+| `NUIMANBOT_SECURITY_TOOL_OUTPUT_VALIDATION_ENABLED` | true | Enable tool-output injection scanning |
+| `NUIMANBOT_SECURITY_TOOL_OUTPUT_VALIDATION_ACTION` | reject | `reject` or `annotate` flagged tool output |
+| `NUIMANBOT_SECURITY_CONFIRMATION_ENABLED` | true | Enable side-effecting-action confirmation gate |
+| `NUIMANBOT_SECURITY_CONFIRMATION_TIMEOUT` | 5m | Confirmation expiry (auto-denied after) |
+| `NUIMANBOT_SECURITY_FETCH_SSRF_PROTECTION` | true | Enable SSRF protection on fetch tools |
+| `NUIMANBOT_SECURITY_FETCH_FOLLOW_REDIRECTS` | true | Follow (validated) redirects on fetch tools |
 
 ### Storage
 
@@ -993,6 +1127,6 @@ curl -X POST http://localhost:8080/api/v1/admin/config/reload \
 
 ---
 
-**Document Version:** 1.0
-**Last Updated:** 2026-02-08
+**Document Version:** 1.1
+**Last Updated:** 2026-08-03
 **Maintainer:** NuimanBot Development Team

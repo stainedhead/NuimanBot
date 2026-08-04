@@ -18,9 +18,9 @@ import (
 //
 // Tool name collisions (an "mcp:<server>:<tool>" name already registered) are
 // logged as warnings and the duplicate tool is not re-registered.
-func BuildMCPTools(ctx context.Context, cfg infra.MCPConfig, registry tool.ToolRegistry) error {
+func BuildMCPTools(ctx context.Context, cfg infra.MCPConfig, registry tool.ToolRegistry, opts ...AdapterOption) error {
 	for _, entry := range cfg.Servers {
-		if err := connectAndRegisterServer(ctx, entry, registry); err != nil {
+		if err := connectAndRegisterServer(ctx, entry, registry, opts...); err != nil {
 			// Log but do not abort — misconfigured servers must not prevent startup.
 			slog.Warn("mcp: skipping server due to error",
 				"server", entry.Name,
@@ -34,7 +34,7 @@ func BuildMCPTools(ctx context.Context, cfg infra.MCPConfig, registry tool.ToolR
 // connectAndRegisterServer initializes a single MCP server and registers its
 // tools.  It returns an error when the server cannot be initialized or its tool
 // list cannot be fetched.
-func connectAndRegisterServer(ctx context.Context, entry infra.MCPServerEntry, registry tool.ToolRegistry) error {
+func connectAndRegisterServer(ctx context.Context, entry infra.MCPServerEntry, registry tool.ToolRegistry, opts ...AdapterOption) error {
 	transport, err := buildTransport(entry)
 	if err != nil {
 		return err
@@ -54,7 +54,19 @@ func connectAndRegisterServer(ctx context.Context, entry infra.MCPServerEntry, r
 
 	registered := 0
 	for _, t := range tools {
-		adapter := NewMCPToolAdapter(client, t, entry.Name)
+		// Resolve this specific tool's trust classification (Phase 6 / Part
+		// F, FR-022/FR-023): the server's mcp.json "trust" default,
+		// overridden by "tool_overrides" when entry.ToolOverrides has an
+		// entry for t.Name. Build a fresh option slice per tool rather than
+		// appending to the shared `opts` parameter directly — appending to a
+		// slice reused across loop iterations risks silently overwriting a
+		// previous iteration's trailing element if `opts`'s backing array has
+		// spare capacity.
+		toolOpts := make([]AdapterOption, 0, len(opts)+1)
+		toolOpts = append(toolOpts, opts...)
+		toolOpts = append(toolOpts, WithTrustLevel(infra.ResolvedToolTrust(entry, t.Name)))
+
+		adapter := NewMCPToolAdapter(client, t, entry.Name, toolOpts...)
 		if regErr := registry.Register(adapter); regErr != nil {
 			slog.Warn("mcp: skipping tool due to registration conflict",
 				"server", entry.Name,

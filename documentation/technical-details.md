@@ -1,7 +1,7 @@
 # NuimanBot Technical Documentation
 
-**Version:** 1.1
-**Last Updated:** 2026-03-22
+**Version:** 1.2
+**Last Updated:** 2026-08-02
 **Completion Status:** 100% Complete
 **CI/CD Status:** ✅ All Pipelines Passing
 
@@ -156,43 +156,73 @@ func (s *Service) SummarizeConversation(
 
 **Responsibilities:**
 - Tool registration and discovery
-- RBAC enforcement (role-based access control)
+- RBAC enforcement (role-based access control) — see the live-chat caveat below
+- Side-effecting action confirmation gating (Part C)
 - Rate limiting integration
 - Tool execution with timeout
-- Audit logging
+- Audit logging, including `injection_flagged`/`matched_patterns` when tool output is flagged by `OutputValidator`
 
-**RBAC Model:**
+**RBAC Model** (`internal/usecase/tool/permissions.go`):
 ```go
-type Role string
+type Role string // defined in internal/domain
 
 const (
-    RoleGuest Role = "guest"  // Limited access, unauthenticated users
-    RoleUser  Role = "user"   // Standard access, registered users
-    RoleAdmin Role = "admin"  // Full access, administrators
+    RoleGuest Role = "guest"  // No auth required
+    RoleUser  Role = "user"   // Registered users
+    RoleAdmin Role = "admin"  // Administrators
 )
 
-// ToolPermissions maps tool names to the minimum role required to execute them.
-// Tools not in this map default to requiring RoleUser.
-var ToolPermissions = map[string]Role{
-    "calculator": RoleGuest,
-    "datetime":   RoleGuest,
-    "weather":    RoleUser,
-    "web_search": RoleUser,
-    "notes":      RoleUser,
-    "admin.user": RoleAdmin,
+// ToolPermissions is an explicit, CI-guarded entry for every registered
+// tool (internal/usecase/tool/permissions_test.go fails the build if any
+// registered tool has no entry here). Excerpt:
+var ToolPermissions = map[string]domain.Role{
+    "calculator":    domain.RoleGuest,
+    "datetime":      domain.RoleGuest,
+    "weather":       domain.RoleUser,
+    "websearch":     domain.RoleUser, // registered tool name; NOT "web_search"
+    "notes":         domain.RoleUser,
+    "repo_search":   domain.RoleUser,
+    "doc_summarize": domain.RoleUser,
+    "summarize":     domain.RoleUser,
+    "github":        domain.RoleAdmin, // read actions (issue_list, pr_list,
+    "coding_agent":  domain.RoleAdmin, // repo_view, ...) downgraded to
+    "executor":      domain.RoleAdmin, // RoleUser by resolveRequiredRole's
+    "admin.user":    domain.RoleAdmin, // action-aware check for github only
 }
+
+const DefaultToolPermission = domain.RoleUser // unrecognized tool → RoleUser
 ```
 
-**Rate Limiting:**
+- `mcp:<server>:<tool>` entries are not in this static map — their role is resolved dynamically from the MCP tool's trust classification (see MCP Client Architecture below): `write`/`unknown` trust → `RoleAdmin`-equivalent, `read_only` trust → `RoleUser`.
+- A `tools.permissions` config override can revert a whole tool's effective role without a code change.
+
+**Two enforcement entry points; the live chat loop now uses the RBAC-checked one:**
 ```go
+// Enforces RBAC (checkPermission) AND the confirmation gate. Called from
+// both of chat.Service's tool-execution sites (the main tool-calling loop
+// in tool_conversion.go and the confirmation-approval re-invocation path
+// in service.go) since the FR-001/FR-002 fix (commit cecf931).
 func (s *Service) ExecuteWithUser(
     ctx context.Context,
     user *domain.User,
-    skillName string,
+    conversationID, toolName string,
     params map[string]any,
-) (*domain.SkillResult, error)
+) (*domain.ExecutionResult, error)
+
+// Enforces the confirmation gate (via a context-carried
+// security.ConfirmationIdentity) but NOT role-based checkPermission.
+// No longer called by chat.Service — retained for callers that
+// intentionally have no role-bearing *domain.User to pass.
+func (s *Service) Execute(
+    ctx context.Context,
+    toolName string,
+    params map[string]any,
+) (*domain.ExecutionResult, error)
 ```
 
+**RBAC enforcement in live chat (fixed by FR-001/FR-002, commit `cecf931`):** the live chat tool-calling loop now calls `ExecuteWithUser`, not `Execute`, at both of `chat.Service`'s tool-execution sites — the main tool-calling loop (`chat.tool_conversion.go`) and the confirmation-approval re-invocation path (`chat.Service`, after a pending confirmation is approved). Role-based tool permissions (the `ToolPermissions` map above) are correctly defined, unit-tested, CI-guarded, and now enforced end-to-end for a tool call made during a real conversation. Each incoming message resolves a role-bearing `*domain.User` via `resolveUser` in `chat.Service`, which calls `UserService.GetUserByPlatformUID` and, on `domain.ErrUserNotFound`, `UserService.CreateUser` — defaulting new non-CLI identities to `RoleGuest` and CLI to `RoleAdmin` (`defaultRoleForPlatform`), never granting implicit trust to an unregistered identity. `main.go` constructs `UserService` once (`user.NewService`, file-backed via `domain_users.json`) and passes it directly into `chat.NewService`, shared by every gateway including Buzz. The side-effecting-action confirmation gate (Part C) continues to work exactly as before — it is wired via a context-carried `(UserID, ConversationID)` identity set by `ChatService`, and `ExecuteWithUser` runs that same confirmation check in addition to `checkPermission`, so it remains fully live for real conversations. The regression test `TestProcessMessage_RBAC_NonAdminCannotInvokeGitHubPRMerge` (`internal/usecase/chat/rbac_test.go`) proves a non-admin chat user's attempt to invoke `github.pr_merge` is now denied at the RBAC layer.
+
+**Rate Limiting:**
 - Token bucket algorithm
 - Per-user, per-tool limits
 - Configurable requests/window
@@ -223,9 +253,11 @@ Discovered during Buzz gateway spec review (research.md Q6) and fixed as part of
 #### 3. Security Service (`internal/usecase/security/service.go`)
 
 **Responsibilities:**
-- Input validation (length, null bytes, UTF-8, injection attacks)
+- Input validation (length, null bytes, UTF-8, injection attacks) for **direct user input only**
 - Audit logging
 - (Future: Encryption operations)
+
+This service's `ValidateInput` is wired only to content a human typed directly (chat messages, REST API JSON string fields). It is a distinct code path from `OutputValidator` (`internal/usecase/security/output_validation.go`), which scans tool-fetched content instead — see [Tool-Output Injection Filtering](#tool-output-injection-filtering-outputvalidator) under Security Architecture below.
 
 **Input Validation:**
 ```go
@@ -386,7 +418,7 @@ type AuditEvent struct {
 - Input validation failures
 - Security-relevant operations
 
-### Input Validation
+### Input Validation (Direct User Input)
 
 **Threat Protection:**
 - **Prompt Injection**: 30+ patterns (instruction override, role manipulation)
@@ -399,6 +431,74 @@ type AuditEvent struct {
 2. Null byte detection
 3. UTF-8 validation
 4. Pattern matching (regex-based)
+
+**Scope:** this validation runs on content a human typed directly — chat messages and REST API JSON string fields. It does not run on content the agent fetches on its own behalf via a tool (web pages, search results, MCP responses); that is a structurally separate mechanism, described next.
+
+### Tool-Output Injection Filtering (`OutputValidator`)
+
+`internal/usecase/security/output_validation.go` reuses the exact same underlying pattern list as the input validator above (`internal/usecase/security/prompt_injection_patterns.go`'s `detectPromptInjectionPatterns`, extracted as a shared helper both validators call), applied instead to content the agent fetches itself:
+
+```go
+type ValidationResult struct {
+    Flagged         bool
+    MatchedPatterns []string
+    Action          ValidationAction // "pass" | "annotate" | "reject"
+}
+
+type OutputValidator interface {
+    ValidateToolOutput(ctx context.Context, source, content string) (ValidationResult, error)
+}
+```
+
+**Call sites** (all optional/nil-tolerant via a setter or functional option, defaulting to `security.NewDefaultOutputValidator()`):
+- `summarize`/`doc_summarize` — ahead of the summarization sub-prompt
+- `websearch` — per search result; a flagged result is dropped (`reject`) or annotated in place (`annotate`), not a whole-call failure
+- `internal/adapter/mcp/tool_bridge.go`'s `MCPToolAdapter` — alongside the pre-existing `OutputSanitizer` call (sanitize first, then validate), regardless of the MCP tool's trust level
+
+**Behavior:**
+- Empty, whitespace-only, and non-UTF-8 content always passes cleanly (`Flagged: false`) rather than erroring or false-flagging
+- Default action `reject` fails the tool call closed; `annotate` wraps flagged content with a `[SECURITY WARNING: possible injected instructions detected]` marker and passes it through (`security.tool_output_validation.action` config)
+- Flagged content is excluded from the input passed to `MemoryCurator.ExtractMemoryCells`, closing the stored/second-order injection path
+- `tool/service.go`'s `Execute()` extracts `injection_flagged`/`matched_patterns` from the tool's result metadata (success path) or via `errors.As` on a `FlaggedOutputError` (reject path) into the audit `Details` map
+
+**Distinct from `OutputSanitizer`:** `OutputSanitizer` (pre-existing, `internal/usecase/tool/common`) only redacts secrets/credentials from tool output — it has no concept of injection-pattern detection. `OutputValidator` is a separate, newer mechanism with a separate purpose; MCP output passes through both, in sequence, and neither is a substitute for the other.
+
+### Prompt-Boundary Guardrails
+
+- `formatToolResults` (`internal/usecase/chat/tool_conversion.go`) wraps every tool result — regardless of tool identity or whether `OutputValidator` flagged/annotated it — in `<tool_output source="TOOLNAME">...</tool_output>` delimiters before it is sent to the LLM.
+- `PromptComposer.Compose()` (`internal/usecase/persona/promptcomposer.go`) prepends a fixed, non-overridable guardrail instructing the model to treat `<tool_output>` content as data, never as instructions. It is written ahead of the `sectionOrder`-driven persona layers (RULES → SOUL → USER) and its token cost is reserved unconditionally in `calcOverhead`, so it survives per-file and total token-budget truncation intact — verified even when the configured budget is smaller than the guardrail's own token cost.
+- This is a structural defense, independent of pattern matching: it exists specifically to catch paraphrased/novel injection wording that `OutputValidator`'s fixed pattern list doesn't match.
+
+### Side-Effecting Action Confirmation (Part C)
+
+```go
+type ConfirmationStore interface {
+    Create(ctx context.Context, req ConfirmationRequest) (ConfirmationRequest, error)
+    Get(ctx context.Context, id string) (ConfirmationRequest, error)
+    GetOpenByKey(ctx context.Context, userID, conversationID string) (ConfirmationRequest, bool, error)
+    Resolve(ctx context.Context, id string, approved bool) (ConfirmationRequest, error)
+    ListPending(ctx context.Context) ([]ConfirmationRequest, error)
+    ExpireStale(ctx context.Context) (int, error)
+}
+```
+
+- File-backed implementation: `internal/infrastructure/security/confirmation_store.go` (`FileConfirmationStore`), with every operation (`Create`, `Resolve`, `Get`, `GetOpenByKey`, `ListPending`, `ExpireStale`) fully serialized by a single mutex — guaranteeing exactly one `Create` succeeds per `(UserID, ConversationID)` and exactly one `Resolve` succeeds per confirmation ID under concurrent access — a deliberate simplicity-over-throughput tradeoff since this store sits on the rare, human-gated confirmation-creation path rather than the tool-loop hot path; TTL expiry is checked lazily on every read/write, not only by a periodic reaper.
+- `security.confirmation.default_required_actions` (config) lists actions requiring confirmation by default (`github.pr_merge`, `github.issue_close`, `github.issue_create`, `coding_agent.yolo_mode`), unioned with per-user RULES.md `requires_confirmation` entries.
+- When a gated action is attempted, the tool-calling loop ends the current turn immediately with the confirmation's human-readable summary, without consuming a loop iteration. `ChatService.ProcessMessage` checks `GetOpenByKey` at the top of every incoming message to detect a resolving reply.
+- **Resolution paths**: a case-insensitive, exact-match plain-text "yes"/"y"/"approve"/"confirm" or "no"/"n"/"deny"/"cancel"/"reject" reply works identically through every gateway's existing message-handling path (zero gateway-specific code required). Slack (Block Kit buttons) and Telegram (inline keyboard) additionally render interactive buttons that resolve the same confirmation via the same underlying mechanism — the plain-text form is always sent alongside as a fallback, not replaced. This is additive UX on two gateways, **not a universal rich UI** — no other gateway or channel has button support. The web admin UI (`GET /admin/confirmations`, per-item Approve/Deny) and REST API (`GET /api/v1/confirmations/{id}`, `POST /api/v1/confirmations/{id}/resolve`) provide a non-chat alternative, both ultimately calling `ChatService.ResolveConfirmation`.
+- An unresolved confirmation expires after `security.confirmation.timeout` (default 5 minutes, config-driven) and is treated as denied. At most one open confirmation is permitted per `(UserID, ConversationID)`.
+- Fail-closed: `ConfirmationStore`/`OutputValidator` failures deny/reject rather than proceed.
+
+### MCP Tool Trust Classification (Part F)
+
+See [MCP Client Architecture](#mcp-client-architecture) below for the full mechanism. In summary: `mcp.json` gains an optional per-server `trust` field (`read_only`/`write`/`unknown`, default `unknown`) plus a `tool_overrides` map for per-tool exceptions. The resolved trust level is attached to each bridged `MCPToolAdapter` and consulted dynamically (via a `TrustClassifiedTool` interface, not a static map entry) by both the RBAC check and the confirmation-requirement check for the `mcp:<server>:<tool>` namespace: `write`/`unknown` trust is treated as admin-only and confirmation-required; `read_only` trust is treated as `RoleUser`. Trust never affects whether `OutputValidator` scans the tool's output — that runs unconditionally regardless of trust level.
+
+### SSRF Hardening (Part E)
+
+- `ValidateFetchURL` (`internal/usecase/tool/common/url_validator.go`) resolves a fetch target's IP address(es) and rejects loopback (v4/v6), RFC 1918 private ranges, link-local addresses (including the `169.254.169.254` cloud metadata address), unspecified addresses (`0.0.0.0`/`::`), and multicast/reserved ranges. A hostname resolving to a mix of allowed and disallowed IPs is rejected if **any** resolved address is disallowed.
+- Applied to both `summarize` and `doc_summarize` on the initial request, and re-applied on every redirect hop via `NewCheckRedirect` (`internal/usecase/tool/common/ssrf_transport.go`). The validated IP for a redirect hop is pinned into the request's context and dialed directly (`pinnedDialContext`), closing the DNS-rebinding TOCTOU window between validation and dial — while `req.URL`/`req.Host` remain untouched, so TLS SNI and HTTP virtual-hosting still target the original hostname.
+- **Scope note**: pinning applies to redirect hops only. The initial request still has the same small, standard validate-then-dial TOCTOU window essentially every SSRF-safe client built on `net/http` accepts for a first hop with no redirect involved.
+- `security.fetch.ssrf_protection`/`follow_redirects` config controls this behavior; disabling redirect-following (`follow_redirects: false`) restores Go's exact stock `http.Client` default redirect policy (10-redirect limit) rather than reimplementing it.
 
 ### Phase 3 Advanced Features Architecture
 
@@ -786,15 +886,22 @@ logger.Info("Processing message", "platform", platform)
    │
    ├─> [Chat Service] ProcessMessage()
    │   ├─ Load conversation history
-   │   ├─ List available tools (RBAC filtered)
+   │   ├─ Resolve caller's role (chat.UserService → domain_users.json /
+   │   │   UserProfileRepository; fails closed to RoleGuest if unresolved)
+   │   ├─ List available tools, RBAC-filtered by resolved role (ListTools
+   │   │   filters registry.List() by caller role — see Security
+   │   │   Architecture above)
    │   ├─ Build context window (provider-aware)
    │   ├─ Check cache (if configured)
    │   ├─ Call LLM (with tools)
    │   │   └─ [Tool Calling Loop]
-   │   │       ├─ Execute tools via SkillExecutionService
+   │   │       ├─ Execute tools via ToolExecutionService.ExecuteWithUser
+   │   │       │   (role-based RBAC check + confirmation gate — see above)
+   │   │       ├─ Confirmation gate for side-effecting actions (Part C)
    │   │       ├─ Check rate limits (per-user, per-tool)
+   │   │       ├─ Injection-pattern scan of tool output (OutputValidator)
    │   │       ├─ Audit tool execution
-   │   │       └─ Format tool results
+   │   │       └─ Format tool results (`<tool_output>` delimited)
    │   ├─ Cache final response
    │   └─ Save messages (batched)
    │
@@ -1158,21 +1265,24 @@ type MCPClient struct {
 
 ### MCPToolAdapter (`internal/adapter/mcp/tool_bridge.go`)
 
-Wraps an MCPClient + MCPTool and implements `domain.Tool`:
+Wraps an MCPClient + MCPTool and implements `domain.Tool` (plus a `TrustClassifiedTool` interface consumed by the RBAC/confirmation layer):
 
 ```go
 type MCPToolAdapter struct {
     client     *infra.MCPClient
     toolDef    infra.MCPTool
     serverName string
-    sanitizer  *common.OutputSanitizer
-    timeout    time.Duration  // default 30s
+    sanitizer  *common.OutputSanitizer   // secret redaction only
+    validator  security.OutputValidator // injection-pattern detection (Part A)
+    timeout    time.Duration            // default 30s
+    trust      string                   // read_only | write | unknown (Part F)
 }
 ```
 
 - **Name**: `mcp:<serverName>:<toolName>`
 - **RequiredPermissions**: `[domain.PermissionNetwork]` (all MCP calls involve network I/O to the server)
-- **Execute**: Creates a deadline context (`30s`), calls `client.CallTool`, sanitizes output via `OutputSanitizer` before returning to prevent prompt injection from untrusted MCP servers.
+- **TrustLevel()**: returns the resolved trust classification (server default, overridden by `mcp.json`'s per-tool `tool_overrides` where present); consulted dynamically by `tool.Service`'s RBAC/confirmation checks for the `mcp:<server>:<tool>` namespace — `write`/`unknown` is treated as admin-only and confirmation-required, `read_only` as `RoleUser`.
+- **Execute**: Creates a deadline context (`30s`), calls `client.CallTool`, then runs the result through **two distinct checks in sequence**, regardless of trust level: `OutputSanitizer.SanitizeOutput` (secret/credential redaction — pre-existing) followed by `OutputValidator.ValidateToolOutput` (injection-pattern detection — Part A). These are separate mechanisms; secret redaction alone does not detect injected instructions, and injection detection alone does not redact secrets.
 
 ### Startup Wiring (`cmd/nuimanbot/main.go`)
 
