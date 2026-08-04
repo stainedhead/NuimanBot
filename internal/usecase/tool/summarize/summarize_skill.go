@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"nuimanbot/internal/domain"
+	"nuimanbot/internal/usecase/security"
+	"nuimanbot/internal/usecase/tool/common"
 	"nuimanbot/internal/usecase/tool/executor"
 )
 
@@ -22,10 +24,20 @@ const (
 
 // SummarizeSkill provides URL and YouTube video summarization
 type SummarizeSkill struct {
-	config     domain.ToolConfig
-	llmService domain.LLMService
-	executor   executor.ExecutorService
-	httpClient *http.Client
+	config          domain.ToolConfig
+	llmService      domain.LLMService
+	executor        executor.ExecutorService
+	httpClient      *http.Client
+	outputValidator security.OutputValidator
+	// ssrfProtectionDisabled inverts the SetSSRFProtection(enabled) API so the
+	// zero value (a bare struct literal, as used by several white-box tests)
+	// keeps SSRF protection ON by default — fail-closed, matching the rest of
+	// this security spec's defaults.
+	ssrfProtectionDisabled bool
+	// urlValidationOpts configures common.ResolveValidatedIP's host resolution
+	// (see validateURL). The zero value uses net.DefaultResolver; tests inject
+	// a fake IPResolver to exercise DNS-rebinding scenarios deterministically.
+	urlValidationOpts common.URLValidationOptions
 }
 
 // SummaryOutput represents the structured summary output
@@ -48,17 +60,54 @@ func NewSummarizeSkill(
 	httpClient *http.Client,
 ) *SummarizeSkill {
 	if httpClient == nil {
-		httpClient = &http.Client{
-			Timeout: defaultTimeout,
-		}
+		httpClient = defaultSSRFSafeHTTPClient(defaultTimeout)
 	}
 
 	return &SummarizeSkill{
-		config:     config,
-		llmService: llmService,
-		executor:   executor,
-		httpClient: httpClient,
+		config:          config,
+		llmService:      llmService,
+		executor:        executor,
+		httpClient:      httpClient,
+		outputValidator: security.NewDefaultOutputValidator(),
 	}
+}
+
+// defaultSSRFSafeHTTPClient builds the http.Client used when no client is
+// injected by the caller. Every hop of a fetch — the initial request
+// (validateURL resolves and validates the target via
+// common.ResolveValidatedIP and pins the result into the request's context
+// with common.WithResolvedIP *before* fetchWebPage ever constructs the
+// http.Request) and every subsequent redirect hop (re-validated and
+// re-pinned by common.NewCheckRedirect) — is dialed at the exact resolved IP
+// that was validated, not a second, independent DNS lookup that could return
+// something different. This closes the DNS-rebinding TOCTOU window across
+// the *entire* fetch flow, not just redirects (see
+// common.NewSSRFSafeTransport / common.NewCheckRedirect /
+// common.ResolveValidatedIP).
+func defaultSSRFSafeHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: common.NewSSRFSafeTransport(nil),
+		CheckRedirect: common.NewCheckRedirect(
+			common.FetchPolicy{SSRFProtection: true, FollowRedirects: true},
+			common.URLValidationOptions{},
+		),
+	}
+}
+
+// SetSSRFProtection enables or disables IP-resolution-based SSRF validation
+// of the fetch target (see common.ValidateFetchURL). Defaults to enabled;
+// wired from security.fetch.ssrf_protection by cmd/nuimanbot's DI so an
+// operator can opt out without a code change.
+func (s *SummarizeSkill) SetSSRFProtection(enabled bool) {
+	s.ssrfProtectionDisabled = !enabled
+}
+
+// SetOutputValidator overrides the OutputValidator used to scan fetched content
+// for prompt-injection patterns before it enters the summarization sub-prompt.
+// Optional: if never called, NewSummarizeSkill's default (fail-closed reject) is used.
+func (s *SummarizeSkill) SetOutputValidator(v security.OutputValidator) {
+	s.outputValidator = v
 }
 
 // Name returns the skill identifier
@@ -108,7 +157,7 @@ func (s *SummarizeSkill) InputSchema() map[string]any {
 
 // Execute runs the URL summarization
 func (s *SummarizeSkill) Execute(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) {
-	urlStr, err := s.validateURL(params)
+	urlStr, ctx, err := s.validateURL(ctx, params)
 	if err != nil {
 		return nil, err
 	}
@@ -118,6 +167,14 @@ func (s *SummarizeSkill) Execute(ctx context.Context, params map[string]any) (*d
 		return nil, fmt.Errorf("failed to fetch content: %w", err)
 	}
 
+	// Validate fetched content for prompt-injection patterns BEFORE it enters
+	// the summarization sub-prompt. Third-party web/YouTube content is
+	// untrusted; a flagged result fails the tool call closed by default.
+	content, flagged, matchedPatterns, err := s.validateFetchedContent(ctx, urlStr, content)
+	if err != nil {
+		return nil, err
+	}
+
 	summary, err := s.generateSummary(ctx, content, params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate summary: %w", err)
@@ -125,40 +182,95 @@ func (s *SummarizeSkill) Execute(ctx context.Context, params map[string]any) (*d
 
 	output := s.formatOutput(summary, urlStr, sourceType, params)
 
+	metadata := map[string]any{
+		"url":         urlStr,
+		"source_type": sourceType,
+	}
+	if flagged {
+		metadata["injection_flagged"] = true
+		metadata["matched_patterns"] = matchedPatterns
+	}
+
 	return &domain.ExecutionResult{
-		Output: output,
-		Metadata: map[string]any{
-			"url":         urlStr,
-			"source_type": sourceType,
-		},
+		Output:   output,
+		Metadata: metadata,
 	}, nil
 }
 
-// validateURL validates and extracts the URL parameter
-func (s *SummarizeSkill) validateURL(params map[string]any) (string, error) {
+// validateFetchedContent scans fetched content for prompt-injection patterns via
+// OutputValidator. Clean content is returned unchanged. Flagged content is
+// handled per the validator's configured action: annotate wraps it with a
+// visible warning marker; reject (the default) returns a *security.FlaggedOutputError
+// and empty content so the caller fails the tool call closed. A nil
+// outputValidator (e.g. a bare struct literal in tests) disables scanning and
+// passes content through unchanged.
+func (s *SummarizeSkill) validateFetchedContent(ctx context.Context, source, content string) (validated string, flagged bool, matchedPatterns []string, err error) {
+	if s.outputValidator == nil {
+		return content, false, nil, nil
+	}
+
+	result, err := s.outputValidator.ValidateToolOutput(ctx, source, content)
+	if err != nil {
+		return "", false, nil, fmt.Errorf("output validation failed: %w", err)
+	}
+	if !result.Flagged {
+		return content, false, nil, nil
+	}
+
+	if result.Action == security.ValidationActionAnnotate {
+		return security.AnnotateFlaggedContent(content), true, result.MatchedPatterns, nil
+	}
+
+	// Fail closed (default reject action).
+	return "", true, result.MatchedPatterns, &security.FlaggedOutputError{
+		Source:          source,
+		MatchedPatterns: result.MatchedPatterns,
+	}
+}
+
+// validateURL validates and extracts the URL parameter. SSRF protection
+// resolves the host to its IP address(es) and rejects loopback, RFC 1918
+// private, link-local (including cloud metadata), and multicast/reserved
+// targets — see common.ResolveValidatedIP. This replaces the previous
+// substring-only check against "localhost"/"127.0.0.1"/"0.0.0.0", which never
+// caught IPv6 loopback (::1), cloud-metadata addresses, or other private
+// ranges.
+//
+// Unlike a bare validity check, this uses common.ResolveValidatedIP (not the
+// discard-the-IP common.ValidateFetchURL) and pins the validated IP into the
+// returned context via common.WithResolvedIP. Callers MUST use the returned
+// context — not the one passed in — for the fetch that follows: fetchWebPage
+// constructs its http.Request with that context, so pinnedDialContext (see
+// common/ssrf_transport.go) dials the exact address that was validated
+// instead of letting the real dialer perform an independent second DNS
+// lookup at connect time, which is what closes the DNS-rebinding TOCTOU
+// window on the initial (non-redirect) request — the same mechanism
+// NewCheckRedirect already applies per redirect hop.
+func (s *SummarizeSkill) validateURL(ctx context.Context, params map[string]any) (string, context.Context, error) {
 	urlStr, ok := params["url"].(string)
 	if !ok || urlStr == "" {
-		return "", fmt.Errorf("url is required")
+		return "", ctx, fmt.Errorf("url is required")
 	}
 
 	parsedURL, err := url.Parse(urlStr)
 	if err != nil {
-		return "", fmt.Errorf("invalid URL: %w", err)
+		return "", ctx, fmt.Errorf("invalid URL: %w", err)
 	}
 
 	// Security checks
 	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
-		return "", fmt.Errorf("only HTTP and HTTPS URLs are supported")
+		return "", ctx, fmt.Errorf("only HTTP and HTTPS URLs are supported")
 	}
 
-	// Reject localhost and private IPs
-	if strings.Contains(parsedURL.Host, "localhost") ||
-		strings.Contains(parsedURL.Host, "127.0.0.1") ||
-		strings.Contains(parsedURL.Host, "0.0.0.0") {
-		return "", fmt.Errorf("localhost and private IPs are not allowed")
+	if !s.ssrfProtectionDisabled {
+		ip, err := common.ResolveValidatedIP(ctx, urlStr, s.urlValidationOpts)
+		if err != nil {
+			return "", ctx, fmt.Errorf("url rejected by SSRF protection: %w", err)
+		}
+		ctx = common.WithResolvedIP(ctx, ip)
 	}
 
-	return urlStr, nil
+	return urlStr, ctx, nil
 }
 
 // fetchContent fetches content from URL (web page or YouTube)

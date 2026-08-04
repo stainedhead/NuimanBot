@@ -79,6 +79,12 @@ func TestDocSummarizeSkill_Execute_HTTPUrl(t *testing.T) {
 	}
 
 	skill := NewDocSummarizeSkill(domain.ToolConfig{}, mockLLM, server.Client())
+	// This test exercises the HTTP-fetch path end-to-end, not SSRF
+	// protection; httptest servers always listen on loopback, which
+	// always-on SSRF validation (Phase 4, FR-020) now rejects regardless of
+	// domain allowlist. SSRF-specific behavior is covered separately in
+	// doc_summarize_ssrf_test.go.
+	skill.SetSSRFProtection(false)
 
 	result, err := skill.Execute(context.Background(), map[string]any{
 		"source": server.URL + "/test.md",
@@ -99,6 +105,9 @@ func TestDocSummarizeSkill_Execute_HTTPError(t *testing.T) {
 	defer server.Close()
 
 	skill := NewDocSummarizeSkill(domain.ToolConfig{}, nil, server.Client())
+	// Exercises HTTP-status error handling specifically, not SSRF protection
+	// (see doc_summarize_ssrf_test.go for that).
+	skill.SetSSRFProtection(false)
 
 	_, err := skill.Execute(context.Background(), map[string]any{
 		"source": server.URL + "/missing.md",

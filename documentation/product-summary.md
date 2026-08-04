@@ -1,7 +1,7 @@
 # NuimanBot Product Summary
 
-**Version:** 1.1
-**Last Updated:** 2026-03-22
+**Version:** 1.2
+**Last Updated:** 2026-08-02
 **Status:** Production Ready (100% Complete)
 **CI/CD Status:** ✅ All Pipelines Passing
 
@@ -16,7 +16,7 @@ NuimanBot is a **security-hardened personal AI agent** built in Go, designed as 
 **Production-Ready** - 100% Complete
 
 - ✅ Core functionality complete
-- ✅ Comprehensive security hardening (TLS, JWT, rate limiting, RBAC)
+- ✅ Comprehensive security hardening (TLS, JWT, rate limiting, RBAC, tool-output injection filtering, side-effecting action confirmation, SSRF hardening, MCP trust classification)
 - ✅ Multi-platform support (CLI, Telegram, Slack, Buzz)
 - ✅ Multi-LLM integration (Anthropic, OpenAI, AWS Bedrock, Ollama)
 - ✅ Self-organizing memory with Ingatan backend support
@@ -40,9 +40,11 @@ NuimanBot is a **security-hardened personal AI agent** built in Go, designed as 
 **NuimanBot Solution:**
 - ✅ **Zero credential leakage**: AES-256-GCM encryption at rest
 - ✅ **100% tool security**: Custom tools only, no external imports
-- ✅ **Input sanitization**: 80+ attack pattern detection rules
-- ✅ **Comprehensive audit logging**: All security events tracked
-- ✅ **RBAC enforcement**: Role-based access control throughout
+- ✅ **User-input injection detection**: 80+ attack pattern detection rules (30+ prompt injection, 50+ command injection) applied to direct chat input
+- ✅ **Tool-output injection filtering**: a separate `OutputValidator` scans all tool-sourced content (fetched web pages, search results, MCP output) for injection patterns before it reaches the LLM — a distinct mechanism from the input-side detector above, not the same coverage
+- ✅ **Side-effecting action confirmation**: default-configured actions (e.g. `github.pr_merge`, `coding_agent.yolo_mode`) require human yes/no confirmation before executing
+- ✅ **Comprehensive audit logging**: All security events tracked, including injection-flagged tool calls
+- ✅ **RBAC enforcement**: role-based access control is defined and enforced per tool (`ExecuteWithUser`/`checkPermission`, CI-guarded); the live chat tool-calling loop calls that enforcement path at both of its tool-execution sites, resolving each user's persisted `domain.User` via `UserService` — see [Security Architecture](#security-architecture) below
 
 ### 2. Multi-Platform Support
 
@@ -195,10 +197,12 @@ MCP tools are loaded at startup from `mcp.json`. Servers that fail to initialize
 
 **Security Controls (All Tools):**
 - Custom-built (no external imports for built-in tools)
-- RBAC enforcement (permission-gated)
+- RBAC role assigned per tool (permission-gated via `ExecuteWithUser`/`checkPermission`; not yet reached by the live chat tool-calling loop — see [Security Architecture](#security-architecture))
 - Per-tool rate limiting
 - Timeout enforcement (30s default; 30s hard limit for MCP tools)
-- Output sanitization (secret redaction; MCP output sanitized before LLM injection)
+- Output validation: secret redaction (`OutputSanitizer`) AND injection-pattern detection (`OutputValidator`) — two distinct mechanisms run on all tool output, including MCP output, regardless of MCP trust level
+- Side-effecting actions (e.g. `github.pr_merge`, `coding_agent.yolo_mode`) require human yes/no confirmation by default
+- MCP tools additionally carry a trust classification (`read_only`/`write`/`unknown`); `write`/`unknown` are treated as admin-only and confirmation-required
 - Path traversal prevention
 - Comprehensive audit logging
 
@@ -251,25 +255,38 @@ MCP tools are loaded at startup from `mcp.json`. Servers that fail to initialize
 | Threat | Mitigation |
 |--------|-----------|
 | **Credential leakage** | AES-256-GCM encryption at rest; no plaintext secrets |
-| **Prompt injection** | 30+ pattern detection; input sanitization; MCP output sanitized before LLM injection |
+| **User-input prompt injection** | 30+ pattern detection on direct chat input; input sanitization |
+| **Tool-output prompt injection** | `OutputValidator` scans fetched web pages, search results, and MCP output for injection patterns before it reaches the LLM (fail-closed reject by default) — a separate mechanism from the user-input detector above |
 | **Command injection** | 50+ pattern detection; output sandboxing |
-| **Malicious tools** | Custom tools only; no external imports; MCP output sanitized |
+| **Malicious tools** | Custom tools only; no external imports; MCP output passes through both secret redaction and injection-pattern detection |
+| **Unwanted side-effecting actions** | Human yes/no confirmation required before default-configured actions (e.g. `github.pr_merge`) execute; unresolved confirmations expire and are treated as denied |
+| **SSRF via fetch tools** | `summarize`/`doc_summarize` resolve and validate the target IP (loopback, RFC 1918, link-local/cloud-metadata, multicast all rejected) before dialing, and re-validate on every redirect hop |
+| **Untrusted MCP tools** | Per-server/per-tool trust classification (`read_only`/`write`/`unknown`); `write`/`unknown` treated as admin-only and confirmation-required |
 | **Session hijacking** | Token rotation; secure credential vault; TLS enforced Secure cookies |
-| **Privilege escalation** | Strict RBAC enforcement; `requireRole` middleware on web admin |
+| **Privilege escalation** | RBAC roles defined and enforced per tool, CI-guarded; `requireRole` middleware on web admin; role enforcement is wired into the live chat tool-calling loop via `ExecuteWithUser` (see below) |
 | **Supply chain attacks** | Minimal dependencies; audit logging |
 | **Brute-force login** | Per-IP token bucket rate limiter on web admin login |
 | **Weak API secrets** | JWT secret minimum 32 bytes enforced at server construction |
 | **Insecure transport** | TLS auto-generated (ECDSA P-256) for admin web and health servers |
 | **Default credentials** | Forced password change on first login with default admin credentials |
 
-### Input Validation
+**RBAC in live chat (fixed)**: `chat.Service.ProcessMessage`'s tool-calling loop executes tools via `ToolExecutionService.ExecuteWithUser` — both this main tool-calling loop and the confirmation-approval re-invocation path call `ExecuteWithUser`, which performs the role-based `checkPermission` check. Each incoming message resolves a role-bearing `*domain.User` through `UserService` (`GetUserByPlatformUID`/`CreateUser`), defaulting new non-CLI identities to `RoleGuest` and CLI to `RoleAdmin`; an unresolvable or unregistered platform identity fails closed to `domain.RoleGuest` rather than failing open. `ListTools` (which builds the tool list offered to the LLM) now filters by the resolved caller's role. This means role-based restrictions (e.g. `coding_agent`/`github` writes being admin-only) are correctly defined, unit-tested, CI-guarded, and enforced end-to-end for a live conversation — see the regression test `TestProcessMessage_RBAC_NonAdminCannotInvokeGitHubPRMerge` (`internal/usecase/chat/rbac_test.go`), which proves a non-admin chat user's attempt to invoke `github.pr_merge` is denied. The side-effecting-action confirmation gate remains independently wired via a context-carried identity and is fully live for real conversations as an additional layer on top of RBAC.
+
+### Input Validation (User Input)
 
 - Maximum input length: 32KB (configurable)
 - Null byte detection
 - UTF-8 validation
-- Prompt injection pattern matching (30+ patterns)
+- Prompt injection pattern matching (30+ patterns) — applied to direct chat input only
 - Command injection pattern matching (50+ patterns)
 - Parameterized queries (no raw SQL)
+
+### Output Validation (Tool-Sourced Content)
+
+- Separate from the input validation above: `OutputValidator` (`internal/usecase/security/output_validation.go`) reuses the same underlying pattern list against content the agent fetches on its own behalf — web pages and documents (`summarize`, `doc_summarize`), web-search results (`websearch`), and all MCP tool output — before that content re-enters the LLM's conversational context
+- Configurable action: `reject` (default, fails the tool call closed) or `annotate` (passes content through wrapped with a visible `[SECURITY WARNING: possible injected instructions detected]` marker)
+- Flagged content is excluded from memory-curation input, closing the stored/second-order injection path
+- Audit trail gains `injection_flagged`/`matched_patterns` fields whenever content is flagged
 
 ---
 
@@ -347,7 +364,8 @@ MCP tools are loaded at startup from `mcp.json`. Servers that fail to initialize
   - mcp.json loader; HTTP and stdio transports; JSON-RPC 2.0
   - MCPToolAdapter with mcp:\<server\>:\<tool\> namespace
   - Startup wiring with bad-server skip; 30s per-tool timeout
-  - Output sanitized via OutputSanitizer before LLM injection
+  - Output passes through secret redaction (`OutputSanitizer`) and injection-pattern detection (`OutputValidator`) before reaching the LLM
+  - Per-server/per-tool trust classification (`read_only`/`write`/`unknown`) enforced through the same RBAC/confirmation paths as built-in tools
 - ✅ **IMS Phase 7**: Integration Test Suite
   - //go:build integration tagged tests across storage, web, memoryv2
 - ✅ **Post-review fixes**: 17 hardening items (token validation, goroutine leak fix, JWT secret strength enforcement, rate limiter eviction, MCP timeout, JSON array input validation, store prefix validation)
@@ -355,6 +373,8 @@ MCP tools are loaded at startup from `mcp.json`. Servers that fail to initialize
   - **Phase 1 — Read-only participation**: hand-rolled NIP-01 client (`internal/infrastructure/nostr/`), multi-relay WebSocket transport with bounded exponential-backoff reconnect, signature verification, cross-relay event dedupe, generate-if-absent secp256k1 keypair via the existing credential vault
   - **Phase 2 — Full gateway**: signed `kind:9` channel message publishing, `kind:10100` agent-profile self-declaration, `kind:9000`/`kind:10100`-derived agent-identity cache, consecutive-message loop-prevention guard
   - **Phase 3 — Tool integration + cross-platform RBAC fix**: Buzz channel messages trigger existing tools under RBAC; fixed a pre-existing gap where tool execution was unenforced for *every* platform (`ExecuteWithUser` now used uniformly, `ListTools` now role-filtered)
+- ✅ **Security Hardening (Parts A-G, 2026-08-02)**: tool-output injection filtering (`OutputValidator`); prompt-boundary guardrails (`<tool_output>` delimiters + non-overridable system-prompt guardrail); side-effecting action confirmation flow (file-backed `ConfirmationStore`, plain-text yes/no + Slack/Telegram buttons + web admin modal + REST endpoints); tool RBAC correction (explicit `ToolPermissions` map, action-aware `github` checks, CI guard); SSRF hardening (IP-resolution validation + redirect revalidation with pinned-IP dialing); MCP trust classification (`read_only`/`write`/`unknown`); documentation/code parity
+- ✅ **FR-001/FR-002 — RBAC bypass in live chat fixed (P0), reconciled with the Buzz gateway's independent cross-platform RBAC fix (2026-08-04)**: the live chat tool-calling loop calls `ToolExecutionService.ExecuteWithUser`, not `Execute`, at both of `chat.Service`'s tool-execution sites, so full role-based RBAC — including the action-aware `github` split and MCP trust classification — is enforced end-to-end in live conversations, across every platform (CLI, Telegram, Slack, Buzz). Each incoming message resolves a persisted `domain.User` via `UserService` (`GetUserByPlatformUID`/`CreateUser`), defaulting new non-CLI identities to `RoleGuest` and CLI to `RoleAdmin`; `ListTools` filters the tool list by resolved role. `ExecuteWithUser`/`ListTools` carry `conversationID` so Part C's confirmation gate composes with RBAC, and confirmation-reply detection is keyed on the resolved user's persisted ID (not raw platform UID) to stay consistent with what `ExecuteWithUser` stores. Regression tests: `internal/usecase/chat/rbac_test.go`'s `TestProcessMessage_RBACEnforcedAcrossPlatforms` and `TestProcessMessage_RBAC_NonAdminCannotInvokeGitHubPRMerge`.
 
 ---
 

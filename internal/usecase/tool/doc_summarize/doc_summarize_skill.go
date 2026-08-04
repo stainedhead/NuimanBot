@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"nuimanbot/internal/domain"
+	"nuimanbot/internal/usecase/security"
+	"nuimanbot/internal/usecase/tool/common"
 )
 
 const (
@@ -23,9 +25,18 @@ const (
 
 // DocSummarizeSkill provides document summarization capabilities
 type DocSummarizeSkill struct {
-	config     domain.ToolConfig
-	llmService domain.LLMService
-	httpClient *http.Client
+	config          domain.ToolConfig
+	llmService      domain.LLMService
+	httpClient      *http.Client
+	outputValidator security.OutputValidator
+	// ssrfProtectionDisabled inverts the SetSSRFProtection(enabled) API so the
+	// zero value (a bare struct literal) keeps SSRF protection ON by default —
+	// fail-closed, matching the rest of this security spec's defaults.
+	ssrfProtectionDisabled bool
+	// urlValidationOpts configures common.ResolveValidatedIP's host resolution
+	// (see validateURL). The zero value uses net.DefaultResolver; tests inject
+	// a fake IPResolver to exercise DNS-rebinding scenarios deterministically.
+	urlValidationOpts common.URLValidationOptions
 }
 
 // SummaryOutput represents the structured summary output
@@ -44,16 +55,54 @@ func NewDocSummarizeSkill(
 	httpClient *http.Client,
 ) *DocSummarizeSkill {
 	if httpClient == nil {
-		httpClient = &http.Client{
-			Timeout: defaultTimeout,
-		}
+		httpClient = defaultSSRFSafeHTTPClient(defaultTimeout)
 	}
 
 	return &DocSummarizeSkill{
-		config:     config,
-		llmService: llmService,
-		httpClient: httpClient,
+		config:          config,
+		llmService:      llmService,
+		httpClient:      httpClient,
+		outputValidator: security.NewDefaultOutputValidator(),
 	}
+}
+
+// defaultSSRFSafeHTTPClient builds the http.Client used when no client is
+// injected by the caller. Every hop of a fetch — the initial request
+// (validateURL resolves and validates the target via
+// common.ResolveValidatedIP and pins the result into the request's context
+// with common.WithResolvedIP *before* fetchURL ever constructs the
+// http.Request) and every subsequent redirect hop (re-validated and
+// re-pinned by common.NewCheckRedirect) — is dialed at the exact resolved IP
+// that was validated, not a second, independent DNS lookup that could return
+// something different. This closes the DNS-rebinding TOCTOU window across
+// the *entire* fetch flow, not just redirects (see
+// common.NewSSRFSafeTransport / common.NewCheckRedirect /
+// common.ResolveValidatedIP).
+func defaultSSRFSafeHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: common.NewSSRFSafeTransport(nil),
+		CheckRedirect: common.NewCheckRedirect(
+			common.FetchPolicy{SSRFProtection: true, FollowRedirects: true},
+			common.URLValidationOptions{},
+		),
+	}
+}
+
+// SetSSRFProtection enables or disables IP-resolution-based SSRF validation
+// of the fetch target (see common.ValidateFetchURL), layered under the
+// (optional) domain allowlist. Defaults to enabled; wired from
+// security.fetch.ssrf_protection by cmd/nuimanbot's DI so an operator can opt
+// out without a code change.
+func (s *DocSummarizeSkill) SetSSRFProtection(enabled bool) {
+	s.ssrfProtectionDisabled = !enabled
+}
+
+// SetOutputValidator overrides the OutputValidator used to scan fetched content
+// for prompt-injection patterns before it enters the summarization sub-prompt.
+// Optional: if never called, NewDocSummarizeSkill's default (fail-closed reject) is used.
+func (s *DocSummarizeSkill) SetOutputValidator(v security.OutputValidator) {
+	s.outputValidator = v
 }
 
 // Name returns the skill identifier
@@ -104,7 +153,7 @@ func (s *DocSummarizeSkill) InputSchema() map[string]any {
 
 // Execute runs the document summarization
 func (s *DocSummarizeSkill) Execute(ctx context.Context, params map[string]any) (*domain.ExecutionResult, error) {
-	source, err := s.validateSource(params)
+	source, ctx, err := s.validateSource(ctx, params)
 	if err != nil {
 		return nil, err
 	}
@@ -114,6 +163,14 @@ func (s *DocSummarizeSkill) Execute(ctx context.Context, params map[string]any) 
 		return nil, fmt.Errorf("failed to fetch content: %w", err)
 	}
 
+	// Validate fetched content for prompt-injection patterns BEFORE it enters
+	// the summarization sub-prompt. Third-party file/URL content is untrusted;
+	// a flagged result fails the tool call closed by default.
+	content, flagged, matchedPatterns, err := s.validateFetchedContent(ctx, source, content)
+	if err != nil {
+		return nil, err
+	}
+
 	summary, err := s.generateSummary(ctx, content, params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate summary: %w", err)
@@ -121,53 +178,122 @@ func (s *DocSummarizeSkill) Execute(ctx context.Context, params map[string]any) 
 
 	output := s.formatOutput(summary, source, params)
 
+	metadata := map[string]any{
+		"source":     source,
+		"word_count": s.countWords(summary),
+	}
+	if flagged {
+		metadata["injection_flagged"] = true
+		metadata["matched_patterns"] = matchedPatterns
+	}
+
 	return &domain.ExecutionResult{
-		Output: output,
-		Metadata: map[string]any{
-			"source":     source,
-			"word_count": s.countWords(summary),
-		},
+		Output:   output,
+		Metadata: metadata,
 	}, nil
 }
 
-// validateSource validates and extracts the source parameter
-func (s *DocSummarizeSkill) validateSource(params map[string]any) (string, error) {
+// validateFetchedContent scans fetched content for prompt-injection patterns via
+// OutputValidator. Clean content is returned unchanged. Flagged content is
+// handled per the validator's configured action: annotate wraps it with a
+// visible warning marker; reject (the default) returns a *security.FlaggedOutputError
+// and empty content so the caller fails the tool call closed. A nil
+// outputValidator disables scanning and passes content through unchanged.
+func (s *DocSummarizeSkill) validateFetchedContent(ctx context.Context, source, content string) (validated string, flagged bool, matchedPatterns []string, err error) {
+	if s.outputValidator == nil {
+		return content, false, nil, nil
+	}
+
+	result, err := s.outputValidator.ValidateToolOutput(ctx, source, content)
+	if err != nil {
+		return "", false, nil, fmt.Errorf("output validation failed: %w", err)
+	}
+	if !result.Flagged {
+		return content, false, nil, nil
+	}
+
+	if result.Action == security.ValidationActionAnnotate {
+		return security.AnnotateFlaggedContent(content), true, result.MatchedPatterns, nil
+	}
+
+	// Fail closed (default reject action).
+	return "", true, result.MatchedPatterns, &security.FlaggedOutputError{
+		Source:          source,
+		MatchedPatterns: result.MatchedPatterns,
+	}
+}
+
+// validateSource validates and extracts the source parameter. For a URL
+// source, the returned context carries the pinned, validated IP (see
+// validateURL) that callers MUST use for the subsequent fetch instead of the
+// context passed in. A file-path source returns the input context unchanged.
+func (s *DocSummarizeSkill) validateSource(ctx context.Context, params map[string]any) (string, context.Context, error) {
 	source, ok := params["source"].(string)
 	if !ok || source == "" {
-		return "", fmt.Errorf("source is required")
+		return "", ctx, fmt.Errorf("source is required")
 	}
 
 	// Check if it's a URL
 	if strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://") {
-		return s.validateURL(source)
+		return s.validateURL(ctx, source)
 	}
 
 	// It's a file path
-	return source, nil
+	return source, ctx, nil
 }
 
-// validateURL validates the URL and checks domain allowlist
-func (s *DocSummarizeSkill) validateURL(urlStr string) (string, error) {
+// validateURL validates the URL, checks the (optional) domain allowlist, and
+// then always applies IP-resolution-based SSRF validation (see
+// common.ResolveValidatedIP), layered UNDER the domain allowlist: even when
+// no allowlist is configured — previously "unrestricted" — or when the
+// target domain IS allowlisted, loopback/private/link-local/multicast
+// targets are rejected. doc_summarize previously had no SSRF check at all
+// beyond this optional allowlist.
+//
+// Unlike a bare validity check, this uses common.ResolveValidatedIP (not the
+// discard-the-IP common.ValidateFetchURL) and pins the validated IP into the
+// returned context via common.WithResolvedIP. Callers MUST use the returned
+// context — not the one passed in — for the fetch that follows: fetchURL
+// constructs its http.Request with that context, so pinnedDialContext (see
+// common/ssrf_transport.go) dials the exact address that was validated
+// instead of letting the real dialer perform an independent second DNS
+// lookup at connect time, which is what closes the DNS-rebinding TOCTOU
+// window on the initial (non-redirect) request — the same mechanism
+// NewCheckRedirect already applies per redirect hop.
+func (s *DocSummarizeSkill) validateURL(ctx context.Context, urlStr string) (string, context.Context, error) {
 	parsedURL, err := url.Parse(urlStr)
 	if err != nil {
-		return "", fmt.Errorf("invalid URL: %w", err)
+		return "", ctx, fmt.Errorf("invalid URL: %w", err)
 	}
 
-	// Check domain allowlist if configured
+	// Check domain allowlist if configured. Matching is exact-or-subdomain
+	// only (host == domain, or host is a subdomain of domain) — NOT a plain
+	// substring match. A substring match (strings.Contains) would let a host
+	// like "notgithub.com.attacker.net" or "github.com.evil.example" sail
+	// through an allowlist entry of "github.com" (FR-R08/FR-008, P1).
 	if allowedDomains := s.getAllowedDomains(); len(allowedDomains) > 0 {
+		host := parsedURL.Host
 		allowed := false
 		for _, domain := range allowedDomains {
-			if strings.Contains(parsedURL.Host, domain) {
+			if host == domain || strings.HasSuffix(host, "."+domain) {
 				allowed = true
 				break
 			}
 		}
 		if !allowed {
-			return "", fmt.Errorf("domain %s not in allowed list", parsedURL.Host)
+			return "", ctx, fmt.Errorf("domain %s not in allowed list", parsedURL.Host)
 		}
 	}
 
-	return urlStr, nil
+	if !s.ssrfProtectionDisabled {
+		ip, err := common.ResolveValidatedIP(ctx, urlStr, s.urlValidationOpts)
+		if err != nil {
+			return "", ctx, fmt.Errorf("url rejected by SSRF protection: %w", err)
+		}
+		ctx = common.WithResolvedIP(ctx, ip)
+	}
+
+	return urlStr, ctx, nil
 }
 
 // getAllowedDomains gets the allowed domains from config

@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+
+	"nuimanbot/internal/adapter/api/middleware"
 )
 
 const (
@@ -20,6 +22,13 @@ const (
 // NuimanClaims defines the JWT claims issued by the auth token endpoint.
 type NuimanClaims struct {
 	jwt.RegisteredClaims
+	// Role is the principal's role, checked by resource-ownership guards
+	// (e.g. the confirmation endpoints — see middleware.RoleFromContext /
+	// middleware.RoleAdmin). Always "admin": the REST API currently issues
+	// tokens for a single, shared operator API key rather than per-end-user
+	// credentials (see newClaims), so the sole credential it recognizes is
+	// treated as administrative.
+	Role string `json:"role,omitempty"`
 }
 
 // newClaims creates a new NuimanClaims for the given API key.
@@ -35,6 +44,7 @@ func newClaims(apiKey string) NuimanClaims {
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(jwtExpiry)),
 		},
+		Role: middleware.RoleAdmin,
 	}
 }
 

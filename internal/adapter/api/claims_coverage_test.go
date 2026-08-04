@@ -5,7 +5,16 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"nuimanbot/internal/adapter/api/middleware"
 )
+
+// TestNewClaims_SetsAdminRole verifies the sole shared operator API key is
+// issued an admin-role token (see NuimanClaims.Role's doc comment).
+func TestNewClaims_SetsAdminRole(t *testing.T) {
+	c := newClaims("my-api-key")
+	assert.Equal(t, middleware.RoleAdmin, c.Role)
+}
 
 // TestNewClaims_SubjectIsStable verifies newClaims produces the same subject for the same key.
 func TestNewClaims_SubjectIsStable(t *testing.T) {

@@ -549,6 +549,99 @@ curl -X GET "http://localhost:8080/api/v1/admin/logs?level=error&limit=100" \
 
 ---
 
+## Confirmation Endpoints
+
+Side-effecting tool calls (e.g. `github.pr_merge`, `coding_agent` yolo-mode)
+that require confirmation can be listed and resolved via the REST API, in
+addition to the plain-text/button flows described in the
+[Security Hardening Guide](security-hardening-guide.md).
+
+> **⚠️ Known limitation: confirmations are NOT per-user-scoped over this
+> API today.** Under the current REST API authentication model there is
+> only one shared operator API key, not distinct per-user credentials —
+> every token issued by `POST /api/v1/auth/token` is treated as
+> administrative. As a direct result, **any holder of the API key can view
+> or resolve ANY user's pending confirmation** via the endpoints below,
+> regardless of which user the confirmation is actually addressed to. **Do
+> not treat REST-API-issued confirmations as private to the requesting
+> user**, and do not rely on these endpoints to keep one user's pending
+> action hidden or unresolvable by another API caller. This is a documented
+> gap (tracked as FR-006), not an oversight — see
+> `internal/adapter/api/confirmation_handler.go`'s `confirmationAuthorized`
+> doc comment for the implementation detail.
+
+### Get Confirmation
+
+Retrieve the current state of a pending (or resolved) confirmation.
+
+```http
+GET /api/v1/confirmations/{id}
+```
+
+**Example Request:**
+
+```bash
+curl -X GET "http://localhost:8080/api/v1/confirmations/conf-abc123" \
+  -H "Authorization: Bearer your-api-key"
+```
+
+**Example Response:**
+
+```json
+{
+  "id": "conf-abc123",
+  "tool_name": "github",
+  "summary": "Merge PR #42?",
+  "status": "pending",
+  "expires_at": "2026-08-03T10:35:00Z"
+}
+```
+
+**Error Responses:** `404 Not Found` if the confirmation does not exist;
+`403 Forbidden` only in the (currently unreachable, see warning above) case
+of a non-admin credential requesting another user's confirmation.
+
+### Resolve Confirmation
+
+Approve or deny a pending confirmation.
+
+```http
+POST /api/v1/confirmations/{id}/resolve
+```
+
+**Request Body:**
+
+```json
+{ "approved": true }
+```
+
+**Example Request:**
+
+```bash
+curl -X POST "http://localhost:8080/api/v1/confirmations/conf-abc123/resolve" \
+  -H "Authorization: Bearer your-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"approved": true}'
+```
+
+**Example Response:**
+
+```json
+{
+  "id": "conf-abc123",
+  "status": "approved",
+  "message": "Done, merged PR #42."
+}
+```
+
+**Error Responses:** `400 Bad Request` for a malformed/missing `approved`
+field; `404 Not Found` if the confirmation does not exist; `409 Conflict` if
+the confirmation has already been resolved or has expired; `403 Forbidden`
+only in the (currently unreachable, see warning above) case of a non-admin
+credential requesting another user's confirmation.
+
+---
+
 ## Data Models
 
 ### UserProfile

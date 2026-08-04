@@ -54,7 +54,8 @@ func (s *Service) ProcessMessageStream(ctx context.Context, incomingMsg *domain.
 			return
 		}
 
-		// 3. Get available skills and convert to tools (role-filtered, FR-012)
+		// 3. Get available skills and convert to tools, filtered by the
+		// resolved user's role (FR-002 fix, FR-012).
 		skills, err := s.toolExecService.ListTools(ctx, user)
 		if err != nil {
 			outCh <- domain.StreamChunk{Error: fmt.Errorf("failed to list skills: %w", err)}

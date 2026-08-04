@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"nuimanbot/internal/domain"
 	"nuimanbot/internal/infrastructure/ratelimit"
 	"nuimanbot/internal/usecase/tool"
+	"nuimanbot/internal/usecase/tool/github"
 )
 
 // rbacTestTool is a minimal domain.Tool that records whether it was actually
@@ -324,5 +326,269 @@ func TestProcessMessage_RateLimitEnforced(t *testing.T) {
 	}
 	if !hasAuditAction(auditEvents, "tool_rate_limit_exceeded") {
 		t.Errorf("expected a tool_rate_limit_exceeded audit event, got: %+v", auditEvents)
+	}
+}
+
+// newRealToolServiceWithGitHubTool builds a REAL tool.Service (not a mock)
+// backed by an in-memory registry serving a single tool named "github" — the
+// same name resolveRequiredRole's action-aware githubActionRole branch keys
+// on (internal/usecase/tool/service.go) — so this test exercises the actual
+// production RBAC decision tool.Service makes, not a mocked stand-in for it.
+func newRealToolServiceWithGitHubTool(t *testing.T) *tool.Service {
+	t.Helper()
+
+	registry := tool.NewInMemoryRegistry()
+	if err := registry.Register(&mockSkill{
+		name:        "github",
+		description: "GitHub tool (test double)",
+		inputSchema: map[string]any{"type": "object"},
+	}); err != nil {
+		t.Fatalf("failed to register test github tool: %v", err)
+	}
+
+	return tool.NewService(&config.ToolsSystemConfig{}, registry, &mockSecurityService{})
+}
+
+// TestProcessMessage_RBAC_NonAdminCannotInvokeGitHubPRMerge is the
+// FR-001/FR-002 regression test for the review's P0 finding: chat.Service's
+// tool-calling loop called the RBAC-free ToolExecutionService.Execute, never
+// ExecuteWithUser — making tool.Service's RBAC checks (admin-only
+// "github"/"coding_agent" write actions) dead code from a live conversation's
+// perspective. Before the fix, this test's non-admin chat user's message
+// requesting github.pr_merge (an admin-only write action per
+// internal/usecase/tool/permissions.go's githubActionRole) actually executes
+// the tool. After the fix, chat.Service resolves a role-bearing domain.User
+// for the incoming message's platform identity and calls ExecuteWithUser,
+// which must deny this at the RBAC layer — surfacing a permission-denied
+// tool result to the LLM, never a fabricated success.
+func TestProcessMessage_RBAC_NonAdminCannotInvokeGitHubPRMerge(t *testing.T) {
+	toolExecService := newRealToolServiceWithGitHubTool(t)
+
+	llmCallCount := 0
+	var secondCallLastMessage string
+
+	llmService := &mockLLMService{
+		completeFunc: func(_ context.Context, _ domain.LLMProvider, req *domain.LLMRequest) (*domain.LLMResponse, error) {
+			llmCallCount++
+			if llmCallCount == 1 {
+				return &domain.LLMResponse{
+					Content: "Merging your PR now.",
+					ToolCalls: []domain.ToolCall{
+						{
+							ToolName: "github",
+							Arguments: map[string]any{
+								"action": github.ActionPRMerge,
+								"pr":     42.0,
+							},
+						},
+					},
+					FinishReason: "tool_use",
+					Usage:        domain.TokenUsage{PromptTokens: 10, CompletionTokens: 10, TotalTokens: 20},
+				}, nil
+			}
+			// Second call: capture the tool-result message the LLM actually
+			// saw, so the test can assert on the real content rather than
+			// just the final human-facing reply text.
+			if len(req.Messages) > 0 {
+				secondCallLastMessage = req.Messages[len(req.Messages)-1].Content
+			}
+			return &domain.LLMResponse{
+				Content:      "I was not able to merge the PR.",
+				ToolCalls:    []domain.ToolCall{},
+				FinishReason: "end_turn",
+				Usage:        domain.TokenUsage{PromptTokens: 20, CompletionTokens: 10, TotalTokens: 30},
+			}, nil
+		},
+	}
+
+	memoryRepo := &mockMemoryRepository{
+		getRecentMessagesFunc: func(_ context.Context, _ string, _ int) ([]domain.StoredMessage, error) {
+			return []domain.StoredMessage{}, nil
+		},
+	}
+
+	securityService := &mockSecurityService{}
+
+	userService := &mockUserService{
+		getUserFunc: func(_ context.Context, _ domain.Platform, _ string) (*domain.User, error) {
+			return &domain.User{ID: "U-non-admin-1", Role: domain.RoleUser}, nil // non-admin
+		},
+	}
+	service := NewService(llmService, memoryRepo, toolExecService, securityService, userService)
+
+	incomingMsg := &domain.IncomingMessage{
+		ID:          "test-rbac-1",
+		Platform:    domain.PlatformSlack,
+		PlatformUID: "U-non-admin-1",
+		Text:        "Please merge PR 42",
+		Timestamp:   time.Now(),
+	}
+
+	_, err := service.ProcessMessage(context.Background(), incomingMsg)
+	if err != nil {
+		t.Fatalf("ProcessMessage returned unexpected error: %v", err)
+	}
+
+	if llmCallCount != 2 {
+		t.Fatalf("expected 2 LLM calls (tool round + final response), got %d", llmCallCount)
+	}
+
+	// The RBAC layer must have denied the call — proven by the tool-result
+	// message fed back to the LLM carrying the permission-denied error, not
+	// the mock tool's fabricated "mock result" success output.
+	if strings.Contains(secondCallLastMessage, "mock result") {
+		t.Fatalf("RBAC bypass: non-admin user's github.pr_merge call actually executed (tool result: %q)", secondCallLastMessage)
+	}
+	if !strings.Contains(secondCallLastMessage, domain.ErrInsufficientPermissions.Error()) {
+		t.Fatalf("expected tool result to carry a permission-denied error, got: %q", secondCallLastMessage)
+	}
+}
+
+// TestProcessMessage_RBAC_AdminCanInvokeGitHubPRMerge is the positive
+// counterpart: an admin chat user's identical github.pr_merge request must
+// still succeed once RBAC is actually enforced, proving the fix denies
+// non-admins without breaking legitimate admin use.
+func TestProcessMessage_RBAC_AdminCanInvokeGitHubPRMerge(t *testing.T) {
+	toolExecService := newRealToolServiceWithGitHubTool(t)
+
+	llmCallCount := 0
+	var secondCallLastMessage string
+
+	llmService := &mockLLMService{
+		completeFunc: func(_ context.Context, _ domain.LLMProvider, req *domain.LLMRequest) (*domain.LLMResponse, error) {
+			llmCallCount++
+			if llmCallCount == 1 {
+				return &domain.LLMResponse{
+					Content: "Merging your PR now.",
+					ToolCalls: []domain.ToolCall{
+						{
+							ToolName: "github",
+							Arguments: map[string]any{
+								"action": github.ActionPRMerge,
+								"pr":     42.0,
+							},
+						},
+					},
+					FinishReason: "tool_use",
+					Usage:        domain.TokenUsage{PromptTokens: 10, CompletionTokens: 10, TotalTokens: 20},
+				}, nil
+			}
+			if len(req.Messages) > 0 {
+				secondCallLastMessage = req.Messages[len(req.Messages)-1].Content
+			}
+			return &domain.LLMResponse{
+				Content:      "Merged.",
+				ToolCalls:    []domain.ToolCall{},
+				FinishReason: "end_turn",
+				Usage:        domain.TokenUsage{PromptTokens: 20, CompletionTokens: 10, TotalTokens: 30},
+			}, nil
+		},
+	}
+
+	memoryRepo := &mockMemoryRepository{
+		getRecentMessagesFunc: func(_ context.Context, _ string, _ int) ([]domain.StoredMessage, error) {
+			return []domain.StoredMessage{}, nil
+		},
+	}
+
+	securityService := &mockSecurityService{}
+
+	userService := &mockUserService{
+		getUserFunc: func(_ context.Context, _ domain.Platform, _ string) (*domain.User, error) {
+			return &domain.User{ID: "U-admin-1", Role: domain.RoleAdmin}, nil // admin
+		},
+	}
+	service := NewService(llmService, memoryRepo, toolExecService, securityService, userService)
+
+	incomingMsg := &domain.IncomingMessage{
+		ID:          "test-rbac-2",
+		Platform:    domain.PlatformSlack,
+		PlatformUID: "U-admin-1",
+		Text:        "Please merge PR 42",
+		Timestamp:   time.Now(),
+	}
+
+	_, err := service.ProcessMessage(context.Background(), incomingMsg)
+	if err != nil {
+		t.Fatalf("ProcessMessage returned unexpected error: %v", err)
+	}
+
+	if strings.Contains(secondCallLastMessage, domain.ErrInsufficientPermissions.Error()) {
+		t.Fatalf("expected admin's github.pr_merge call to succeed, but it was denied: %q", secondCallLastMessage)
+	}
+	if !strings.Contains(secondCallLastMessage, "mock result") {
+		t.Fatalf("expected admin's github.pr_merge call to actually execute, got: %q", secondCallLastMessage)
+	}
+}
+
+// TestProcessMessage_RBAC_UnresolvableIdentityFailsClosedToGuest verifies
+// that when UserService has no existing record for a platform identity
+// (domain.ErrUserNotFound), resolveUser's CreateUser fallback defaults a
+// non-CLI platform to the lowest-privilege domain.RoleGuest
+// (defaultRoleForPlatform) — denied for anything above RoleGuest — rather
+// than silently granting any implicit trust to an unregistered identity.
+func TestProcessMessage_RBAC_UnresolvableIdentityFailsClosedToGuest(t *testing.T) {
+	toolExecService := newRealToolServiceWithGitHubTool(t)
+
+	llmCallCount := 0
+	var secondCallLastMessage string
+
+	llmService := &mockLLMService{
+		completeFunc: func(_ context.Context, _ domain.LLMProvider, req *domain.LLMRequest) (*domain.LLMResponse, error) {
+			llmCallCount++
+			if llmCallCount == 1 {
+				return &domain.LLMResponse{
+					Content: "Merging your PR now.",
+					ToolCalls: []domain.ToolCall{
+						{
+							ToolName:  "github",
+							Arguments: map[string]any{"action": github.ActionPRMerge, "pr": 42.0},
+						},
+					},
+					FinishReason: "tool_use",
+					Usage:        domain.TokenUsage{PromptTokens: 10, CompletionTokens: 10, TotalTokens: 20},
+				}, nil
+			}
+			if len(req.Messages) > 0 {
+				secondCallLastMessage = req.Messages[len(req.Messages)-1].Content
+			}
+			return &domain.LLMResponse{
+				Content:      "I was not able to merge the PR.",
+				ToolCalls:    []domain.ToolCall{},
+				FinishReason: "end_turn",
+				Usage:        domain.TokenUsage{PromptTokens: 20, CompletionTokens: 10, TotalTokens: 30},
+			}, nil
+		},
+	}
+
+	memoryRepo := &mockMemoryRepository{
+		getRecentMessagesFunc: func(_ context.Context, _ string, _ int) ([]domain.StoredMessage, error) {
+			return []domain.StoredMessage{}, nil
+		},
+	}
+
+	userService := &mockUserService{
+		getUserFunc: func(_ context.Context, _ domain.Platform, _ string) (*domain.User, error) {
+			return nil, domain.ErrUserNotFound // unregistered — falls through to CreateUser
+		},
+	}
+	service := NewService(llmService, memoryRepo, toolExecService, &mockSecurityService{}, userService)
+	// defaultRoleForPlatform defaults new non-CLI users to RoleGuest (fail closed).
+
+	incomingMsg := &domain.IncomingMessage{
+		ID:          "test-rbac-3",
+		Platform:    domain.PlatformSlack,
+		PlatformUID: "U-unregistered-1",
+		Text:        "Please merge PR 42",
+		Timestamp:   time.Now(),
+	}
+
+	_, err := service.ProcessMessage(context.Background(), incomingMsg)
+	if err != nil {
+		t.Fatalf("ProcessMessage returned unexpected error: %v", err)
+	}
+
+	if !strings.Contains(secondCallLastMessage, domain.ErrInsufficientPermissions.Error()) {
+		t.Fatalf("expected unresolvable identity to fail closed (denied), got: %q", secondCallLastMessage)
 	}
 }

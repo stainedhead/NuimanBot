@@ -23,7 +23,7 @@ func buildMinimalRESTConfig() config.ExternalAPIRestConfig {
 func TestNewServer_EmptyJWTSecret_ReturnsError(t *testing.T) {
 	cfg := buildMinimalRESTConfig()
 
-	srv, err := api.NewServer(cfg, "")
+	srv, err := api.NewServer(cfg, "", nil, nil)
 
 	if err == nil {
 		t.Fatal("expected an error for empty JWT secret, got nil")
@@ -39,7 +39,7 @@ func TestNewServer_ShortJWTSecret_ReturnsError(t *testing.T) {
 	cfg := buildMinimalRESTConfig()
 	shortSecret := strings.Repeat("x", 31) // one byte short
 
-	srv, err := api.NewServer(cfg, shortSecret)
+	srv, err := api.NewServer(cfg, shortSecret, nil, nil)
 
 	if err == nil {
 		t.Fatalf("expected an error for a 31-byte JWT secret, got nil")
@@ -55,7 +55,7 @@ func TestNewServer_MinimumLengthJWTSecret_Succeeds(t *testing.T) {
 	cfg := buildMinimalRESTConfig()
 	validSecret := strings.Repeat("x", 32) // exactly 32 bytes
 
-	srv, err := api.NewServer(cfg, validSecret)
+	srv, err := api.NewServer(cfg, validSecret, nil, nil)
 
 	if err != nil {
 		t.Fatalf("expected no error for a 32-byte JWT secret, got: %v", err)

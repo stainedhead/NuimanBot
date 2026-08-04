@@ -93,6 +93,70 @@ func TestBuildMCPTools_ValidServer_RegistersTools(t *testing.T) {
 	assert.Contains(t, names, "mcp:ingatan:memory_store")
 }
 
+// --- BuildMCPTools: resolved trust classification attached per tool
+// (Phase 6 / Part F, P6.2) ---
+
+func TestBuildMCPTools_ResolvesTrustPerTool_ServerDefaultAndToolOverride(t *testing.T) {
+	tools := []infra.MCPTool{
+		{Name: "issue_list", Description: "List issues"},
+		{Name: "pr_merge", Description: "Merge a PR"},
+	}
+	srv := newMockMCPHTTPServer(t, tools, false)
+
+	cfg := infra.MCPConfig{
+		Servers: []infra.MCPServerEntry{
+			{
+				Name:      "github-mcp",
+				Transport: "http",
+				URL:       srv.URL + "/mcp",
+				Trust:     infra.TrustReadOnly,
+				ToolOverrides: map[string]string{
+					"pr_merge": infra.TrustWrite,
+				},
+			},
+		},
+	}
+
+	registry := tool.NewInMemoryRegistry()
+	err := BuildMCPTools(context.Background(), cfg, registry)
+	require.NoError(t, err)
+
+	issueList, err := registry.Get("mcp:github-mcp:issue_list")
+	require.NoError(t, err)
+	trustClassified, ok := issueList.(interface{ TrustLevel() string })
+	require.True(t, ok, "MCPToolAdapter must implement TrustLevel()")
+	assert.Equal(t, infra.TrustReadOnly, trustClassified.TrustLevel(),
+		"issue_list has no tool_overrides entry, should inherit the server default")
+
+	prMerge, err := registry.Get("mcp:github-mcp:pr_merge")
+	require.NoError(t, err)
+	trustClassified, ok = prMerge.(interface{ TrustLevel() string })
+	require.True(t, ok)
+	assert.Equal(t, infra.TrustWrite, trustClassified.TrustLevel(),
+		"pr_merge has an explicit tool_overrides entry, which must take precedence")
+}
+
+func TestBuildMCPTools_NoTrustConfigured_DefaultsToUnknown(t *testing.T) {
+	tools := []infra.MCPTool{{Name: "some_tool", Description: "desc"}}
+	srv := newMockMCPHTTPServer(t, tools, false)
+
+	cfg := infra.MCPConfig{
+		Servers: []infra.MCPServerEntry{
+			{Name: "no-trust-server", Transport: "http", URL: srv.URL + "/mcp"},
+		},
+	}
+
+	registry := tool.NewInMemoryRegistry()
+	err := BuildMCPTools(context.Background(), cfg, registry)
+	require.NoError(t, err)
+
+	someTool, err := registry.Get("mcp:no-trust-server:some_tool")
+	require.NoError(t, err)
+	trustClassified, ok := someTool.(interface{ TrustLevel() string })
+	require.True(t, ok)
+	assert.Equal(t, infra.TrustUnknown, trustClassified.TrustLevel())
+}
+
 // --- BuildMCPTools: failing server is skipped, others proceed ---
 
 func TestBuildMCPTools_FailingServer_Skipped(t *testing.T) {

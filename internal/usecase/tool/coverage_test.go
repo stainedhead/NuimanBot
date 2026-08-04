@@ -66,7 +66,7 @@ func TestExecuteWithUser_RateLimitExceeded(t *testing.T) {
 	// Exhaust the bucket by calling repeatedly
 	var gotRateLimitErr bool
 	for i := 0; i < 20; i++ {
-		_, err := svc.ExecuteWithUser(context.Background(), adminUser, "test-tool", nil)
+		_, err := svc.ExecuteWithUser(context.Background(), adminUser, "conv1", "test-tool", nil)
 		if errors.Is(err, domain.ErrRateLimitExceeded) {
 			gotRateLimitErr = true
 			break
@@ -112,7 +112,7 @@ func TestAuditPermissionDenial_AuditError(t *testing.T) {
 
 	svc := NewService(&config.ToolsSystemConfig{}, mockRegistry, mockSecurity)
 
-	_, err := svc.ExecuteWithUser(context.Background(), user, "admin.user", nil)
+	_, err := svc.ExecuteWithUser(context.Background(), user, "conv1", "admin.user", nil)
 	// Should return permission error (not the audit error)
 	if err == nil {
 		t.Error("Expected permission denied error")
@@ -156,7 +156,7 @@ func TestExecuteWithUser_RulesEnforcer_Blocked(t *testing.T) {
 	}
 	svc.SetRulesEnforcer(blockedEnforcer)
 
-	_, err := svc.ExecuteWithUser(context.Background(), adminUser, "some-tool", nil)
+	_, err := svc.ExecuteWithUser(context.Background(), adminUser, "conv1", "some-tool", nil)
 	if err == nil {
 		t.Error("Expected error when rules enforcer blocks tool")
 	}
@@ -195,7 +195,7 @@ func TestExecuteWithUser_RulesEnforcer_RequiresConfirmation(t *testing.T) {
 	}
 	svc.SetRulesEnforcer(confirmEnforcer)
 
-	_, err := svc.ExecuteWithUser(context.Background(), adminUser, "some-tool", nil)
+	_, err := svc.ExecuteWithUser(context.Background(), adminUser, "conv1", "some-tool", nil)
 	if err == nil {
 		t.Error("Expected error when tool requires confirmation")
 	}
@@ -234,7 +234,7 @@ func TestExecuteWithUser_RulesEnforcer_Error(t *testing.T) {
 	}
 	svc.SetRulesEnforcer(errorEnforcer)
 
-	_, err := svc.ExecuteWithUser(context.Background(), adminUser, "some-tool", nil)
+	_, err := svc.ExecuteWithUser(context.Background(), adminUser, "conv1", "some-tool", nil)
 	if err == nil {
 		t.Error("Expected error when rules enforcer fails")
 	}

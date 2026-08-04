@@ -82,6 +82,7 @@ type application struct {
 	MemoryCellRepo       memoryv2.MemoryCellRepository  // Memory v2 cell repository
 	MemorySceneRepo      memoryv2.MemorySceneRepository // Memory v2 scene repository
 	MemoryAdmin          cliadapter.MemoryAdmin         // Optional admin operations for memory CLI
+	ConfirmationStore    security.ConfirmationStore     // Part C confirmation store, shared with web/REST UI wiring (P5.8/P5.9)
 }
 
 func main() {
@@ -182,6 +183,16 @@ func main() {
 	domainUserRepo := storage.NewFileUserRepository(storagePath + "/domain_users.json")
 	domainUserService := user.NewService(domainUserRepo, securityService)
 
+	// 5.6. Build the shared OutputValidator used by every tool that returns
+	// third-party-controlled content (summarize, doc_summarize, websearch, MCP
+	// tools) to scan for prompt-injection patterns before that content re-enters
+	// the LLM's conversation loop. Fail-closed default: enabled, action=reject.
+	outputValidator := buildOutputValidator(cfg.Security.ToolOutputValidation)
+	slog.Info("Tool-output injection validator initialized",
+		"enabled", cfg.Security.ToolOutputValidation.IsEnabled(),
+		"action", cfg.Security.ToolOutputValidation.ResolvedAction(),
+	)
+
 	// 6. Initialize Memory Repository
 	conversationAdapter := &conversationRepositoryAdapter{repo: fileRepos.Conversation}
 
@@ -203,20 +214,42 @@ func main() {
 	toolRegistry := tool.NewInMemoryRegistry()
 
 	// Register built-in skills
-	if err := registerBuiltInTools(toolRegistry, notesRepo, llmService); err != nil {
+	if err := registerBuiltInTools(toolRegistry, notesRepo, llmService, outputValidator, cfg.Security.Fetch); err != nil {
 		log.Fatalf("Failed to register skills: %v", err)
 	}
 
 	// 9.5. Register MCP tools from mcp.json (if MCP client is enabled)
-	if err := registerMCPTools(ctx, cfg, toolRegistry); err != nil {
+	if err := registerMCPTools(ctx, cfg, toolRegistry, outputValidator); err != nil {
 		// Non-fatal: MCP errors are logged inside registerMCPTools; we carry on.
 		slog.Warn("MCP tool registration encountered errors", "error", err)
 	}
 
 	toolExecutionService := tool.NewService(&cfg.Tools, toolRegistry, securityService)
+	toolExecutionService.SetConfirmationConfig(cfg.Security.Confirmation)
 
 	// 10. Initialize Chat Service
 	chatService := chat.NewService(llmService, conversationAdapter, toolExecutionService, securityService, domainUserService)
+
+	// 9.6. Wire Part C's side-effecting-action confirmation gate
+	// (specs/260802-improve-nuimanbot-security, FR-009..FR-015). The same
+	// FileConfirmationStore instance must be shared by ToolExecutionService
+	// (which creates/checks confirmations when executing a flagged
+	// tool/action) and ChatService (which detects and resolves
+	// confirmation-reply messages — see ChatService.SetConfirmationStore's
+	// doc comment). wireConfirmationStore (specs/260803-improve-nuimanbot-
+	// security-auto-review, FR-014/P3.4) sets both services from this single
+	// instance and fails fast rather than allowing one service to silently
+	// end up unconfigured or pointed at a different instance.
+	confirmationStorePath := storagePath + "/confirmations.json"
+	confirmationStore := infrasecurity.NewFileConfirmationStore(confirmationStorePath, cfg.Security.Confirmation.ResolvedTimeout())
+	if err := wireConfirmationStore(chatService, toolExecutionService, confirmationStore); err != nil {
+		log.Fatalf("Failed to wire confirmation store: %v", err)
+	}
+	slog.Info("Side-effecting action confirmation gate initialized",
+		"enabled", cfg.Security.Confirmation.IsEnabled(),
+		"timeout", cfg.Security.Confirmation.ResolvedTimeout(),
+		"default_required_actions", cfg.Security.Confirmation.DefaultRequiredActions,
+	)
 
 	// Configure LLM defaults from config
 	chatService.SetLLMDefaults(chat.LLMDefaults{
@@ -324,7 +357,11 @@ func main() {
 	if cfg.ExternalAPI.REST.Enabled {
 		jwtSecret := cfg.Security.EncryptionKey // Use app encryption key as JWT signing secret.
 		var err error
-		restServer, err = api.NewServer(cfg.ExternalAPI.REST, jwtSecret)
+		// confirmationStore/chatService back the REST confirmation endpoints
+		// (GET/POST /api/v1/confirmations/{id}[/resolve], Part C / FR-011,
+		// P5.9) — chatService.ResolveConfirmation satisfies
+		// api.ConfirmationResolver.
+		restServer, err = api.NewServer(cfg.ExternalAPI.REST, jwtSecret, confirmationStore, chatService)
 		if err != nil {
 			slog.Error("REST API configuration error", "error", err)
 			os.Exit(1)
@@ -348,6 +385,7 @@ func main() {
 		MemoryCellRepo:       memoryCellRepo,
 		MemorySceneRepo:      memorySceneRepo,
 		MemoryAdmin:          memoryAdmin,
+		ConfirmationStore:    confirmationStore,
 	}
 
 	// 12. Run application in goroutine
@@ -482,8 +520,82 @@ func initializeLLMService(cfg *config.NuimanBotConfig) (domain.LLMService, error
 	return svc, nil
 }
 
+// wireConfirmationStore configures chatSvc and toolSvc to share exactly one
+// ConfirmationStore instance for Part C's side-effecting-action confirmation
+// flow (specs/260803-improve-nuimanbot-security-auto-review, FR-014/P3.4).
+//
+// Both services expose SetConfirmationStore as an independent optional
+// setter, so nothing at the type level stops a future change from wiring
+// only one of them, or wiring them to two different instances. Either
+// mistake is dangerous in a subtle way: tool.Service stays fail-closed (no
+// unconfirmed action executes) so nothing unsafe happens, but chat.Service's
+// confirmation-reply detection silently no-ops — pending confirmations then
+// sit until they expire on their own TTL, with no error surfaced to the
+// operator or the user who thinks they replied "yes".
+//
+// wireConfirmationStore closes that gap by construction: callers pass one
+// store value and this function is the only place that calls either
+// service's SetConfirmationStore, so both services always receive the
+// identical instance. It additionally fails fast (rather than silently
+// leaving both services unconfigured) if store is nil, since a nil store
+// is never a valid steady-state configuration for this feature — the
+// caller should not construct a ConfirmationStore at all if the
+// confirmation gate is meant to be disabled outright.
+func wireConfirmationStore(chatSvc *chat.Service, toolSvc *tool.Service, store security.ConfirmationStore) error {
+	if store == nil {
+		return fmt.Errorf("confirmation store must not be nil: chat.Service and tool.Service both require the same non-nil ConfirmationStore instance for Part C's confirmation flow to work end-to-end")
+	}
+	if chatSvc == nil {
+		return fmt.Errorf("chat.Service must not be nil when wiring confirmation store")
+	}
+	if toolSvc == nil {
+		return fmt.Errorf("tool.Service must not be nil when wiring confirmation store")
+	}
+
+	toolSvc.SetConfirmationStore(store)
+	chatSvc.SetConfirmationStore(store)
+	return nil
+}
+
+// buildOutputValidator constructs the shared OutputValidator used by every tool
+// that returns third-party-controlled content, honoring
+// security.tool_output_validation.enabled/action. A disabled config returns a
+// NoopOutputValidator so every call site can depend on a non-nil
+// security.OutputValidator unconditionally.
+func buildOutputValidator(cfg config.ToolOutputValidationConfig) security.OutputValidator {
+	if !cfg.IsEnabled() {
+		return security.NewNoopOutputValidator()
+	}
+
+	action := security.ValidationActionReject
+	if cfg.ResolvedAction() == "annotate" {
+		action = security.ValidationActionAnnotate
+	}
+	return security.NewDefaultOutputValidator(security.WithDefaultAction(action))
+}
+
+// buildFetchHTTPClient constructs the shared *http.Client used by the fetch
+// tools (summarize, doc_summarize), honoring
+// security.fetch.{ssrf_protection,follow_redirects}. Every redirect hop is
+// re-validated against disallowed IP ranges and dialed at the exact resolved
+// IP that was validated (closing the DNS-rebinding TOCTOU window) unless
+// ssrf_protection is explicitly disabled; when follow_redirects is
+// explicitly disabled, redirects are not followed at all — the 3xx response
+// is returned to the caller as-is.
+func buildFetchHTTPClient(timeout time.Duration, cfg config.FetchSecurityConfig) *http.Client {
+	policy := common.FetchPolicy{
+		SSRFProtection:  cfg.SSRFProtectionEnabled(),
+		FollowRedirects: cfg.FollowRedirectsEnabled(),
+	}
+	return &http.Client{
+		Timeout:       timeout,
+		Transport:     common.NewSSRFSafeTransport(nil),
+		CheckRedirect: common.NewCheckRedirect(policy, common.URLValidationOptions{}),
+	}
+}
+
 // registerBuiltInTools registers all built-in skills with the registry.
-func registerBuiltInTools(registry tool.ToolRegistry, notesRepo domain.NotesRepository, llmService domain.LLMService) error {
+func registerBuiltInTools(registry tool.ToolRegistry, notesRepo domain.NotesRepository, llmService domain.LLMService, outputValidator security.OutputValidator, fetchCfg config.FetchSecurityConfig) error {
 	// Register Calculator skill
 	calc := calculator.NewCalculator()
 	if err := registry.Register(calc); err != nil {
@@ -510,6 +622,7 @@ func registerBuiltInTools(registry tool.ToolRegistry, notesRepo domain.NotesRepo
 
 	// Register WebSearch skill
 	ws := websearch.NewWebSearch(10)
+	ws.SetOutputValidator(outputValidator)
 	if err := registry.Register(ws); err != nil {
 		return fmt.Errorf("failed to register websearch skill: %w", err)
 	}
@@ -523,7 +636,7 @@ func registerBuiltInTools(registry tool.ToolRegistry, notesRepo domain.NotesRepo
 	slog.Info("Skill registered", "skill", "notes")
 
 	// Register Developer Productivity Skills (Phase 5)
-	if err := registerDeveloperProductivityTools(registry, llmService); err != nil {
+	if err := registerDeveloperProductivityTools(registry, llmService, outputValidator, fetchCfg); err != nil {
 		return fmt.Errorf("failed to register developer productivity skills: %w", err)
 	}
 
@@ -532,12 +645,12 @@ func registerBuiltInTools(registry tool.ToolRegistry, notesRepo domain.NotesRepo
 }
 
 // registerDeveloperProductivityTools registers developer productivity skills.
-func registerDeveloperProductivityTools(registry tool.ToolRegistry, llmService domain.LLMService) error {
+func registerDeveloperProductivityTools(registry tool.ToolRegistry, llmService domain.LLMService, outputValidator security.OutputValidator, fetchCfg config.FetchSecurityConfig) error {
 	// Create shared dependencies
 	executorSvc := executor.NewExecutorService()
 	rateLimiter := common.NewRateLimiter()
 	sanitizer := common.NewOutputSanitizer()
-	httpClient := &http.Client{Timeout: 60 * time.Second}
+	httpClient := buildFetchHTTPClient(60*time.Second, fetchCfg)
 
 	// Default workspace paths (can be configured later)
 	workspacePaths := []string{"."}
@@ -582,6 +695,8 @@ func registerDeveloperProductivityTools(registry tool.ToolRegistry, llmService d
 		},
 	}
 	docSummarizeSkill := doc_summarize.NewDocSummarizeSkill(docSummarizeConfig, llmService, httpClient)
+	docSummarizeSkill.SetOutputValidator(outputValidator)
+	docSummarizeSkill.SetSSRFProtection(fetchCfg.SSRFProtectionEnabled())
 	if err := registry.Register(docSummarizeSkill); err != nil {
 		return fmt.Errorf("failed to register doc_summarize skill: %w", err)
 	}
@@ -596,6 +711,8 @@ func registerDeveloperProductivityTools(registry tool.ToolRegistry, llmService d
 		},
 	}
 	summarizeSkill := summarize.NewSummarizeSkill(summarizeConfig, llmService, executorSvc, httpClient)
+	summarizeSkill.SetOutputValidator(outputValidator)
+	summarizeSkill.SetSSRFProtection(fetchCfg.SSRFProtectionEnabled())
 	if err := registry.Register(summarizeSkill); err != nil {
 		return fmt.Errorf("failed to register summarize skill: %w", err)
 	}
@@ -622,7 +739,7 @@ func registerDeveloperProductivityTools(registry tool.ToolRegistry, llmService d
 
 // registerMCPTools loads mcp.json and registers MCP tools from every configured
 // server.  Individual server failures are logged and skipped (non-fatal).
-func registerMCPTools(ctx context.Context, cfg *config.NuimanBotConfig, registry tool.ToolRegistry) error {
+func registerMCPTools(ctx context.Context, cfg *config.NuimanBotConfig, registry tool.ToolRegistry, outputValidator security.OutputValidator) error {
 	if !cfg.MCP.Client.Enabled {
 		slog.Info("MCP client disabled; skipping MCP tool registration")
 		return nil
@@ -644,7 +761,59 @@ func registerMCPTools(ctx context.Context, cfg *config.NuimanBotConfig, registry
 	}
 
 	slog.Info("MCP: registering tools", "config_file", cfgFile, "servers", len(mcpCfg.Servers))
-	return mcpadapter.BuildMCPTools(ctx, *mcpCfg, registry)
+	return mcpadapter.BuildMCPTools(ctx, *mcpCfg, registry, mcpadapter.WithOutputValidator(outputValidator))
+}
+
+// confirmationServiceAdapter adapts security.ConfirmationStore (for listing
+// and fetching pending confirmations) and *chat.Service (for resolving them)
+// to web.ConfirmationService — the web admin UI's confirmation page
+// (specs/260802-improve-nuimanbot-security, Part C, task P5.8). Composing
+// the two here (rather than making either type implement web.ConfirmationService
+// directly) keeps that interface's dependency minimal and avoids a
+// usecase-layer package depending on the adapter layer.
+type confirmationServiceAdapter struct {
+	store security.ConfirmationStore
+	chat  *chat.Service
+}
+
+func (a *confirmationServiceAdapter) ListPendingConfirmations(ctx context.Context) ([]web.PendingConfirmation, error) {
+	reqs, err := a.store.ListPending(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]web.PendingConfirmation, len(reqs))
+	for i, r := range reqs {
+		out[i] = confirmationRequestToWeb(r)
+	}
+	return out, nil
+}
+
+func (a *confirmationServiceAdapter) GetConfirmation(ctx context.Context, id string) (web.PendingConfirmation, error) {
+	r, err := a.store.Get(ctx, id)
+	if err != nil {
+		return web.PendingConfirmation{}, err
+	}
+	return confirmationRequestToWeb(r), nil
+}
+
+func (a *confirmationServiceAdapter) ResolveConfirmation(ctx context.Context, confirmationID string, approved bool) error {
+	_, err := a.chat.ResolveConfirmation(ctx, confirmationID, approved)
+	return err
+}
+
+// confirmationRequestToWeb converts a usecase-layer security.ConfirmationRequest
+// into the web adapter's simplified display type.
+func confirmationRequestToWeb(r security.ConfirmationRequest) web.PendingConfirmation {
+	return web.PendingConfirmation{
+		ID:             r.ID,
+		UserID:         r.UserID,
+		ConversationID: r.ConversationID,
+		ToolName:       r.ToolName,
+		Action:         r.Action,
+		Summary:        r.Summary,
+		CreatedAt:      r.CreatedAt,
+		ExpiresAt:      r.ExpiresAt,
+	}
 }
 
 // memoryCuratorAdapter adapts MemoryCuratorService to chat.MemoryCurator interface.
@@ -782,6 +951,12 @@ func (app *application) Run(ctx context.Context) error {
 	profileService := profile.NewService(profileRepo, app.SecurityService)
 	slog.Info("User profile management initialized", "file", usersFilePath)
 
+	// Note: chat.Service's RBAC resolution (specs/260803-improve-nuimanbot-
+	// security-auto-review, FR-001/FR-002) is wired via domainUserService,
+	// passed directly into chat.NewService in main() above — not via
+	// profileService, which remains dedicated to the CLI/web admin surfaces'
+	// own user-profile management and is unrelated to chat RBAC resolution.
+
 	// Initialize Bot Config Repository and Service (Phase 3)
 	// Get encryption key from security config. The config value is the
 	// base64-encoded key as read from NUIMANBOT_ENCRYPTION_KEY, so it must be
@@ -808,6 +983,15 @@ func (app *application) Run(ctx context.Context) error {
 
 		// Wire services into Web UI
 		webServer.SetProfileService(profileService)
+
+		// Wire Part C's confirmation admin UI (P5.8): lists pending
+		// confirmations and resolves them via ChatService.ResolveConfirmation.
+		if app.ChatService != nil && app.ConfirmationStore != nil {
+			webServer.SetConfirmationService(&confirmationServiceAdapter{
+				store: app.ConfirmationStore,
+				chat:  app.ChatService,
+			})
+		}
 
 		// Add default admin user for web login
 		if err := webServer.GetAuth().AddUser("admin", "admin", "admin"); err != nil {

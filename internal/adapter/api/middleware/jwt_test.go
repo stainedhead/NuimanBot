@@ -29,6 +29,21 @@ func makeValidToken(t *testing.T, principalID string) string {
 	return signed
 }
 
+func makeValidTokenWithRole(t *testing.T, principalID, role string) string {
+	t.Helper()
+	claims := jwt.MapClaims{
+		"sub":  principalID,
+		"role": role,
+		"iss":  "nuimanbot",
+		"exp":  time.Now().Add(1 * time.Hour).Unix(),
+		"iat":  time.Now().Unix(),
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := token.SignedString([]byte(testJWTSecret))
+	require.NoError(t, err)
+	return signed
+}
+
 func makeExpiredToken(t *testing.T) string {
 	t.Helper()
 	claims := jwt.MapClaims{
@@ -105,6 +120,47 @@ func TestJWTMiddleware_ValidToken_StoresPrincipalAndCallsNext(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rr.Code)
 	assert.Equal(t, principalID, capturedPrincipal)
+}
+
+func TestJWTMiddleware_ValidTokenWithRole_StoresRole(t *testing.T) {
+	var capturedRole string
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedRole = middleware.RoleFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	})
+
+	mw := middleware.JWT(testJWTSecret)(next)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer "+makeValidTokenWithRole(t, "user-abc", middleware.RoleAdmin))
+	rr := httptest.NewRecorder()
+
+	mw.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, middleware.RoleAdmin, capturedRole)
+}
+
+func TestJWTMiddleware_ValidTokenWithoutRole_RoleIsEmpty(t *testing.T) {
+	var capturedRole string
+	roleSeen := false
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedRole = middleware.RoleFromContext(r.Context())
+		roleSeen = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	mw := middleware.JWT(testJWTSecret)(next)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer "+makeValidToken(t, "user-xyz"))
+	rr := httptest.NewRecorder()
+
+	mw.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.True(t, roleSeen)
+	assert.Empty(t, capturedRole, "a token without a role claim must not be treated as admin")
 }
 
 func TestJWTMiddleware_BearerPrefixRequired(t *testing.T) {
