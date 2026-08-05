@@ -19,8 +19,8 @@
 | 5  | Code and Design Review           | ✅ Complete (corrected 20:27: agent's own sub-fork committed early at 17 findings; agent's real final pass merged 2 more → 19 findings: 5 P0, 9 P1, 5 P2, commit 948ccf8) | 2026-08-05T20:06:47Z | 2026-08-05T20:27:52Z | 21 |
 | 6  | Prepare Review PRD               | ✅ Complete (reconciled against 19-finding version; FR-R1 P0→P1, FR-R6 P1→P0; final 5 P0/9 P1/5 P2, commit 50dafa4) | 2026-08-05T20:22:29Z | 2026-08-05T20:32:26Z | 10 |
 | 7  | Archive Original Spec            | ✅ Complete (moved to specs/archive/260805-nuimanbot-extend-context-and-ui/, commit 7813d6f) | 2026-08-05T20:32:26Z | 2026-08-05T20:34:27Z | 2 |
-| 8  | Spec Review Fixes                | 🔄 In Progress | 2026-08-05T20:34:55Z | — | — |
-| 9  | Implement Review Fixes           | ⬜ Pending | — | — | — |
+| 8  | Spec Review Fixes                | ✅ Complete (specs/260805-nuimanbot-extend-context-and-ui-auto-review/, commit 605ba64) | 2026-08-05T20:34:55Z | 2026-08-05T20:41:42Z | 7 |
+| 9  | Implement Review Fixes           | 🔄 In Progress | 2026-08-05T20:41:42Z | — | — |
 | 10 | Archive Fixes Spec               | ⬜ Pending | — | — | — |
 | 11 | Final Quality Pass               | ⬜ Pending | — | — | — |
 | 12 | Process Analysis Report          | ⬜ Pending | — | — | — |

@@ -39,6 +39,9 @@ dist/
 # TLS certificates (auto-generated, never committed)
 data/certs/
 
+# Runtime data (auto-generated on server start, never committed)
+data/users.json
+
 # Database files
 *.db
 *.db-shm
