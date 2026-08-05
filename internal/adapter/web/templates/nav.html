@@ -1,39 +1,62 @@
 {{define "nav"}}
-<nav class="bg-blue-600 text-white shadow-lg" x-data="{ mobileMenuOpen: false }">
+<nav class="bg-teal-800 text-white shadow-lg" x-data="{ mobileMenuOpen: false }">
     <div class="container mx-auto px-4">
         <div class="flex items-center justify-between h-16">
             <!-- Logo and Brand -->
             <div class="flex items-center">
-                <a href="/admin/" class="text-xl font-bold">
-                    NuimanBot Admin
+                <a href="/admin/" class="flex items-center text-xl font-bold">
+                    <img src="/static/img/NuimanProfile.jpg" alt="Nuiman" class="h-8 w-8 rounded-full mr-2 border-2 border-amber-400">
+                    NuimanBot
                 </a>
             </div>
 
             <!-- Desktop Navigation -->
             <div class="hidden md:flex items-center space-x-4">
                 {{if .IsAuthenticated}}
-                <a href="/admin/dashboard" class="px-3 py-2 rounded-md {{if eq .ActivePage "dashboard"}}bg-blue-700{{else}}hover:bg-blue-500{{end}}">
+                <a href="/admin/dashboard" class="px-3 py-2 rounded-md {{if eq .ActivePage "dashboard"}}bg-teal-900{{else}}hover:bg-teal-700{{end}}">
                     Dashboard
                 </a>
-                <a href="/admin/users" class="px-3 py-2 rounded-md {{if eq .ActivePage "users"}}bg-blue-700{{else}}hover:bg-blue-500{{end}}">
+                <a href="/admin/chats" class="px-3 py-2 rounded-md {{if eq .ActivePage "chats"}}bg-teal-900{{else}}hover:bg-teal-700{{end}}">
+                    Chats
+                </a>
+                <a href="/admin/projects" class="px-3 py-2 rounded-md {{if eq .ActivePage "projects"}}bg-teal-900{{else}}hover:bg-teal-700{{end}}">
+                    Projects
+                </a>
+                <a href="/admin/jobs" class="px-3 py-2 rounded-md {{if eq .ActivePage "jobs"}}bg-teal-900{{else}}hover:bg-teal-700{{end}}">
+                    Jobs
+                </a>
+                <a href="/admin/chores" class="px-3 py-2 rounded-md {{if eq .ActivePage "chores"}}bg-teal-900{{else}}hover:bg-teal-700{{end}}">
+                    Chores
+                </a>
+                <a href="/admin/history" class="px-3 py-2 rounded-md {{if eq .ActivePage "history"}}bg-teal-900{{else}}hover:bg-teal-700{{end}} relative">
+                    History
+                    {{if .UnviewedRunCount}}<span class="absolute -top-1 -right-2 bg-amber-500 text-teal-950 text-xs font-bold rounded-full h-5 w-5 flex items-center justify-center">{{.UnviewedRunCount}}</span>{{end}}
+                </a>
+                <a href="/admin/memories" class="px-3 py-2 rounded-md {{if eq .ActivePage "memories"}}bg-teal-900{{else}}hover:bg-teal-700{{end}}">
+                    Memories
+                </a>
+                <a href="/admin/users" class="px-3 py-2 rounded-md {{if eq .ActivePage "users"}}bg-teal-900{{else}}hover:bg-teal-700{{end}}">
                     Users
                 </a>
-                <a href="/admin/bots" class="px-3 py-2 rounded-md {{if eq .ActivePage "bots"}}bg-blue-700{{else}}hover:bg-blue-500{{end}}">
+                <a href="/admin/bots" class="px-3 py-2 rounded-md {{if eq .ActivePage "bots"}}bg-teal-900{{else}}hover:bg-teal-700{{end}}">
                     Bots
                 </a>
-                <a href="/admin/llm" class="px-3 py-2 rounded-md {{if eq .ActivePage "llm"}}bg-blue-700{{else}}hover:bg-blue-500{{end}}">
+                <a href="/admin/llm" class="px-3 py-2 rounded-md {{if eq .ActivePage "llm"}}bg-teal-900{{else}}hover:bg-teal-700{{end}}">
                     LLM Config
                 </a>
-                <a href="/admin/config" class="px-3 py-2 rounded-md {{if eq .ActivePage "config"}}bg-blue-700{{else}}hover:bg-blue-500{{end}}">
+                <a href="/admin/config" class="px-3 py-2 rounded-md {{if eq .ActivePage "config"}}bg-teal-900{{else}}hover:bg-teal-700{{end}}">
                     Server Config
                 </a>
-                <a href="/admin/logs" class="px-3 py-2 rounded-md {{if eq .ActivePage "logs"}}bg-blue-700{{else}}hover:bg-blue-500{{end}}">
+                <a href="/admin/settings" class="px-3 py-2 rounded-md {{if eq .ActivePage "settings"}}bg-teal-900{{else}}hover:bg-teal-700{{end}}">
+                    Settings
+                </a>
+                <a href="/admin/logs" class="px-3 py-2 rounded-md {{if eq .ActivePage "logs"}}bg-teal-900{{else}}hover:bg-teal-700{{end}}">
                     Logs
                 </a>
 
                 <!-- User Menu -->
                 <div class="relative ml-4" x-data="{ userMenuOpen: false }">
-                    <button @click="userMenuOpen = !userMenuOpen" class="flex items-center px-3 py-2 rounded-md hover:bg-blue-500">
+                    <button @click="userMenuOpen = !userMenuOpen" class="flex items-center px-3 py-2 rounded-md hover:bg-teal-700">
                         <span>{{.CurrentUser.Username}}</span>
                         <svg class="ml-2 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
@@ -46,7 +69,7 @@
                     </div>
                 </div>
                 {{else}}
-                <a href="/admin/login" class="px-3 py-2 rounded-md bg-blue-700 hover:bg-blue-800">
+                <a href="/admin/login" class="px-3 py-2 rounded-md bg-teal-900 hover:bg-teal-950">
                     Login
                 </a>
                 {{end}}
@@ -54,7 +77,7 @@
 
             <!-- Mobile Menu Button -->
             <div class="md:hidden">
-                <button @click="mobileMenuOpen = !mobileMenuOpen" class="p-2 rounded-md hover:bg-blue-500">
+                <button @click="mobileMenuOpen = !mobileMenuOpen" class="p-2 rounded-md hover:bg-teal-700">
                     <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path x-show="!mobileMenuOpen" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
                         <path x-show="mobileMenuOpen" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
@@ -66,33 +89,54 @@
         <!-- Mobile Menu -->
         <div x-show="mobileMenuOpen" x-cloak class="md:hidden pb-4">
             {{if .IsAuthenticated}}
-            <a href="/admin/dashboard" class="block px-3 py-2 rounded-md {{if eq .ActivePage "dashboard"}}bg-blue-700{{else}}hover:bg-blue-500{{end}}">
+            <a href="/admin/dashboard" class="block px-3 py-2 rounded-md {{if eq .ActivePage "dashboard"}}bg-teal-900{{else}}hover:bg-teal-700{{end}}">
                 Dashboard
             </a>
-            <a href="/admin/users" class="block px-3 py-2 rounded-md {{if eq .ActivePage "users"}}bg-blue-700{{else}}hover:bg-blue-500{{end}}">
+            <a href="/admin/chats" class="block px-3 py-2 rounded-md {{if eq .ActivePage "chats"}}bg-teal-900{{else}}hover:bg-teal-700{{end}}">
+                Chats
+            </a>
+            <a href="/admin/projects" class="block px-3 py-2 rounded-md {{if eq .ActivePage "projects"}}bg-teal-900{{else}}hover:bg-teal-700{{end}}">
+                Projects
+            </a>
+            <a href="/admin/jobs" class="block px-3 py-2 rounded-md {{if eq .ActivePage "jobs"}}bg-teal-900{{else}}hover:bg-teal-700{{end}}">
+                Jobs
+            </a>
+            <a href="/admin/chores" class="block px-3 py-2 rounded-md {{if eq .ActivePage "chores"}}bg-teal-900{{else}}hover:bg-teal-700{{end}}">
+                Chores
+            </a>
+            <a href="/admin/history" class="block px-3 py-2 rounded-md {{if eq .ActivePage "history"}}bg-teal-900{{else}}hover:bg-teal-700{{end}}">
+                History
+            </a>
+            <a href="/admin/memories" class="block px-3 py-2 rounded-md {{if eq .ActivePage "memories"}}bg-teal-900{{else}}hover:bg-teal-700{{end}}">
+                Memories
+            </a>
+            <a href="/admin/users" class="block px-3 py-2 rounded-md {{if eq .ActivePage "users"}}bg-teal-900{{else}}hover:bg-teal-700{{end}}">
                 Users
             </a>
-            <a href="/admin/bots" class="block px-3 py-2 rounded-md {{if eq .ActivePage "bots"}}bg-blue-700{{else}}hover:bg-blue-500{{end}}">
+            <a href="/admin/bots" class="block px-3 py-2 rounded-md {{if eq .ActivePage "bots"}}bg-teal-900{{else}}hover:bg-teal-700{{end}}">
                 Bots
             </a>
-            <a href="/admin/llm" class="block px-3 py-2 rounded-md {{if eq .ActivePage "llm"}}bg-blue-700{{else}}hover:bg-blue-500{{end}}">
+            <a href="/admin/llm" class="block px-3 py-2 rounded-md {{if eq .ActivePage "llm"}}bg-teal-900{{else}}hover:bg-teal-700{{end}}">
                 LLM Config
             </a>
-            <a href="/admin/config" class="block px-3 py-2 rounded-md {{if eq .ActivePage "config"}}bg-blue-700{{else}}hover:bg-blue-500{{end}}">
+            <a href="/admin/config" class="block px-3 py-2 rounded-md {{if eq .ActivePage "config"}}bg-teal-900{{else}}hover:bg-teal-700{{end}}">
                 Server Config
             </a>
-            <a href="/admin/logs" class="block px-3 py-2 rounded-md {{if eq .ActivePage "logs"}}bg-blue-700{{else}}hover:bg-blue-500{{end}}">
+            <a href="/admin/settings" class="block px-3 py-2 rounded-md {{if eq .ActivePage "settings"}}bg-teal-900{{else}}hover:bg-teal-700{{end}}">
+                Settings
+            </a>
+            <a href="/admin/logs" class="block px-3 py-2 rounded-md {{if eq .ActivePage "logs"}}bg-teal-900{{else}}hover:bg-teal-700{{end}}">
                 Logs
             </a>
-            <hr class="my-2 border-blue-500">
-            <a href="/admin/profile" class="block px-3 py-2 rounded-md hover:bg-blue-500">
+            <hr class="my-2 border-teal-700">
+            <a href="/admin/profile" class="block px-3 py-2 rounded-md hover:bg-teal-700">
                 Profile ({{.CurrentUser.Username}})
             </a>
-            <a href="/admin/logout" class="block px-3 py-2 rounded-md hover:bg-blue-500">
+            <a href="/admin/logout" class="block px-3 py-2 rounded-md hover:bg-teal-700">
                 Logout
             </a>
             {{else}}
-            <a href="/admin/login" class="block px-3 py-2 rounded-md bg-blue-700 hover:bg-blue-800">
+            <a href="/admin/login" class="block px-3 py-2 rounded-md bg-teal-900 hover:bg-teal-950">
                 Login
             </a>
             {{end}}

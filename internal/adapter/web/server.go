@@ -40,6 +40,7 @@ type Server struct {
 	profileService      ProfileService
 	botService          BotService
 	confirmationService ConfirmationService
+	chatsService        ChatsService
 	networkAccess       *networkAccessState
 }
 
@@ -173,6 +174,15 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 		}
 	}))
 
+	// Chats environment routes (FR-011-FR-016): per-user, RoleUser is
+	// sufficient — every handler scopes to the requesting session's own
+	// Username, matching the confirmations routes' composition above.
+	userHandler := func(h http.HandlerFunc) http.Handler {
+		return s.requireRole(domain.RoleUser)(s.requirePasswordChange(h))
+	}
+	mux.Handle("/admin/chats", userHandler(s.handleChats))
+	mux.Handle("/admin/chats/", userHandler(s.handleChatSubroutes))
+
 	mux.Handle("/admin/", adminHandler(s.handleAdminIndex))
 }
 
@@ -261,6 +271,11 @@ type BaseData struct {
 	FlashSuccess    string
 	FlashError      string
 	Version         string
+	// UnviewedRunCount drives the History nav item's notification badge
+	// (FR-044). Zero (the default) renders no badge. Populated by handlers
+	// that have a HistoryService available; pages without one simply leave
+	// it at zero rather than requiring every handler to know about History.
+	UnviewedRunCount int
 }
 
 // User represents a simplified user for template rendering

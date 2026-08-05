@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chats - NuimanBot Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.5/dist/cdn.min.js"></script>
+    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="icon" href="/static/img/NuimanProfile.jpg">
+</head>
+<body class="bg-gray-100 min-h-screen">
+    {{template "nav" .}}
+    <div class="container mx-auto px-4 py-8">
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <div class="flex justify-between items-center mb-6">
+                <h1 class="text-3xl font-bold text-gray-900">Chats</h1>
+            </div>
+
+            <form method="POST" action="/admin/chats" class="mb-8 bg-amber-50 border border-amber-200 rounded-lg p-4">
+                <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                <label for="first_message" class="block text-sm font-medium text-gray-700 mb-2">Start a new chat</label>
+                <div class="flex gap-2">
+                    <textarea id="first_message" name="first_message" rows="2" placeholder="Type your first message..."
+                              class="flex-1 rounded-md border-gray-300 shadow-sm focus:border-teal-500 focus:ring-teal-500"></textarea>
+                    <button type="submit" class="btn-primary self-start">New Chat</button>
+                </div>
+                <p class="text-xs text-gray-500 mt-2">Chats have no working directory — for durable project context, use Projects instead.</p>
+            </form>
+
+            {{if .Chats}}
+            <div class="overflow-x-auto">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Messages</th>
+                            <th>Last Activity</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .Chats}}
+                        <tr>
+                            <td><a href="/admin/chats/{{.ID}}" class="text-teal-700 hover:underline">{{.Name}}</a></td>
+                            <td>{{.MessageCount}}</td>
+                            <td>{{.UpdatedAt.Format "2006-01-02 15:04"}}</td>
+                            <td>
+                                <a href="/admin/chats/{{.ID}}" class="text-teal-600 hover:text-teal-800 mr-3">Open</a>
+                                <a href="/admin/chats/{{.ID}}/export?format=markdown" class="text-gray-500 hover:text-gray-700">Download</a>
+                            </td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+            {{else}}
+            <p class="text-gray-500">No chats yet — start one above.</p>
+            {{end}}
+        </div>
+    </div>
+</body>
+</html>
