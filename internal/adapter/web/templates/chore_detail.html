@@ -9,7 +9,7 @@
     <link rel="stylesheet" href="/static/styles.css">
     <link rel="icon" href="/static/img/NuimanProfile.jpg">
 </head>
-<body class="bg-gray-100 min-h-screen">
+<body class="bg-gray-100 min-h-screen" data-source-type="chore" data-source-id="{{.Chore.ID}}">
     {{template "nav" .}}
     <div class="container mx-auto px-4 py-8">
         <div class="bg-white rounded-lg shadow-md p-6">
@@ -64,6 +64,10 @@
                     <div class="text-xs font-semibold text-gray-500 uppercase mb-1">Next Run</div>
                     <div class="text-gray-800">{{if .Chore.ScheduleConfirmed}}{{.Chore.NextFireTime.Format "2006-01-02 15:04"}}{{else}}—{{end}}</div>
                 </div>
+                <div>
+                    <div class="text-xs font-semibold text-gray-500 uppercase mb-1">Last Run Status</div>
+                    <div id="chore-status" class="text-gray-800">—</div>
+                </div>
             </div>
 
             <div class="border-t pt-4">
@@ -71,5 +75,6 @@
             </div>
         </div>
     </div>
+    <script src="/static/run-events.js" defer></script>
 </body>
 </html>

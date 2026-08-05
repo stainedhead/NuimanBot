@@ -77,7 +77,7 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := &JobsPageData{
-		BaseData:  s.baseDataFor(user, "Jobs", "jobs"),
+		BaseData:  s.baseDataFor(r.Context(), user, "Jobs", "jobs"),
 		Jobs:      jobsList,
 		CSRFToken: s.auth.GenerateCSRFToken(),
 	}
@@ -167,7 +167,7 @@ func (s *Server) handleJobDetail(w http.ResponseWriter, r *http.Request, user *U
 	}
 
 	data := &JobDetailPageData{
-		BaseData:  s.baseDataFor(user, job.Title, "jobs"),
+		BaseData:  s.baseDataFor(r.Context(), user, job.Title, "jobs"),
 		Job:       job,
 		CSRFToken: s.auth.GenerateCSRFToken(),
 	}

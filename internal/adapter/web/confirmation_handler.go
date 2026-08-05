@@ -72,7 +72,7 @@ func (s *Server) handleConfirmations(w http.ResponseWriter, r *http.Request) {
 		Confirmations []PendingConfirmation
 		IsAdmin       bool
 	}{
-		BaseData:      s.baseDataFor(user, "Pending Confirmations", "confirmations"),
+		BaseData:      s.baseDataFor(r.Context(), user, "Pending Confirmations", "confirmations"),
 		Confirmations: pending,
 		IsAdmin:       user.Role == "admin",
 	}

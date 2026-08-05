@@ -57,7 +57,7 @@ func (s *Server) handleBots(w http.ResponseWriter, r *http.Request) {
 		*BaseData
 		Bots []*BotConfig
 	}{
-		BaseData: s.baseDataFor(user, "Bots", "bots"),
+		BaseData: s.baseDataFor(r.Context(), user, "Bots", "bots"),
 		Bots:     bots,
 	}
 

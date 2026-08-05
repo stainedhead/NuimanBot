@@ -9,7 +9,7 @@
     <link rel="stylesheet" href="/static/styles.css">
     <link rel="icon" href="/static/img/NuimanProfile.jpg">
 </head>
-<body class="bg-gray-100 min-h-screen">
+<body class="bg-gray-100 min-h-screen" data-run-id="{{.Run.ID}}">
     {{template "nav" .}}
     <div class="container mx-auto px-4 py-8">
         <div class="bg-white rounded-lg shadow-md p-6">
@@ -22,7 +22,7 @@
             <dl class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
                 <div>
                     <dt class="text-xs font-semibold text-gray-500 uppercase">Status</dt>
-                    <dd class="text-gray-900">{{.Run.Status}}</dd>
+                    <dd id="run-status" class="text-gray-900">{{.Run.Status}}</dd>
                 </div>
                 <div>
                     <dt class="text-xs font-semibold text-gray-500 uppercase">Started</dt>
@@ -54,11 +54,7 @@
 
             <div class="mb-6">
                 <h2 class="text-lg font-semibold text-gray-900 mb-2">Log</h2>
-                {{if .LogContent}}
-                <pre class="bg-gray-900 text-gray-100 text-sm rounded-lg p-4 overflow-x-auto whitespace-pre-wrap">{{.LogContent}}</pre>
-                {{else}}
-                <p class="text-gray-500 text-sm">No log content available.</p>
-                {{end}}
+                <pre id="run-log" class="bg-gray-900 text-gray-100 text-sm rounded-lg p-4 overflow-x-auto whitespace-pre-wrap">{{if .LogContent}}{{.LogContent}}{{else}}No log content available.{{end}}</pre>
             </div>
 
             <div>
@@ -75,5 +71,6 @@
             </div>
         </div>
     </div>
+    <script src="/static/run-events.js" defer></script>
 </body>
 </html>

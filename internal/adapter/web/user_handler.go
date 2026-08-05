@@ -48,7 +48,7 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 		*BaseData
 		Users []*domain.UserProfile
 	}{
-		BaseData: s.baseDataFor(user, "Users", "users"),
+		BaseData: s.baseDataFor(r.Context(), user, "Users", "users"),
 		Users:    users,
 	}
 

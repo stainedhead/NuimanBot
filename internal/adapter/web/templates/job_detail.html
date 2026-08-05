@@ -9,7 +9,7 @@
     <link rel="stylesheet" href="/static/styles.css">
     <link rel="icon" href="/static/img/NuimanProfile.jpg">
 </head>
-<body class="bg-gray-100 min-h-screen">
+<body class="bg-gray-100 min-h-screen" data-source-type="job" data-source-id="{{.Job.ID}}">
     {{template "nav" .}}
     <div class="container mx-auto px-4 py-8">
         <div class="bg-white rounded-lg shadow-md p-6">
@@ -29,7 +29,7 @@
             <dl class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
                 <div>
                     <dt class="text-xs font-semibold text-gray-500 uppercase">Status</dt>
-                    <dd class="text-gray-800">{{.Job.Status}}{{if .Job.PendingDeletion}} (pending deletion){{end}}</dd>
+                    <dd id="job-status" class="text-gray-800">{{.Job.Status}}{{if .Job.PendingDeletion}} (pending deletion){{end}}</dd>
                 </div>
                 <div>
                     <dt class="text-xs font-semibold text-gray-500 uppercase">Context</dt>
@@ -59,5 +59,6 @@
             </div>
         </div>
     </div>
+    <script src="/static/run-events.js" defer></script>
 </body>
 </html>

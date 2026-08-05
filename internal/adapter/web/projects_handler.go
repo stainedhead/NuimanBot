@@ -83,7 +83,7 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := &ProjectsPageData{
-		BaseData:  s.baseDataFor(user, "Projects", "projects"),
+		BaseData:  s.baseDataFor(r.Context(), user, "Projects", "projects"),
 		Projects:  projectsList,
 		CSRFToken: s.auth.GenerateCSRFToken(),
 	}
@@ -170,7 +170,7 @@ func (s *Server) handleProjectDetail(w http.ResponseWriter, r *http.Request, use
 	}
 
 	data := &ProjectDetailPageData{
-		BaseData:         s.baseDataFor(user, project.Name, "projects"),
+		BaseData:         s.baseDataFor(r.Context(), user, project.Name, "projects"),
 		Project:          project,
 		AgentsFileExists: agentsFileExists,
 		CSRFToken:        s.auth.GenerateCSRFToken(),

@@ -91,8 +91,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	base := s.baseDataFor(user, "History", "history")
-	s.withUnviewedRunCount(r.Context(), base, user)
+	base := s.baseDataFor(r.Context(), user, "History", "history")
 
 	data := &HistoryPageData{
 		BaseData: base,
@@ -148,8 +147,7 @@ func (s *Server) handleHistoryDetail(w http.ResponseWriter, r *http.Request, use
 		slog.Error("Failed to mark run viewed", "error", err, "run_id", id)
 	}
 
-	base := s.baseDataFor(user, "Run Detail", "history")
-	s.withUnviewedRunCount(r.Context(), base, user)
+	base := s.baseDataFor(r.Context(), user, "Run Detail", "history")
 
 	logContent, err := s.historyService.ReadLog(r.Context(), user.Username, id)
 	if err != nil {
@@ -174,9 +172,15 @@ func (s *Server) handleHistoryDetail(w http.ResponseWriter, r *http.Request, use
 }
 
 // withUnviewedRunCount populates base.UnviewedRunCount from the History
-// notification badge (FR-044), logging and leaving it at zero on error
-// rather than failing the page render.
+// notification badge (FR-044/FR-R19), logging and leaving it at zero on
+// error rather than failing the page render. Called from baseDataFor for
+// every authenticated page, so it must tolerate HistoryService being unset
+// (e.g. a deployment/test wiring only a subset of environments) rather than
+// panicking.
 func (s *Server) withUnviewedRunCount(ctx context.Context, base *BaseData, user *User) {
+	if s.historyService == nil {
+		return
+	}
 	count, err := s.historyService.UnviewedCount(ctx, user.Username)
 	if err != nil {
 		slog.Error("Failed to get unviewed run count", "error", err)

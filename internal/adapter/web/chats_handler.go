@@ -73,7 +73,7 @@ func (s *Server) handleChats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := &ChatsPageData{
-		BaseData:  s.baseDataFor(user, "Chats", "chats"),
+		BaseData:  s.baseDataFor(r.Context(), user, "Chats", "chats"),
 		Chats:     chatsList,
 		CSRFToken: s.auth.GenerateCSRFToken(),
 	}
@@ -151,7 +151,7 @@ func (s *Server) handleChatDetail(w http.ResponseWriter, r *http.Request, user *
 	}
 
 	data := &ChatDetailPageData{
-		BaseData:  s.baseDataFor(user, conv.Name, "chats"),
+		BaseData:  s.baseDataFor(r.Context(), user, conv.Name, "chats"),
 		Chat:      conv,
 		CSRFToken: s.auth.GenerateCSRFToken(),
 	}
@@ -240,10 +240,15 @@ func (s *Server) validCSRF(r *http.Request) bool {
 
 // baseDataFor builds a *BaseData populated for an authenticated user,
 // shared by every new environment handler (Chats and, by the same
-// convention, Projects/Jobs/Chores/History/Memories/Settings).
-func (s *Server) baseDataFor(user *User, title, activePage string) *BaseData {
+// convention, Projects/Jobs/Chores/History/Memories/Settings/Dashboard).
+// This is the single "build BaseData for an authenticated request" path
+// FR-R19 requires: UnviewedRunCount (the History nav badge, FR-044) is
+// populated here so every authenticated page gets it, not just History's
+// own two handlers.
+func (s *Server) baseDataFor(ctx context.Context, user *User, title, activePage string) *BaseData {
 	bd := NewBaseData(title, activePage)
 	bd.WithUser(user)
+	s.withUnviewedRunCount(ctx, bd, user)
 	return bd
 }
 

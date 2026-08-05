@@ -81,7 +81,7 @@ func (s *Server) handleChores(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := &ChoresPageData{
-		BaseData:  s.baseDataFor(user, "Chores", "chores"),
+		BaseData:  s.baseDataFor(r.Context(), user, "Chores", "chores"),
 		Chores:    choresList,
 		Presets:   domain.KnownPresets(),
 		CSRFToken: s.auth.GenerateCSRFToken(),
@@ -196,7 +196,7 @@ func (s *Server) handleChoreDetail(w http.ResponseWriter, r *http.Request, user 
 	}
 
 	data := &ChoreDetailPageData{
-		BaseData:  s.baseDataFor(user, chore.Title, "chores"),
+		BaseData:  s.baseDataFor(r.Context(), user, chore.Title, "chores"),
 		Chore:     chore,
 		CSRFToken: s.auth.GenerateCSRFToken(),
 	}

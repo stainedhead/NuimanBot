@@ -135,7 +135,7 @@ func (s *Server) renderSettings(w http.ResponseWriter, r *http.Request, user *Us
 	net := s.NetworkAccessConfig()
 	chatDays, projectDays, historyDays := s.settingsService.RetentionDefaults()
 
-	base := s.baseDataFor(user, "Settings", "settings")
+	base := s.baseDataFor(r.Context(), user, "Settings", "settings")
 	if flashSuccess != "" {
 		base.WithFlashSuccess(flashSuccess)
 	}

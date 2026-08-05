@@ -103,7 +103,7 @@ func (s *Server) handleMemories(w http.ResponseWriter, r *http.Request) {
 	sortCellsByCreatedAtDesc(cells)
 
 	data := &MemoriesPageData{
-		BaseData:    s.baseDataFor(user, "Memories", "memories"),
+		BaseData:    s.baseDataFor(r.Context(), user, "Memories", "memories"),
 		Cells:       cells,
 		Scene:       scene,
 		MinSalience: minSalienceStr,
@@ -215,7 +215,7 @@ func (s *Server) handleMemoryAsk(w http.ResponseWriter, r *http.Request, user *U
 // detail page and the POST /ask handler, so both stay in sync.
 func (s *Server) renderMemoryDetail(w http.ResponseWriter, r *http.Request, user *User, cell *memoryv2.MemoryCell, question, answer, askError string) {
 	data := &MemoryDetailPageData{
-		BaseData:  s.baseDataFor(user, "Memory: "+cell.Scene, "memories"),
+		BaseData:  s.baseDataFor(r.Context(), user, "Memory: "+cell.Scene, "memories"),
 		Cell:      cell,
 		CSRFToken: s.auth.GenerateCSRFToken(),
 		Question:  question,

@@ -64,7 +64,7 @@
             </a>
             <a href="/admin/history" class="flex items-center justify-between px-3 py-2 rounded-md text-sm font-medium {{if eq .ActivePage "history"}}bg-amber-500 text-slate-900{{else}}text-slate-200 hover:bg-slate-800{{end}}">
                 <span>History</span>
-                {{if .UnviewedRunCount}}<span class="bg-amber-500 text-slate-900 text-xs font-bold rounded-full h-5 w-5 flex items-center justify-center">{{.UnviewedRunCount}}</span>{{end}}
+                <span id="notification-badge" class="bg-amber-500 text-slate-900 text-xs font-bold rounded-full h-5 w-5 flex items-center justify-center{{if not .UnviewedRunCount}} hidden{{end}}">{{.UnviewedRunCount}}</span>
             </a>
             <a href="/admin/memories" class="flex items-center px-3 py-2 rounded-md text-sm font-medium {{if eq .ActivePage "memories"}}bg-amber-500 text-slate-900{{else}}text-slate-200 hover:bg-slate-800{{end}}">
                 Memories

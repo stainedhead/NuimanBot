@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -47,7 +48,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Gather dashboard data
-	data := s.getDashboardData(user)
+	data := s.getDashboardData(r.Context(), user)
 
 	// Render template
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -58,9 +59,8 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 // getDashboardData gathers all dashboard data
-func (s *Server) getDashboardData(user *User) *DashboardData {
-	base := NewBaseData("Dashboard", "dashboard")
-	base = base.WithUser(user)
+func (s *Server) getDashboardData(ctx context.Context, user *User) *DashboardData {
+	base := s.baseDataFor(ctx, user, "Dashboard", "dashboard")
 
 	// Calculate uptime
 	uptime := time.Since(serverStartTime)
