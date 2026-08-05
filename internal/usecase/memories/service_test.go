@@ -3,6 +3,7 @@ package memories
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -186,5 +187,122 @@ func TestGetCell_EmptyOwnerUserID_ReturnsError(t *testing.T) {
 	svc := NewService(newFakeCellRepo())
 	if _, err := svc.GetCell(context.Background(), "", "some-id"); !errors.Is(err, domain.ErrInvalidInput) {
 		t.Fatalf("expected domain.ErrInvalidInput, got %v", err)
+	}
+}
+
+// fakeLLM is a memories.LLMService test double capturing the last request it
+// received, so tests can assert the per-cell chat is actually grounded in
+// the cell's own content (FR-R4's acceptance criteria).
+type fakeLLM struct {
+	lastReq  *domain.LLMRequest
+	response *domain.LLMResponse
+	err      error
+}
+
+func (f *fakeLLM) Complete(_ context.Context, _ domain.LLMProvider, req *domain.LLMRequest) (*domain.LLMResponse, error) {
+	f.lastReq = req
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.response, nil
+}
+
+func TestAskAboutCell_GroundsSystemPromptInCellContent_ReturnsAnswer(t *testing.T) {
+	repo := newFakeCellRepo()
+	repo.cells["alice-1"] = newTestCell("alice-1", "alice", "trip-planning", "Alice likes window seats")
+	llm := &fakeLLM{response: &domain.LLMResponse{Content: "Alice prefers a window seat."}}
+	svc := NewService(repo, WithLLM(llm))
+
+	answer, err := svc.AskAboutCell(context.Background(), "alice", "alice-1", "What seat does Alice like?")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if answer != "Alice prefers a window seat." {
+		t.Fatalf("expected the LLM's answer to be returned verbatim, got %q", answer)
+	}
+	if llm.lastReq == nil {
+		t.Fatal("expected the LLM to be called")
+	}
+	if !strings.Contains(llm.lastReq.SystemPrompt, "Alice likes window seats") {
+		t.Fatalf("expected system prompt to be grounded in the cell's content, got %q", llm.lastReq.SystemPrompt)
+	}
+	if !strings.Contains(llm.lastReq.SystemPrompt, "trip-planning") {
+		t.Fatalf("expected system prompt to include the cell's scene, got %q", llm.lastReq.SystemPrompt)
+	}
+	if len(llm.lastReq.Messages) != 1 || llm.lastReq.Messages[0].Content != "What seat does Alice like?" {
+		t.Fatalf("expected the question as the sole user message, got %+v", llm.lastReq.Messages)
+	}
+}
+
+func TestAskAboutCell_CrossOwnerReturnsNotFound(t *testing.T) {
+	repo := newFakeCellRepo()
+	repo.cells["bob-1"] = newTestCell("bob-1", "bob", "trip-planning", "Bob's secret")
+	llm := &fakeLLM{response: &domain.LLMResponse{Content: "should never be reached"}}
+	svc := NewService(repo, WithLLM(llm))
+
+	_, err := svc.AskAboutCell(context.Background(), "alice", "bob-1", "What is it?")
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected domain.ErrNotFound for cross-owner access, got %v", err)
+	}
+	if llm.lastReq != nil {
+		t.Fatal("expected the LLM never to be called for a cell the caller doesn't own")
+	}
+}
+
+func TestAskAboutCell_EmptyQuestion_ReturnsError(t *testing.T) {
+	repo := newFakeCellRepo()
+	repo.cells["alice-1"] = newTestCell("alice-1", "alice", "trip-planning", "content")
+	svc := NewService(repo, WithLLM(&fakeLLM{}))
+
+	_, err := svc.AskAboutCell(context.Background(), "alice", "alice-1", "")
+	if !errors.Is(err, domain.ErrInvalidInput) {
+		t.Fatalf("expected domain.ErrInvalidInput for an empty question, got %v", err)
+	}
+}
+
+func TestAskAboutCell_PropagatesLLMError(t *testing.T) {
+	repo := newFakeCellRepo()
+	repo.cells["alice-1"] = newTestCell("alice-1", "alice", "trip-planning", "content")
+	llm := &fakeLLM{err: errors.New("provider unavailable")}
+	svc := NewService(repo, WithLLM(llm))
+
+	_, err := svc.AskAboutCell(context.Background(), "alice", "alice-1", "question")
+	if err == nil {
+		t.Fatal("expected the LLM error to propagate")
+	}
+}
+
+func TestAskAboutCell_UsesConfiguredLLMDefaults(t *testing.T) {
+	repo := newFakeCellRepo()
+	repo.cells["alice-1"] = newTestCell("alice-1", "alice", "trip-planning", "content")
+	llm := &fakeLLM{response: &domain.LLMResponse{Content: "answer"}}
+	svc := NewService(repo, WithLLM(llm), WithLLMDefaults(LLMDefaults{
+		Model:       "custom-model",
+		MaxTokens:   2048,
+		Temperature: 0.3,
+	}))
+
+	if _, err := svc.AskAboutCell(context.Background(), "alice", "alice-1", "question"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if llm.lastReq.Model != "custom-model" {
+		t.Errorf("expected configured Model to be used, got %q", llm.lastReq.Model)
+	}
+	if llm.lastReq.MaxTokens != 2048 {
+		t.Errorf("expected configured MaxTokens to be used, got %d", llm.lastReq.MaxTokens)
+	}
+	if llm.lastReq.Temperature != 0.3 {
+		t.Errorf("expected configured Temperature to be used, got %v", llm.lastReq.Temperature)
+	}
+}
+
+func TestAskAboutCell_NoLLMConfigured_ReturnsClearError(t *testing.T) {
+	repo := newFakeCellRepo()
+	repo.cells["alice-1"] = newTestCell("alice-1", "alice", "trip-planning", "content")
+	svc := NewService(repo) // no WithLLM option
+
+	_, err := svc.AskAboutCell(context.Background(), "alice", "alice-1", "question")
+	if err == nil {
+		t.Fatal("expected an error when no LLM is configured, not a panic or silent no-op")
 	}
 }

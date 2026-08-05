@@ -181,8 +181,21 @@ func wireExtendedContextEnvironments(ctx context.Context, app *application, webS
 	historyService := history.NewService(runRepo)
 	webServer.SetHistoryService(historyService)
 
-	// Memories (FR-045-047), read-only over the existing memoryv2 store.
-	webServer.SetMemoriesService(memories.NewService(app.MemoryCellRepo))
+	// Memories (FR-045-047), read-only browse/search over the existing
+	// memoryv2 store, plus AskAboutCell's minimal per-item chat (FR-R4's
+	// reference implementation — see memories.LLMService's doc comment for
+	// why this is a single-turn grounded call, not the full chat
+	// orchestration engine). LLM defaults mirror chat.LLMDefaults's config
+	// source (cfg.LLM.DefaultModel) so both share the same configured model.
+	webServer.SetMemoriesService(memories.NewService(
+		app.MemoryCellRepo,
+		memories.WithLLM(app.LLMService),
+		memories.WithLLMDefaults(memories.LLMDefaults{
+			Model:       app.Config.LLM.DefaultModel.Primary,
+			MaxTokens:   app.Config.LLM.DefaultModel.MaxTokens,
+			Temperature: app.Config.LLM.DefaultModel.Temperature,
+		}),
+	))
 
 	// Retention sweep (FR-R3): three FRs (FR-014/FR-023/FR-043) promise
 	// "Chats/Projects/runs older than a configured, non-Never period are

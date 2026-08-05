@@ -41,6 +41,9 @@
                 {{end}}
             </div>
 
+            <p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 mb-3">
+                Automatic replies are not yet available for Chats — your message is saved, but the agent will not respond here yet.
+            </p>
             <form method="POST" action="/admin/chats/{{.Chat.ID}}/message" class="border-t pt-4">
                 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
                 <div class="flex gap-2">

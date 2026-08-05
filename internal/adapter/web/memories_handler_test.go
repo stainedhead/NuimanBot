@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,8 @@ type MockMemoriesService struct {
 
 	listErr error
 	getErr  error
+	askErr  error
+	askedQ  string // last question passed to AskAboutCell, for assertions
 }
 
 func NewMockMemoriesService() *MockMemoriesService {
@@ -52,6 +55,18 @@ func (m *MockMemoriesService) GetCell(_ context.Context, ownerUserID, cellID str
 		return nil, domain.ErrNotFound
 	}
 	return c, nil
+}
+
+func (m *MockMemoriesService) AskAboutCell(_ context.Context, ownerUserID, cellID, question string) (string, error) {
+	m.askedQ = question
+	if m.askErr != nil {
+		return "", m.askErr
+	}
+	c, ok := m.cells[cellID]
+	if !ok || c.ConversationID != ownerUserID {
+		return "", domain.ErrNotFound
+	}
+	return "mock answer about " + c.Scene, nil
 }
 
 func newMemoriesTestServer(t *testing.T) (*Server, *MockMemoriesService) {
@@ -277,6 +292,115 @@ func TestMemoryIDFromPath(t *testing.T) {
 		if got := memoryIDFromPath(tc.path); got != tc.wantID {
 			t.Errorf("path %q: expected %q, got %q", tc.path, tc.wantID, got)
 		}
+	}
+}
+
+func TestHandleMemoryAsk_OwnerSuccess_RendersAnswer(t *testing.T) {
+	server, mock := newMemoriesTestServer(t)
+	mock.cells["cell-1"] = newTestMemoryCell("cell-1", "alice", "trip-planning", "Alice likes window seats")
+	cookie := sessionCookieFor(server, "alice", "user")
+	csrfToken := server.auth.GenerateCSRFToken()
+
+	form := url.Values{}
+	form.Set("question", "What seat does Alice prefer?")
+	form.Set("csrf_token", csrfToken)
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/memories/cell-1/ask", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d, body: %s", w.Code, w.Body.String())
+	}
+	if mock.askedQ != "What seat does Alice prefer?" {
+		t.Fatalf("expected the question to reach AskAboutCell, got %q", mock.askedQ)
+	}
+	if !strings.Contains(w.Body.String(), "mock answer about trip-planning") {
+		t.Fatalf("expected the answer to be rendered, body: %s", w.Body.String())
+	}
+}
+
+func TestHandleMemoryAsk_RequiresCSRF(t *testing.T) {
+	server, mock := newMemoriesTestServer(t)
+	mock.cells["cell-1"] = newTestMemoryCell("cell-1", "alice", "trip-planning", "content")
+	cookie := sessionCookieFor(server, "alice", "user")
+
+	form := url.Values{}
+	form.Set("question", "anything")
+	form.Set("csrf_token", "bogus-token")
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/memories/cell-1/ask", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for invalid CSRF token, got %d", w.Code)
+	}
+}
+
+func TestHandleMemoryAsk_CrossOwnerReturns404(t *testing.T) {
+	server, mock := newMemoriesTestServer(t)
+	mock.cells["cell-1"] = newTestMemoryCell("cell-1", "bob", "trip-planning", "Bob's secret")
+	cookie := sessionCookieFor(server, "alice", "user")
+	csrfToken := server.auth.GenerateCSRFToken()
+
+	form := url.Values{}
+	form.Set("question", "anything")
+	form.Set("csrf_token", csrfToken)
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/memories/cell-1/ask", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for cross-owner access, got %d", w.Code)
+	}
+}
+
+func TestHandleMemoryAsk_MethodNotAllowed(t *testing.T) {
+	server, mock := newMemoriesTestServer(t)
+	mock.cells["cell-1"] = newTestMemoryCell("cell-1", "alice", "trip-planning", "content")
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/memories/cell-1/ask", nil)
+	req.AddCookie(sessionCookieFor(server, "alice", "user"))
+	w := httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405 (ask is POST-only), got %d", w.Code)
+	}
+}
+
+func TestHandleMemoryAsk_ServiceErrorRendersInline(t *testing.T) {
+	server, mock := newMemoriesTestServer(t)
+	mock.cells["cell-1"] = newTestMemoryCell("cell-1", "alice", "trip-planning", "content")
+	mock.askErr = context.DeadlineExceeded
+	cookie := sessionCookieFor(server, "alice", "user")
+	csrfToken := server.auth.GenerateCSRFToken()
+
+	form := url.Values{}
+	form.Set("question", "anything")
+	form.Set("csrf_token", csrfToken)
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/memories/cell-1/ask", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(w, req)
+
+	// A failed LLM call is not a server bug — render the detail page again
+	// with an inline error, not a 500.
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 with an inline error message, got %d, body: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(strings.ToLower(w.Body.String()), "get an answer") {
+		t.Fatalf("expected an inline error message, body: %s", w.Body.String())
 	}
 }
 
