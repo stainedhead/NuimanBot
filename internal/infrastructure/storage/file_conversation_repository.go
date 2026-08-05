@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"nuimanbot/internal/domain"
 	"os"
@@ -234,7 +233,7 @@ func (r *FileConversationRepository) findUserByConvID(convID string) (string, Co
 	users, err := os.ReadDir(usersDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", ConversationIndexEntry{}, errors.New("conversation not found")
+			return "", ConversationIndexEntry{}, domain.ErrNotFound
 		}
 		return "", ConversationIndexEntry{}, fmt.Errorf("failed to read users directory: %w", err)
 	}
@@ -255,7 +254,7 @@ func (r *FileConversationRepository) findUserByConvID(convID string) (string, Co
 		}
 	}
 
-	return "", ConversationIndexEntry{}, errors.New("conversation not found")
+	return "", ConversationIndexEntry{}, domain.ErrNotFound
 }
 
 // GetConversation retrieves a conversation by ID

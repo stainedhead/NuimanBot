@@ -13,6 +13,10 @@ const (
 	PlatformSlack    Platform = "slack"
 	PlatformCLI      Platform = "cli"
 	PlatformBuzz     Platform = "buzz"
+	// PlatformWeb marks a Chat created directly through the web admin's
+	// Chats environment (FR-011), as opposed to a conversation relayed from
+	// an external messaging gateway.
+	PlatformWeb Platform = "web"
 )
 
 // IncomingMessage represents a message received from a platform.
