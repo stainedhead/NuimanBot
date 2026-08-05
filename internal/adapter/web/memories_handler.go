@@ -237,17 +237,6 @@ func sortCellsByCreatedAtDesc(cells []*memoryv2.MemoryCell) {
 	})
 }
 
-// memoryIDFromPath parses "/admin/memories/{id}" into id. Any other shape
-// (empty, trailing extra segments) returns "" so the caller 404s.
-func memoryIDFromPath(path string) string {
-	parts := strings.Split(strings.Trim(path, "/"), "/")
-	// parts: ["admin", "memories", "{id}"]
-	if len(parts) != 3 || parts[2] == "" {
-		return ""
-	}
-	return parts[2]
-}
-
 // memoryIDAndActionFromPath parses "/admin/memories/{id}" or
 // "/admin/memories/{id}/{action}" into (id, action), matching
 // chatIDAndActionFromPath's convention. action is "" for the bare detail

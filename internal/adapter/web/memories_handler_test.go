@@ -279,18 +279,26 @@ func TestMemoriesService_NotConfigured(t *testing.T) {
 	}
 }
 
-func TestMemoryIDFromPath(t *testing.T) {
+// TestMemoryIDAndActionFromPath supersedes the removed memoryIDFromPath and
+// its identically-named test — memoryIDAndActionFromPath (added for the
+// FR-R4 /ask route) does everything the old parser did plus action
+// parsing, leaving the old one an orphaned, never-called-in-production
+// function once handleMemorySubroutes switched over to it.
+func TestMemoryIDAndActionFromPath(t *testing.T) {
 	cases := []struct {
-		path   string
-		wantID string
+		path       string
+		wantID     string
+		wantAction string
 	}{
-		{"/admin/memories/abc", "abc"},
-		{"/admin/memories/", ""},
-		{"/admin/memories/abc/extra", ""},
+		{"/admin/memories/abc", "abc", ""},
+		{"/admin/memories/", "", ""},
+		{"/admin/memories/abc/ask", "abc", "ask"},
+		{"/admin/memories/abc/extra/segments", "", ""},
 	}
 	for _, tc := range cases {
-		if got := memoryIDFromPath(tc.path); got != tc.wantID {
-			t.Errorf("path %q: expected %q, got %q", tc.path, tc.wantID, got)
+		gotID, gotAction := memoryIDAndActionFromPath(tc.path)
+		if gotID != tc.wantID || gotAction != tc.wantAction {
+			t.Errorf("path %q: expected (%q, %q), got (%q, %q)", tc.path, tc.wantID, tc.wantAction, gotID, gotAction)
 		}
 	}
 }

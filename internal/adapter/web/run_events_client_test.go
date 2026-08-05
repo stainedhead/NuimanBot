@@ -109,3 +109,41 @@ func assertContainsAll(t *testing.T, body string, wants []string) {
 		}
 	}
 }
+
+// TestRunEventsJS_ServerPublishedSourceTypeMatchesPageDataAttribute closes
+// the gap a structural-only test (above) can't: it proves the exact wire
+// value notifyingRunRepository.SaveRun actually publishes for a Job-sourced
+// Run's run_status event (domain.SourceTypeJob, JSON-marshaled) is the
+// identical literal string job_detail.html renders into data-source-type —
+// not just that both independently look like "job" to a human reader. If
+// domain.SourceType's string value or the JSON field name ever drifts from
+// what run-events.js's matchesThisPage() compares against
+// (event.sourceType === body.dataset.sourceType), this test — not a
+// browser — is what catches it.
+func TestRunEventsJS_ServerPublishedSourceTypeMatchesPageDataAttribute(t *testing.T) {
+	repo, hub := newNotifyingRunRepoTestFixture(t)
+	_, recv := registerCapturingClient(hub, "alice")
+
+	run := &domain.Run{ID: "run-1", OwnerUserID: "alice", SourceType: domain.SourceTypeJob, SourceID: "job-1", Status: domain.RunStatusRunning}
+	if err := repo.SaveRun(t.Context(), run); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+
+	var published string
+	select {
+	case msg := <-recv:
+		published = string(msg)
+	default:
+		t.Fatal("expected SaveRun to publish a run_status event")
+	}
+
+	// job_detail.html renders data-source-type="job" data-source-id="job-1"
+	// (see TestRunEventsJS_ServedAndWiredIntoDetailPages) — these are the
+	// exact substrings run-events.js's matchesThisPage() needs to find in
+	// the published event for a Job's live status update to ever fire.
+	for _, want := range []string{`"sourceType":"job"`, `"sourceId":"job-1"`} {
+		if !strings.Contains(published, want) {
+			t.Fatalf("published run_status event %q does not contain %q — job_detail.html's data-source-type/data-source-id matching would never fire", published, want)
+		}
+	}
+}
