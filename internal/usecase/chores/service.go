@@ -147,13 +147,12 @@ func (s *Service) GetChore(ctx context.Context, ownerUserID, choreID string) (*d
 // PendingDeletion instead of removed, so the in-flight/queued run is not
 // killed mid-write; otherwise the record is deleted outright.
 //
-// Sweep integration deferred: a background sweep that hard-deletes a
-// PendingDeletion Chore once its run reaches a terminal state is out of
-// scope for this task — see Workstream A's FR-R9, which lands after this
-// task specifically because it assumes Chores already soft-delete
-// correctly. No new runs should be enqueued for a Chore with
-// PendingDeletion set; enforcing that at schedule-fire time also belongs to
-// that future sweep/scheduler integration, not this Service.
+// Sweep integration: see CleanupPendingDeletion (FR-R9), which
+// hard-deletes a PendingDeletion Chore once its run reaches a terminal
+// state. No new runs are enqueued for a Chore with PendingDeletion set:
+// domain.Chore.IsDue already returns false for one (see its doc comment),
+// so ChoreScheduler's ListAllDue-driven fire loop naturally never fires it
+// again — no extra enforcement needed at schedule-fire time.
 func (s *Service) DeleteChore(ctx context.Context, ownerUserID, choreID string) error {
 	c, err := s.chores.GetChore(ctx, ownerUserID, choreID)
 	if err != nil {
@@ -174,6 +173,37 @@ func (s *Service) DeleteChore(ctx context.Context, ownerUserID, choreID string) 
 	}
 
 	return s.chores.DeleteChore(ctx, ownerUserID, choreID)
+}
+
+// CleanupPendingDeletion hard-deletes every PendingDeletion Chore owned by
+// ownerUserID whose Run has reached a terminal state (FR-R9), returning the
+// count deleted, mirroring jobs.Service.CleanupPendingDeletion. A
+// PendingDeletion Chore whose Run is still active is left alone — a later
+// sweep pass will find it eligible once the run finishes.
+func (s *Service) CleanupPendingDeletion(ctx context.Context, ownerUserID string) (int, error) {
+	list, err := s.chores.ListChores(ctx, ownerUserID)
+	if err != nil {
+		return 0, err
+	}
+
+	deleted := 0
+	for _, c := range list {
+		if !c.PendingDeletion {
+			continue
+		}
+		active, err := s.hasActiveRun(ctx, ownerUserID, c.ID)
+		if err != nil {
+			continue // Best-effort sweep; one failure must not abort the rest.
+		}
+		if active {
+			continue
+		}
+		if err := s.chores.DeleteChore(ctx, ownerUserID, c.ID); err != nil {
+			continue // Best-effort sweep; one failure must not abort the rest.
+		}
+		deleted++
+	}
+	return deleted, nil
 }
 
 // hasActiveRun reports whether choreID has any Run in a non-terminal state

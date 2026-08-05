@@ -38,4 +38,13 @@ type RunRepository interface {
 	// badge count — see the usecase-layer retention sweep, which calls
 	// MarkNotified before DeleteRun for any unviewed run being swept.
 	DeleteRun(ctx context.Context, ownerUserID, runID string) error
+
+	// ListAllNonTerminal returns every Run across all users currently in a
+	// non-terminal state (Queued or Running), most recent first is not
+	// guaranteed — order is unspecified. This is the one intentionally
+	// cross-user query on this repository (FR-R2), matching
+	// ChoreRepository.ListAllDue's precedent: server startup's restart-
+	// reconciliation step is a system-wide process, not acting on behalf of
+	// a single requesting user, so per-user scoping does not apply here.
+	ListAllNonTerminal(ctx context.Context) ([]*Run, error)
 }

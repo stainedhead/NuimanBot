@@ -408,3 +408,93 @@ func TestDeleteJob_NotFound(t *testing.T) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
+
+func TestCleanupPendingDeletion_HardDeletesOnceRunIsTerminal(t *testing.T) {
+	// FR-R9: a PendingDeletion Job whose Run has reached a terminal state
+	// is hard-deleted by the sweep; one whose Run is still active is left
+	// alone until a later sweep pass finds it eligible.
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	stillActive, err := svc.CreateJob(ctx, "user-a", "still running", "d", domain.ContextTypeChat, "")
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if err := svc.DeleteJob(ctx, "user-a", stillActive.ID); err != nil {
+		t.Fatalf("DeleteJob (soft): %v", err)
+	}
+
+	doneRunning, err := svc.CreateJob(ctx, "user-a", "finished", "d", domain.ContextTypeChat, "")
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if err := svc.DeleteJob(ctx, "user-a", doneRunning.ID); err != nil {
+		t.Fatalf("DeleteJob (soft): %v", err)
+	}
+	// Advance the run for doneRunning to a terminal state.
+	runs, err := svc.runs.ListRuns(ctx, "user-a", domain.RunFilter{SourceID: &doneRunning.ID})
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("expected exactly 1 run for doneRunning, got %v (err %v)", runs, err)
+	}
+	runs[0].Status = domain.RunStatusCompleted
+	if err := svc.runs.SaveRun(ctx, runs[0]); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+
+	n, err := svc.CleanupPendingDeletion(ctx, "user-a")
+	if err != nil {
+		t.Fatalf("CleanupPendingDeletion: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected exactly 1 job cleaned up, got %d", n)
+	}
+
+	if _, err := svc.GetJob(ctx, "user-a", doneRunning.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected doneRunning job to be hard-deleted, got %v", err)
+	}
+	if _, err := svc.GetJob(ctx, "user-a", stillActive.ID); err != nil {
+		t.Fatalf("expected stillActive job to remain (its run is still active), got %v", err)
+	}
+}
+
+func TestCleanupPendingDeletion_IgnoresNonPendingJobs(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	job, err := svc.CreateJob(ctx, "user-a", "idle", "d", domain.ContextTypeChat, "")
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	_ = job
+
+	n, err := svc.CleanupPendingDeletion(ctx, "user-a")
+	if err != nil {
+		t.Fatalf("CleanupPendingDeletion: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("expected 0 cleaned up (job is not PendingDeletion), got %d", n)
+	}
+}
+
+func TestCleanupPendingDeletion_ListJobsErrorPropagates(t *testing.T) {
+	svc, _ := newTestService(t)
+	svc.jobs = &errListJobsRepo{JobRepository: svc.jobs, listErr: errors.New("disk error")}
+
+	if _, err := svc.CleanupPendingDeletion(context.Background(), "user-a"); err == nil {
+		t.Fatal("expected CleanupPendingDeletion to propagate the ListJobs error")
+	}
+}
+
+// errListJobsRepo wraps a real domain.JobRepository, optionally forcing
+// ListJobs to fail.
+type errListJobsRepo struct {
+	domain.JobRepository
+	listErr error
+}
+
+func (r *errListJobsRepo) ListJobs(ctx context.Context, ownerUserID string) ([]*domain.Job, error) {
+	if r.listErr != nil {
+		return nil, r.listErr
+	}
+	return r.JobRepository.ListJobs(ctx, ownerUserID)
+}

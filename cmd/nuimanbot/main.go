@@ -1014,7 +1014,7 @@ func (app *application) Run(ctx context.Context) error {
 		// subsystem (specs/260805-nuimanbot-extend-context-and-ui). Settings
 		// (FR-001-004) is wired later, once the skill registry exists (see
 		// below) — it shares this same pool for its worker-pool-size control.
-		pool, err := wireExtendedContextEnvironments(ctx, app, webServer)
+		pool, err := wireExtendedContextEnvironments(ctx, app, webServer, profileRepo)
 		if err != nil {
 			slog.Error("Failed to wire extended-context environments", "error", err)
 		} else {

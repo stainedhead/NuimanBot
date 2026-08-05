@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log/slog"
 	"path/filepath"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"nuimanbot/internal/domain"
 	"nuimanbot/internal/infrastructure/scheduler"
 	"nuimanbot/internal/infrastructure/storage"
+	"nuimanbot/internal/usecase/chats"
 	"nuimanbot/internal/usecase/chores"
 	"nuimanbot/internal/usecase/history"
 	"nuimanbot/internal/usecase/jobs"
@@ -16,6 +18,12 @@ import (
 	"nuimanbot/internal/usecase/projects"
 	"nuimanbot/internal/usecase/settings"
 )
+
+// defaultRetentionSweepInterval is how often RetentionSweeper (FR-R3)
+// checks every user's Chats/Projects/History for expired data. Deliberately
+// coarser than defaultChoreSchedulerInterval — retention is a slow-moving,
+// day-granularity concern, not something that needs sub-minute responsiveness.
+const defaultRetentionSweepInterval = 15 * time.Minute
 
 // defaultChoreSchedulerInterval is how often the Chore cron evaluator polls
 // for due Chores (FR-032/FR-035).
@@ -96,10 +104,14 @@ func (a skillNamesAdapter) SkillNames() []string {
 // wireExtendedContextEnvironments constructs and starts the Job/Chore
 // worker pool + cron scheduler (specs/260805-nuimanbot-extend-context-and-ui's
 // largest net-new subsystem) and wires the Projects/Jobs/Chores/History/
-// Memories environments into webServer. Returns the constructed WorkerPool
-// so a later call (once the skill registry exists) can wire Settings'
-// worker-pool-size control against the same live instance.
-func wireExtendedContextEnvironments(ctx context.Context, app *application, webServer *web.Server) (*scheduler.WorkerPool, error) {
+// Memories environments into webServer. Also runs FR-R2's startup restart-
+// reconciliation and starts FR-R3's retention sweep loop, both from
+// specs/260805-nuimanbot-extend-context-and-ui-auto-review. userProfileRepo
+// backs the retention sweep's per-user iteration (every user's Chats/
+// Projects/History are swept, not just one). Returns the constructed
+// WorkerPool so a later call (once the skill registry exists) can wire
+// Settings' worker-pool-size control against the same live instance.
+func wireExtendedContextEnvironments(ctx context.Context, app *application, webServer *web.Server, userProfileRepo domain.UserProfileRepository) (*scheduler.WorkerPool, error) {
 	// Shared confined filesystem I/O (FR-R5): the sole implementation
 	// Projects/Jobs/Chores depend on via domain.ConfinedFileStore, keeping
 	// "os"/internal/infrastructure/fsguard out of the usecase layer.
@@ -124,6 +136,18 @@ func wireExtendedContextEnvironments(ctx context.Context, app *application, webS
 	queue := scheduler.NewQueue(queuePath)
 	if err := queue.Load(); err != nil {
 		return nil, err
+	}
+
+	// Restart-recovery (FR-R2, Reliability NFR): must run after queue.Load
+	// (so the queue snapshot reflects on-disk state) and before pool.Start
+	// (so no worker has had a chance to pick up new work yet). Any Run left
+	// Running, or Queued with no matching queue entry, is a prior process's
+	// crash victim — reconciled to Failed with a clear, visible error
+	// rather than silently stranded forever.
+	if n, err := scheduler.ReconcileInterruptedRuns(ctx, runRepo, queue, time.Now); err != nil {
+		slog.Error("failed to reconcile interrupted runs at startup", "error", err)
+	} else if n > 0 {
+		slog.Info("reconciled runs interrupted by a prior restart", "count", n)
 	}
 
 	runsArtifactRoot := filepath.Join(app.StoragePath, "scheduler", "runs")
@@ -154,10 +178,36 @@ func wireExtendedContextEnvironments(ctx context.Context, app *application, webS
 	// History (FR-040-044). Uses the same notifying decorator so
 	// MarkViewed's badge-clear (usecase/history.Service.MarkViewed ->
 	// RunRepository.MarkNotified) also pushes the refreshed count.
-	webServer.SetHistoryService(history.NewService(runRepo))
+	historyService := history.NewService(runRepo)
+	webServer.SetHistoryService(historyService)
 
 	// Memories (FR-045-047), read-only over the existing memoryv2 store.
 	webServer.SetMemoriesService(memories.NewService(app.MemoryCellRepo))
+
+	// Retention sweep (FR-R3): three FRs (FR-014/FR-023/FR-043) promise
+	// "Chats/Projects/runs older than a configured, non-Never period are
+	// deleted automatically" — SweepExpired existed and was unit-tested on
+	// all three services, but nothing ever called it. A second chats.Service
+	// instance is constructed here rather than threading the one main.go
+	// builds for webServer.SetChatsService through — both are stateless
+	// wrappers over the same app.ConversationRepo, so this has no behavioral
+	// difference and avoids a bigger DI-wiring reshuffle just to share one
+	// pointer. Retention is a system-wide default (not yet per-user
+	// configurable — see settings.Service.RetentionDefaults's doc comment).
+	sweepChats := chats.NewService(app.ConversationRepo)
+	retentionSweeper := scheduler.NewRetentionSweeper(
+		userProfileRepo,
+		sweepChats,
+		projectsService,
+		historyService,
+		jobsService,
+		choresService,
+		scheduler.RetentionPolicyFromDays(app.Config.RetentionDefaults.ChatDays),
+		scheduler.RetentionPolicyFromDays(app.Config.RetentionDefaults.ProjectDays),
+		scheduler.RetentionPolicyFromDays(app.Config.RetentionDefaults.HistoryDays),
+		defaultRetentionSweepInterval,
+	)
+	go retentionSweeper.Run(ctx)
 
 	return pool, nil
 }

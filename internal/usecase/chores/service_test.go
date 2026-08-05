@@ -404,6 +404,107 @@ func (r *errSaveChoreRepo) SaveChore(ctx context.Context, c *domain.Chore) error
 	return r.ChoreRepository.SaveChore(ctx, c)
 }
 
+func TestCleanupPendingDeletion_HardDeletesOnceRunIsTerminal(t *testing.T) {
+	// FR-R9: a PendingDeletion Chore whose Run has reached a terminal state
+	// is hard-deleted by the sweep; one whose Run is still active is left
+	// alone until a later sweep pass finds it eligible.
+	svc, _, repo, runRepo, _ := newTestServiceWithRuns(t)
+	ctx := context.Background()
+
+	stillActive, err := svc.CreateChore(ctx, "alice", "still running", "d", "", dailySchedule(t), true)
+	if err != nil {
+		t.Fatalf("CreateChore: %v", err)
+	}
+	if err := runRepo.SaveRun(ctx, &domain.Run{
+		ID: "run-active", OwnerUserID: "alice", SourceType: domain.SourceTypeChore,
+		SourceID: stillActive.ID, Status: domain.RunStatusRunning, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+	if err := svc.DeleteChore(ctx, "alice", stillActive.ID); err != nil {
+		t.Fatalf("DeleteChore (soft): %v", err)
+	}
+
+	doneRunning, err := svc.CreateChore(ctx, "alice", "finished", "d", "", dailySchedule(t), true)
+	if err != nil {
+		t.Fatalf("CreateChore: %v", err)
+	}
+	if err := runRepo.SaveRun(ctx, &domain.Run{
+		ID: "run-done", OwnerUserID: "alice", SourceType: domain.SourceTypeChore,
+		SourceID: doneRunning.ID, Status: domain.RunStatusRunning, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+	if err := svc.DeleteChore(ctx, "alice", doneRunning.ID); err != nil {
+		t.Fatalf("DeleteChore (soft): %v", err)
+	}
+	// Advance doneRunning's run to a terminal state.
+	sourceType := domain.SourceTypeChore
+	runs, err := runRepo.ListRuns(ctx, "alice", domain.RunFilter{SourceType: &sourceType, SourceID: &doneRunning.ID})
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("expected exactly 1 run for doneRunning, got %v (err %v)", runs, err)
+	}
+	runs[0].Status = domain.RunStatusCompleted
+	if err := runRepo.SaveRun(ctx, runs[0]); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+
+	n, err := svc.CleanupPendingDeletion(ctx, "alice")
+	if err != nil {
+		t.Fatalf("CleanupPendingDeletion: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected exactly 1 chore cleaned up, got %d", n)
+	}
+
+	if _, err := repo.GetChore(ctx, "alice", doneRunning.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected doneRunning chore to be hard-deleted, got %v", err)
+	}
+	if _, err := repo.GetChore(ctx, "alice", stillActive.ID); err != nil {
+		t.Fatalf("expected stillActive chore to remain (its run is still active), got %v", err)
+	}
+}
+
+func TestCleanupPendingDeletion_IgnoresNonPendingChores(t *testing.T) {
+	svc, _, _, _, _ := newTestServiceWithRuns(t)
+	ctx := context.Background()
+
+	if _, err := svc.CreateChore(ctx, "alice", "idle", "d", "", dailySchedule(t), true); err != nil {
+		t.Fatalf("CreateChore: %v", err)
+	}
+
+	n, err := svc.CleanupPendingDeletion(ctx, "alice")
+	if err != nil {
+		t.Fatalf("CleanupPendingDeletion: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("expected 0 cleaned up (chore is not PendingDeletion), got %d", n)
+	}
+}
+
+func TestCleanupPendingDeletion_ListChoresErrorPropagates(t *testing.T) {
+	svc, _, _, _, _ := newTestServiceWithRuns(t)
+	svc.chores = &errListChoresRepo{ChoreRepository: svc.chores, listErr: errors.New("disk error")}
+
+	if _, err := svc.CleanupPendingDeletion(context.Background(), "alice"); err == nil {
+		t.Fatal("expected CleanupPendingDeletion to propagate the ListChores error")
+	}
+}
+
+// errListChoresRepo wraps a real domain.ChoreRepository, optionally forcing
+// ListChores to fail.
+type errListChoresRepo struct {
+	domain.ChoreRepository
+	listErr error
+}
+
+func (r *errListChoresRepo) ListChores(ctx context.Context, ownerUserID string) ([]*domain.Chore, error) {
+	if r.listErr != nil {
+		return nil, r.listErr
+	}
+	return r.ChoreRepository.ListChores(ctx, ownerUserID)
+}
+
 func TestConfirmSchedule_SetsConfirmedAndComputesNextFireTime(t *testing.T) {
 	svc, eval, _, _ := newTestService(t)
 	ctx := context.Background()

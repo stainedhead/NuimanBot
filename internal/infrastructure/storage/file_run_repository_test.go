@@ -272,3 +272,48 @@ func TestFileRunRepository_DeleteRun_NotFound(t *testing.T) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
+
+func TestFileRunRepository_ListAllNonTerminal_CrossUser(t *testing.T) {
+	// FR-R2: the restart-reconciliation step is a system-wide process (like
+	// ChoreRepository.ListAllDue), so this cross-user query is the one
+	// intentionally-cross-user exception on this repository.
+	repo := newTestRunRepo(t)
+	ctx := context.Background()
+
+	runs := []*domain.Run{
+		{ID: "running-a", OwnerUserID: "user-a", Status: domain.RunStatusRunning, CreatedAt: time.Now()},
+		{ID: "queued-b", OwnerUserID: "user-b", Status: domain.RunStatusQueued, CreatedAt: time.Now()},
+		{ID: "completed-a", OwnerUserID: "user-a", Status: domain.RunStatusCompleted, CreatedAt: time.Now()},
+		{ID: "failed-b", OwnerUserID: "user-b", Status: domain.RunStatusFailed, CreatedAt: time.Now()},
+		{ID: "skipped-a", OwnerUserID: "user-a", Status: domain.RunStatusSkipped, CreatedAt: time.Now()},
+	}
+	for _, r := range runs {
+		if err := repo.SaveRun(ctx, r); err != nil {
+			t.Fatalf("SaveRun(%s): %v", r.ID, err)
+		}
+	}
+
+	got, err := repo.ListAllNonTerminal(ctx)
+	if err != nil {
+		t.Fatalf("ListAllNonTerminal: %v", err)
+	}
+
+	ids := make(map[string]bool, len(got))
+	for _, r := range got {
+		ids[r.ID] = true
+	}
+	if len(got) != 2 || !ids["running-a"] || !ids["queued-b"] {
+		t.Fatalf("expected exactly [running-a, queued-b], got %+v", ids)
+	}
+}
+
+func TestFileRunRepository_ListAllNonTerminal_NoUsersYet(t *testing.T) {
+	repo := newTestRunRepo(t)
+	got, err := repo.ListAllNonTerminal(context.Background())
+	if err != nil {
+		t.Fatalf("ListAllNonTerminal: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected empty slice, got %+v", got)
+	}
+}

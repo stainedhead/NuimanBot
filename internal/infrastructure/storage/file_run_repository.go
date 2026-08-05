@@ -269,4 +269,44 @@ func (r *FileRunRepository) DeleteRun(_ context.Context, ownerUserID, runID stri
 	return nil
 }
 
+// usersRootDir returns the path under which every owner's runs directory
+// lives, for the one intentionally cross-user query on this repository.
+func (r *FileRunRepository) usersRootDir() string {
+	return filepath.Join(r.basePath, "users")
+}
+
+// ListAllNonTerminal returns every Run across all users currently Queued or
+// Running (FR-R2), for the server-startup restart-reconciliation step. See
+// FileChoreRepository.ListAllDue for the identical cross-user iteration
+// pattern this mirrors.
+func (r *FileRunRepository) ListAllNonTerminal(_ context.Context) ([]*domain.Run, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	userEntries, err := os.ReadDir(r.usersRootDir())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []*domain.Run{}, nil
+		}
+		return nil, fmt.Errorf("failed to read users directory: %w", err)
+	}
+
+	nonTerminal := make([]*domain.Run, 0)
+	for _, userEntry := range userEntries {
+		if !userEntry.IsDir() {
+			continue
+		}
+		runs, err := r.listUserRunsLocked(userEntry.Name())
+		if err != nil {
+			continue // Skip a user whose runs directory can't be read.
+		}
+		for _, run := range runs {
+			if !run.Status.IsTerminal() {
+				nonTerminal = append(nonTerminal, run)
+			}
+		}
+	}
+	return nonTerminal, nil
+}
+
 var _ domain.RunRepository = (*FileRunRepository)(nil)

@@ -214,3 +214,64 @@ func (s *Service) DeleteJob(ctx context.Context, ownerUserID, jobID string) erro
 
 	return s.jobs.DeleteJob(ctx, ownerUserID, jobID)
 }
+
+// CleanupPendingDeletion hard-deletes every PendingDeletion Job owned by
+// ownerUserID whose Run has reached a terminal state (FR-R9), returning the
+// count deleted. A PendingDeletion Job whose Run is still active is left
+// alone — a later sweep pass will find it eligible once the run finishes.
+// No new runs are enqueued for a PendingDeletion Job in the first place
+// (enforced by CreateJob's callers never re-enqueuing a Job past deletion),
+// so this only ever needs to check the Job's most recent Run, not defend
+// against new ones appearing mid-sweep.
+func (s *Service) CleanupPendingDeletion(ctx context.Context, ownerUserID string) (int, error) {
+	list, err := s.jobs.ListJobs(ctx, ownerUserID)
+	if err != nil {
+		return 0, err
+	}
+
+	deleted := 0
+	for _, j := range list {
+		if !j.PendingDeletion {
+			continue
+		}
+		active, err := s.hasActiveRun(ctx, ownerUserID, j.ID)
+		if err != nil {
+			continue // Best-effort sweep; one failure must not abort the rest.
+		}
+		if active {
+			continue
+		}
+		// Hard-delete directly via the repository, not s.DeleteJob: that
+		// method's soft/hard-delete branch reads Job.Status, which this
+		// sweep's own hasActiveRun check (querying Runs directly) has
+		// already made redundant — and, unlike Chore, Job.Status is not
+		// currently kept in sync with its Run's actual lifecycle (no
+		// caller ever invokes JobRepository.UpdateStatus in this codebase
+		// today), so re-deriving activeness from Status here would be
+		// unreliable.
+		if err := s.jobs.DeleteJob(ctx, ownerUserID, j.ID); err != nil {
+			continue // Best-effort sweep; one failure must not abort the rest.
+		}
+		deleted++
+	}
+	return deleted, nil
+}
+
+// hasActiveRun reports whether jobID has any Run in a non-terminal state
+// (Queued or Running), mirroring chores.Service's identical-shaped check
+// (not shared across packages — each usecase package depends only on
+// domain, per AGENTS.md's Clean Architecture rule, and this is a handful
+// of lines, not worth a new shared package for).
+func (s *Service) hasActiveRun(ctx context.Context, ownerUserID, jobID string) (bool, error) {
+	sourceType := domain.SourceTypeJob
+	runs, err := s.runs.ListRuns(ctx, ownerUserID, domain.RunFilter{SourceType: &sourceType, SourceID: &jobID})
+	if err != nil {
+		return false, fmt.Errorf("failed to check job's active runs: %w", err)
+	}
+	for _, r := range runs {
+		if !r.Status.IsTerminal() {
+			return true, nil
+		}
+	}
+	return false, nil
+}
