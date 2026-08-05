@@ -23,6 +23,6 @@
 | 9  | Implement Review Fixes           | ✅ Complete (all 19 findings closed, 0 lint issues, tests green) | 2026-08-05T20:41:42Z | 2026-08-05T22:36:31Z | 115 |
 | 10 | Archive Fixes Spec               | ✅ Complete (specs/archive/260805-nuimanbot-extend-context-and-ui-auto-review/, commit 38aa2a8) | 2026-08-05T22:36:31Z | 2026-08-05T22:38:40Z | 2 |
 | 11 | Final Quality Pass               | ✅ Complete (7/7 gates pass, coverage ≥90% domain/usecase, docs reconciled, commit 4401372) | 2026-08-05T22:38:40Z | 2026-08-05T22:54:51Z | 16 |
-| 12 | Process Analysis Report          | 🔄 In Progress | 2026-08-05T22:54:51Z | — | — |
-| 13 | Archive Spec                     | ⬜ Pending | — | — | — |
-| 14 | Open Pull Request                | ⬜ Pending | — | — | — |
+| 12 | Process Analysis Report          | ✅ Complete (dev-flow-analysis.md, commit c08aa8a) | 2026-08-05T22:54:51Z | 2026-08-05T23:01:48Z | 7 |
+| 13 | Archive Spec                     | ✅ Complete (already satisfied by Steps 7/10; verified specs/archive/ holds both) | 2026-08-05T23:01:48Z | 2026-08-05T23:01:48Z | 0 |
+| 14 | Open Pull Request                | 🔄 In Progress | 2026-08-05T23:01:48Z | — | — |
