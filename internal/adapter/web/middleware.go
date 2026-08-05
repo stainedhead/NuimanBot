@@ -11,6 +11,70 @@ import (
 	"nuimanbot/internal/usecase/security"
 )
 
+// networkAccessState holds the server's current network-access configuration
+// (FR-005–FR-008), guarded for concurrent access since it may be updated at
+// runtime (Settings UI, system-wide/admin-only). The zero value has an empty
+// Mode, which networkAllowlistMiddleware treats as "unconfigured — allow
+// everything": this package must not silently start enforcing localhost-only
+// just because a *Server exists (that would break every existing httptest-
+// based caller, which never sets a loopback RemoteAddr). Production callers
+// (cmd/nuimanbot's DI wiring) call SetNetworkAccessConfig with the loaded
+// config's ToDomain() value — which itself defaults an absent/empty config
+// section to AccessModeLocalhostOnly — so the secure-by-default behavior
+// described in spec.md's Breaking Changes section is real once wired, without
+// this package silently changing behavior for any caller that hasn't wired
+// it in.
+type networkAccessState struct {
+	mu  sync.RWMutex
+	cfg domain.NetworkAccessConfig
+}
+
+func (n *networkAccessState) get() domain.NetworkAccessConfig {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	return n.cfg
+}
+
+func (n *networkAccessState) set(cfg domain.NetworkAccessConfig) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.cfg = cfg
+}
+
+// SetNetworkAccessConfig updates the server's network-access configuration
+// (FR-005–FR-008), taking effect for subsequent requests. Safe to call
+// concurrently with request handling (e.g. from a Settings save handler).
+func (s *Server) SetNetworkAccessConfig(cfg domain.NetworkAccessConfig) {
+	s.networkAccess.set(cfg)
+}
+
+// networkAllowlistMiddleware enforces FR-005–FR-008 ahead of every other
+// handler, including /health and /static/ — pre-auth, fail-closed per
+// spec.md's Security NFR ("Remote-access allowlist enforcement happens at
+// the network/middleware layer, before authentication, fail-closed"). A
+// request from a host IsAllowed rejects receives 403 without reaching any
+// application handler.
+//
+// An unconfigured server (Mode == "") passes every request through
+// unchanged — see networkAccessState's doc comment for why.
+func (s *Server) networkAllowlistMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cfg := s.networkAccess.get()
+		if cfg.Mode == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		host := extractRemoteIP(r)
+		if !cfg.IsAllowed(host) {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
 const (
 	// loginRateLimitCapacity is the maximum number of failed login attempts before throttling.
 	loginRateLimitCapacity = 5

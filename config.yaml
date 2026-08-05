@@ -10,6 +10,35 @@ storage:
   type: file
   dsn: "./data"  # Auto-initialized on startup (directories + default admin user)
 
+# Web admin network exposure (FR-005-FR-008, specs/260805-nuimanbot-extend-context-and-ui).
+# Safe by default: omitting this whole section is equivalent to explicitly
+# setting mode: localhost_only with no allowlist, so existing single-machine
+# deployments are unaffected by upgrade.
+network_access:
+  mode: localhost_only  # localhost_only | remote
+  # bind_address: "0.0.0.0:8443"  # only used when mode: remote
+  # allowlist:
+  #   - "203.0.113.9"
+  #   - "trusted.example.com"
+  #
+  # IMPORTANT: absent vs. empty allowlist are NOT equivalent.
+  #   - omitting `allowlist` entirely (as above) = allow all remote sources
+  #     once mode: remote is set (an explicit admin choice to open access).
+  #   - `allowlist: []` (present but empty) = deny ALL sources, fail-closed.
+  #   - `allowlist: [...]` with entries = only those sources are allowed.
+
+# Shared Job/Chore execution worker pool (FR-004, FR-039). Unset/non-positive
+# defaults to 3 concurrent workers.
+worker_pool:
+  max_concurrent_workers: 3
+
+# Default per-user retention windows in days (FR-003). 0 means "Never"
+# (no automatic expiry). Users/admins can override per-user in Settings.
+retention_defaults:
+  chat_days: 90
+  project_days: 180
+  history_days: 90
+
 llm:
   default_model:
     primary: anthropic/claude-sonnet

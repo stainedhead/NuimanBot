@@ -40,14 +40,16 @@ type Server struct {
 	profileService      ProfileService
 	botService          BotService
 	confirmationService ConfirmationService
+	networkAccess       *networkAccessState
 }
 
 // NewServer creates a new web admin server
 func NewServer(addr string) *Server {
 	server := &Server{
-		addr:         addr,
-		auth:         NewAuthService(), // Initialize auth service
-		loginLimiter: newLoginRateLimiterStore(),
+		addr:          addr,
+		auth:          NewAuthService(), // Initialize auth service
+		loginLimiter:  newLoginRateLimiterStore(),
+		networkAccess: &networkAccessState{},
 	}
 
 	// Parse templates
@@ -58,9 +60,16 @@ func NewServer(addr string) *Server {
 	mux := http.NewServeMux()
 	server.registerRoutes(mux)
 
+	// networkAllowlistMiddleware wraps every route, including /health and
+	// /static/ (FR-007's "rejected before reaching application handlers").
+	// See its doc comment: a server that never calls SetNetworkAccessConfig
+	// behaves exactly as before this field existed.
+	var handler http.Handler = mux
+	handler = server.networkAllowlistMiddleware(handler)
+
 	server.httpServer = &http.Server{
 		Addr:         addr,
-		Handler:      mux,
+		Handler:      handler,
 		ReadTimeout:  readTimeout,
 		WriteTimeout: writeTimeout,
 		IdleTimeout:  idleTimeout,
