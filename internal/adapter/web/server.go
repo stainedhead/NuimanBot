@@ -48,6 +48,7 @@ type Server struct {
 	memoriesService     MemoriesService
 	settingsService     SettingsService
 	networkAccess       *networkAccessState
+	hub                 *Hub
 }
 
 // NewServer creates a new web admin server
@@ -57,6 +58,7 @@ func NewServer(addr string) *Server {
 		auth:          NewAuthService(), // Initialize auth service
 		loginLimiter:  newLoginRateLimiterStore(),
 		networkAccess: &networkAccessState{},
+		hub:           NewHub(),
 	}
 
 	// Parse templates
@@ -209,7 +211,21 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// the handler itself (same fail-closed posture as elsewhere).
 	mux.Handle("/admin/settings", userHandler(s.handleSettings))
 
+	// WebSocket endpoint (P6.8): pushes Job/Chore Run status/log/
+	// notification-badge updates to the connecting session's own user
+	// (handleWebSocket enforces this via s.getCurrentUser, mirroring
+	// userHandler's RoleUser posture without the redirect-on-force-
+	// password-change behavior, which doesn't apply to a non-page route).
+	mux.HandleFunc("/ws", s.handleWebSocket)
+
 	mux.Handle("/admin/", adminHandler(s.handleAdminIndex))
+}
+
+// Hub returns the server's WebSocket hub, so DI wiring (cmd/nuimanbot) can
+// wrap domain.RunRepository with a notifying decorator that publishes to
+// it as the worker pool executes runs.
+func (s *Server) Hub() *Hub {
+	return s.hub
 }
 
 // handleHealth handles health check requests
