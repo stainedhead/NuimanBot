@@ -48,6 +48,12 @@ func (s *Server) SetNetworkAccessConfig(cfg domain.NetworkAccessConfig) {
 	s.networkAccess.set(cfg)
 }
 
+// NetworkAccessConfig returns the server's current network-access
+// configuration (FR-002's Settings display value).
+func (s *Server) NetworkAccessConfig() domain.NetworkAccessConfig {
+	return s.networkAccess.get()
+}
+
 // networkAllowlistMiddleware enforces FR-005–FR-008 ahead of every other
 // handler, including /health and /static/ — pre-auth, fail-closed per
 // spec.md's Security NFR ("Remote-access allowlist enforcement happens at

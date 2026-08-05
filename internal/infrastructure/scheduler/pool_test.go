@@ -170,6 +170,18 @@ func TestWorkerPool_IsSourceRunning(t *testing.T) {
 	}
 }
 
+func TestWorkerPool_Concurrency(t *testing.T) {
+	exec := &recordingExecutor{}
+	p := newTestPool(t, exec, 3)
+	if got := p.Concurrency(); got != 3 {
+		t.Fatalf("expected initial concurrency 3, got %d", got)
+	}
+	p.SetConcurrency(5)
+	if got := p.Concurrency(); got != 5 {
+		t.Fatalf("expected concurrency 5 after SetConcurrency, got %d", got)
+	}
+}
+
 func TestWorkerPool_StartIsIdempotent(t *testing.T) {
 	exec := &recordingExecutor{}
 	p := newTestPool(t, exec, 1)

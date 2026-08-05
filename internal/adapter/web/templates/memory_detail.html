@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Cell.Scene}} - Memory - NuimanBot Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.5/dist/cdn.min.js"></script>
+    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="icon" href="/static/img/NuimanProfile.jpg">
+</head>
+<body class="bg-gray-100 min-h-screen">
+    {{template "nav" .}}
+    <div class="container mx-auto px-4 py-8">
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <div class="mb-6">
+                <a href="/admin/memories" class="text-sm text-teal-700 hover:underline">&larr; All Memories</a>
+                <h1 class="text-2xl font-bold text-gray-900 mt-1">{{.Cell.Scene}}</h1>
+                <p class="text-xs text-gray-500 mt-1">Read-only — memories are created and updated by the agent only.</p>
+            </div>
+
+            <dl class="grid grid-cols-2 gap-4 mb-6 text-sm">
+                <div>
+                    <dt class="font-semibold text-gray-500">Type</dt>
+                    <dd class="text-gray-900">{{.Cell.CellType.String}}</dd>
+                </div>
+                <div>
+                    <dt class="font-semibold text-gray-500">Salience</dt>
+                    <dd class="text-gray-900">{{printf "%.2f" .Cell.Salience}}</dd>
+                </div>
+                <div>
+                    <dt class="font-semibold text-gray-500">Created</dt>
+                    <dd class="text-gray-900">{{.Cell.CreatedAt.Format "2006-01-02 15:04"}}</dd>
+                </div>
+                <div>
+                    <dt class="font-semibold text-gray-500">Updated</dt>
+                    <dd class="text-gray-900">{{.Cell.UpdatedAt.Format "2006-01-02 15:04"}}</dd>
+                </div>
+                {{if .Cell.ExpiresAt}}
+                <div>
+                    <dt class="font-semibold text-gray-500">Expires</dt>
+                    <dd class="text-gray-900">{{.Cell.ExpiresAt.Format "2006-01-02 15:04"}}</dd>
+                </div>
+                {{end}}
+            </dl>
+
+            <div class="border-t pt-4">
+                <h2 class="text-sm font-semibold text-gray-500 mb-2">Content</h2>
+                <p class="text-gray-800 whitespace-pre-wrap">{{.Cell.Content}}</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

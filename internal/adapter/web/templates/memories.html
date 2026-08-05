@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Memories - NuimanBot Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.5/dist/cdn.min.js"></script>
+    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="icon" href="/static/img/NuimanProfile.jpg">
+</head>
+<body class="bg-gray-100 min-h-screen">
+    {{template "nav" .}}
+    <div class="container mx-auto px-4 py-8">
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <div class="flex justify-between items-center mb-6">
+                <h1 class="text-3xl font-bold text-gray-900">Memories</h1>
+            </div>
+            <p class="text-sm text-gray-500 mb-6">Read-only view of what the agent has remembered. Memories are created and updated by the agent only — there is no add/edit/delete control here.</p>
+
+            <form method="GET" action="/admin/memories" class="mb-8 bg-gray-50 border border-gray-200 rounded-lg p-4 flex flex-wrap gap-4 items-end">
+                <div>
+                    <label for="scene" class="block text-sm font-medium text-gray-700 mb-1">Scene</label>
+                    <input type="text" id="scene" name="scene" value="{{.Scene}}" placeholder="e.g. trip-planning"
+                           class="rounded-md border-gray-300 shadow-sm focus:border-teal-500 focus:ring-teal-500">
+                </div>
+                <div>
+                    <label for="min_salience" class="block text-sm font-medium text-gray-700 mb-1">Min Salience</label>
+                    <input type="number" id="min_salience" name="min_salience" value="{{.MinSalience}}" step="0.1" min="0" max="1" placeholder="0.0 - 1.0"
+                           class="rounded-md border-gray-300 shadow-sm focus:border-teal-500 focus:ring-teal-500">
+                </div>
+                <button type="submit" class="btn-primary">Filter</button>
+                <a href="/admin/memories" class="text-gray-500 hover:text-gray-700 text-sm">Clear</a>
+            </form>
+
+            {{if .Cells}}
+            <div class="overflow-x-auto">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Scene</th>
+                            <th>Type</th>
+                            <th>Salience</th>
+                            <th>Content</th>
+                            <th>Created</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .Cells}}
+                        <tr>
+                            <td>{{.Scene}}</td>
+                            <td>{{.CellType.String}}</td>
+                            <td>{{printf "%.2f" .Salience}}</td>
+                            <td class="max-w-xs truncate"><a href="/admin/memories/{{.ID}}" class="text-teal-700 hover:underline" title="{{.Content}}">{{.Content}}</a></td>
+                            <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+            {{else}}
+            <p class="text-gray-500">No memories match this filter yet.</p>
+            {{end}}
+        </div>
+    </div>
+</body>
+</html>

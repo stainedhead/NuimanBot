@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Settings - NuimanBot Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="icon" href="/static/img/NuimanProfile.jpg">
+</head>
+<body class="bg-gray-100 min-h-screen">
+    {{template "nav" .}}
+    <div class="container mx-auto px-4 py-8 space-y-6">
+        <h1 class="text-3xl font-bold text-gray-900">Settings</h1>
+
+        {{if .FlashSuccess}}
+        <div class="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded">{{.FlashSuccess}}</div>
+        {{end}}
+        {{if .FlashError}}
+        <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">{{.FlashError}}</div>
+        {{end}}
+
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <h2 class="text-xl font-semibold text-gray-900 mb-4">System-wide (admin only)</h2>
+            {{if .IsAdmin}}
+            <form method="POST" action="/admin/settings" class="space-y-4">
+                <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Worker pool size (concurrent Job/Chore runs)</label>
+                    <input type="number" min="1" name="worker_pool_size" value="{{.WorkerPoolSize}}"
+                           class="mt-1 rounded-md border-gray-300 shadow-sm focus:border-teal-500 focus:ring-teal-500 w-32">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Network access mode</label>
+                    <select name="network_mode" class="mt-1 rounded-md border-gray-300 shadow-sm focus:border-teal-500 focus:ring-teal-500">
+                        <option value="localhost_only" {{if eq .NetworkMode "localhost_only"}}selected{{end}}>Localhost only</option>
+                        <option value="remote" {{if eq .NetworkMode "remote"}}selected{{end}}>Remote</option>
+                    </select>
+                    <p class="text-xs text-gray-500 mt-1">
+                        {{if .HasAllowlist}}Allowlist configured: {{.AllowlistCount}} entr{{if eq .AllowlistCount 1}}y{{else}}ies{{end}}
+                        {{if eq .AllowlistCount 0}}(empty — all remote sources are currently denied, fail-closed){{end}}
+                        {{else}}No allowlist configured (all remote sources allowed in Remote mode). Edit config.yaml's network_access.allowlist to restrict.{{end}}
+                    </p>
+                </div>
+                <button type="submit" class="btn-primary">Save</button>
+            </form>
+            <div class="mt-6 pt-4 border-t">
+                <a href="/admin/users" class="text-teal-700 hover:underline text-sm">Manage Users &rarr;</a>
+                <a href="/admin/bots" class="text-teal-700 hover:underline text-sm ml-4">Manage Bots &rarr;</a>
+            </div>
+            {{else}}
+            <p class="text-gray-500 text-sm">Worker pool size: {{.WorkerPoolSize}} &middot; Network mode: {{.NetworkMode}}</p>
+            <p class="text-gray-400 text-xs mt-1">Only admins can change system-wide settings.</p>
+            {{end}}
+        </div>
+
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <h2 class="text-xl font-semibold text-gray-900 mb-4">Skills &amp; Plugins</h2>
+            {{if .SkillNames}}
+            <ul class="list-disc list-inside text-gray-700 space-y-1">
+                {{range .SkillNames}}<li>{{.}}</li>{{end}}
+            </ul>
+            {{else}}
+            <p class="text-gray-500">No skills registered.</p>
+            {{end}}
+        </div>
+
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <h2 class="text-xl font-semibold text-gray-900 mb-4">Retention (per-user)</h2>
+            <table class="table">
+                <thead><tr><th>Resource</th><th>Default retention</th></tr></thead>
+                <tbody>
+                    <tr><td>Chats</td><td>{{if eq .ChatRetentionDays 0}}Never{{else}}{{.ChatRetentionDays}} days{{end}}</td></tr>
+                    <tr><td>Projects</td><td>{{if eq .ProjectRetentionDays 0}}Never{{else}}{{.ProjectRetentionDays}} days{{end}}</td></tr>
+                    <tr><td>History</td><td>{{if eq .HistoryRetentionDays 0}}Never{{else}}{{.HistoryRetentionDays}} days{{end}}</td></tr>
+                </tbody>
+            </table>
+            <p class="text-xs text-gray-500 mt-3">Per-user overrides (including "Never") are not yet editable here — contact an admin to adjust config.yaml's retention_defaults.</p>
+        </div>
+    </div>
+</body>
+</html>

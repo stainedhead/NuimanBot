@@ -46,6 +46,7 @@ type Server struct {
 	choresService       ChoresService
 	historyService      HistoryService
 	memoriesService     MemoriesService
+	settingsService     SettingsService
 	networkAccess       *networkAccessState
 }
 
@@ -202,6 +203,11 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.Handle("/admin/history/", userHandler(s.handleHistorySubroutes))
 	mux.Handle("/admin/memories", userHandler(s.handleMemories))
 	mux.Handle("/admin/memories/", userHandler(s.handleMemorySubroutes))
+
+	// Settings (FR-001-FR-004): viewable by any authenticated user (shows
+	// per-user retention info), system-wide changes gated to admin inside
+	// the handler itself (same fail-closed posture as elsewhere).
+	mux.Handle("/admin/settings", userHandler(s.handleSettings))
 
 	mux.Handle("/admin/", adminHandler(s.handleAdminIndex))
 }

@@ -115,6 +115,14 @@ func (p *WorkerPool) ActiveCount() int {
 	return p.activeCount
 }
 
+// Concurrency returns the currently configured maximum concurrent worker
+// count (FR-004's Settings display value).
+func (p *WorkerPool) Concurrency() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.concurrency
+}
+
 // IsSourceRunning reports whether a run for the given Job/Chore SourceID is
 // currently executing — the primitive the Chore scheduler uses to
 // implement FR-035 (skip-if-still-running).

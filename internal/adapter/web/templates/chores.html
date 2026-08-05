@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chores - NuimanBot Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.5/dist/cdn.min.js"></script>
+    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="icon" href="/static/img/NuimanProfile.jpg">
+</head>
+<body class="bg-gray-100 min-h-screen">
+    {{template "nav" .}}
+    <div class="container mx-auto px-4 py-8">
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <div class="flex justify-between items-center mb-6">
+                <h1 class="text-3xl font-bold text-gray-900">Chores</h1>
+            </div>
+
+            <form method="POST" action="/admin/chores" class="mb-8 bg-amber-50 border border-amber-200 rounded-lg p-4" x-data="{ preset: 'daily' }">
+                <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                <div class="mb-4">
+                    <label for="title" class="block text-sm font-medium text-gray-700 mb-1">Title</label>
+                    <input type="text" id="title" name="title" required
+                           class="w-full rounded-md border-gray-300 shadow-sm focus:border-teal-500 focus:ring-teal-500">
+                </div>
+                <div class="mb-4">
+                    <label for="description" class="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                    <textarea id="description" name="description" rows="3"
+                              class="w-full rounded-md border-gray-300 shadow-sm focus:border-teal-500 focus:ring-teal-500"></textarea>
+                </div>
+                <div class="mb-4">
+                    <label for="working_directory" class="block text-sm font-medium text-gray-700 mb-1">Working directory (optional)</label>
+                    <input type="text" id="working_directory" name="working_directory" placeholder="/path/to/project"
+                           class="w-full rounded-md border-gray-300 shadow-sm focus:border-teal-500 focus:ring-teal-500">
+                </div>
+                <div class="mb-4">
+                    <label for="preset" class="block text-sm font-medium text-gray-700 mb-1">Schedule</label>
+                    <select id="preset" name="preset" x-model="preset"
+                            class="w-full rounded-md border-gray-300 shadow-sm focus:border-teal-500 focus:ring-teal-500">
+                        {{range .Presets}}
+                        <option value="{{.}}">{{.}}</option>
+                        {{end}}
+                        <option value="">Custom (raw cron expression)</option>
+                    </select>
+                </div>
+                <div class="mb-4" x-show="preset === ''">
+                    <label for="cron_expression" class="block text-sm font-medium text-gray-700 mb-1">Raw cron expression</label>
+                    <input type="text" id="cron_expression" name="cron_expression" placeholder="0 0 * * *"
+                           class="w-full rounded-md border-gray-300 shadow-sm focus:border-teal-500 focus:ring-teal-500">
+                    <p class="text-xs text-gray-500 mt-1">Standard 5-field cron: minute hour day-of-month month day-of-week.</p>
+                </div>
+                <button type="submit" class="btn-primary">New Chore</button>
+            </form>
+
+            {{if .Chores}}
+            <div class="overflow-x-auto">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Title</th>
+                            <th>Schedule</th>
+                            <th>Status</th>
+                            <th>Next Run</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .Chores}}
+                        <tr>
+                            <td><a href="/admin/chores/{{.ID}}" class="text-teal-700 hover:underline">{{.Title}}</a></td>
+                            <td><code>{{.Schedule.CronExpression}}</code></td>
+                            <td>
+                                {{if .ScheduleConfirmed}}
+                                <span class="text-green-700">Active</span>
+                                {{else}}
+                                <span class="text-amber-700">Pending confirmation</span>
+                                {{end}}
+                            </td>
+                            <td>{{if .ScheduleConfirmed}}{{.NextFireTime.Format "2006-01-02 15:04"}}{{else}}—{{end}}</td>
+                            <td>
+                                <a href="/admin/chores/{{.ID}}" class="text-teal-600 hover:text-teal-800">Open</a>
+                            </td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+            {{else}}
+            <p class="text-gray-500">No chores yet — create one above.</p>
+            {{end}}
+        </div>
+    </div>
+</body>
+</html>
