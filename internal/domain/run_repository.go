@@ -23,6 +23,18 @@ type RunRepository interface {
 	// ownerUserID.
 	AppendLog(ctx context.Context, ownerUserID, runID string, chunk string) error
 
+	// ReadLog returns the full contents of runID's durable log (as written
+	// incrementally via AppendLog), scoped to its owner (FR-R17). Returns
+	// ("", nil) — not an error — if the run has no log yet (e.g. still
+	// queued). Returns ErrNotFound if no such Run exists for ownerUserID.
+	ReadLog(ctx context.Context, ownerUserID, runID string) (string, error)
+
+	// ReadResults returns the contents of runID's RESULTS.md, scoped to its
+	// owner (FR-R17). Returns ("", nil) — not an error — if the run hasn't
+	// produced results yet. Returns ErrNotFound if no such Run exists for
+	// ownerUserID.
+	ReadResults(ctx context.Context, ownerUserID, runID string) (string, error)
+
 	// MarkNotified sets NotifiedAt on runID (FR-044's badge clear-on-view),
 	// scoped to its owner. Returns ErrNotFound if no such Run exists for
 	// ownerUserID.

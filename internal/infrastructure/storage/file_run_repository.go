@@ -211,6 +211,59 @@ func (r *FileRunRepository) AppendLog(_ context.Context, ownerUserID, runID, chu
 	return nil
 }
 
+// ReadLog returns the contents of runID's durable log file (as written
+// incrementally by AppendLog), scoped to its owner. Deliberately reads
+// through r.logPath rather than the Run record's own LogPath field — that
+// field is never populated by any Executor, whereas r.logPath is the path
+// AppendLog actually writes to.
+func (r *FileRunRepository) ReadLog(_ context.Context, ownerUserID, runID string) (string, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if _, err := r.readLocked(ownerUserID, runID); err != nil {
+		return "", err
+	}
+
+	path, err := r.logPath(ownerUserID, runID)
+	if err != nil {
+		return "", err
+	}
+	return readFileOrEmpty(path)
+}
+
+// ReadResults returns the contents of runID's RESULTS.md, scoped to its
+// owner. ResultsPath is set by the Executor (server-controlled, not
+// derived from request input) at a location outside this repository's own
+// storage root — a separate run-artifacts root the Executor owns — so it
+// is read directly rather than re-resolved through r.userDir/fsguard.
+func (r *FileRunRepository) ReadResults(_ context.Context, ownerUserID, runID string) (string, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	run, err := r.readLocked(ownerUserID, runID)
+	if err != nil {
+		return "", err
+	}
+	return readFileOrEmpty(run.ResultsPath)
+}
+
+// readFileOrEmpty reads path and returns its content, or "" if path is
+// empty, missing, or unreadable (handled gracefully — a run's log or
+// results file may not exist yet, e.g. a still-queued run).
+func readFileOrEmpty(path string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("failed to read file: %w", err)
+	}
+	return string(data), nil
+}
+
 // MarkNotified sets NotifiedAt on runID (FR-044's badge clear-on-view),
 // scoped to its owner.
 func (r *FileRunRepository) MarkNotified(_ context.Context, ownerUserID, runID string) error {

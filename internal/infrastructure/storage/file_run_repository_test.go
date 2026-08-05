@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -195,6 +196,110 @@ func TestFileRunRepository_AppendLog_NotFound(t *testing.T) {
 	repo := newTestRunRepo(t)
 	err := repo.AppendLog(context.Background(), "user-a", "missing", "x")
 	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+// TestFileRunRepository_ReadLog verifies ReadLog (FR-R17) returns the
+// content AppendLog actually wrote, reading through the repository's own
+// confined per-owner log path rather than any path field on the Run record.
+func TestFileRunRepository_ReadLog(t *testing.T) {
+	repo := newTestRunRepo(t)
+	ctx := context.Background()
+	if err := repo.SaveRun(ctx, &domain.Run{ID: "r1", OwnerUserID: "user-a"}); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+	if err := repo.AppendLog(ctx, "user-a", "r1", "line one\n"); err != nil {
+		t.Fatalf("AppendLog: %v", err)
+	}
+	if err := repo.AppendLog(ctx, "user-a", "r1", "line two\n"); err != nil {
+		t.Fatalf("AppendLog: %v", err)
+	}
+
+	got, err := repo.ReadLog(ctx, "user-a", "r1")
+	if err != nil {
+		t.Fatalf("ReadLog: %v", err)
+	}
+	if got != "line one\nline two\n" {
+		t.Fatalf("unexpected log content: %q", got)
+	}
+}
+
+// TestFileRunRepository_ReadLog_NoLogYet verifies ReadLog returns ("", nil)
+// — not an error — for a run that has never had AppendLog called on it
+// (e.g. still queued), mirroring the graceful-empty behavior the old
+// os.ReadFile-based handler code relied on.
+func TestFileRunRepository_ReadLog_NoLogYet(t *testing.T) {
+	repo := newTestRunRepo(t)
+	ctx := context.Background()
+	if err := repo.SaveRun(ctx, &domain.Run{ID: "r1", OwnerUserID: "user-a"}); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+
+	got, err := repo.ReadLog(ctx, "user-a", "r1")
+	if err != nil {
+		t.Fatalf("ReadLog: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("expected empty log content, got %q", got)
+	}
+}
+
+// TestFileRunRepository_ReadLog_NotFound verifies ReadLog is scoped to its
+// owner like every other RunRepository method, returning ErrNotFound rather
+// than disclosing a cross-owner run's existence.
+func TestFileRunRepository_ReadLog_NotFound(t *testing.T) {
+	repo := newTestRunRepo(t)
+	if _, err := repo.ReadLog(context.Background(), "user-a", "missing"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+// TestFileRunRepository_ReadResults verifies ReadResults (FR-R17) returns
+// the content at the Run's ResultsPath (set by the Executor at write time).
+func TestFileRunRepository_ReadResults(t *testing.T) {
+	repo := newTestRunRepo(t)
+	ctx := context.Background()
+	resultsPath := filepath.Join(t.TempDir(), "RESULTS.md")
+	if err := os.WriteFile(resultsPath, []byte("the results"), 0644); err != nil {
+		t.Fatalf("writing results file: %v", err)
+	}
+	if err := repo.SaveRun(ctx, &domain.Run{ID: "r1", OwnerUserID: "user-a", ResultsPath: resultsPath}); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+
+	got, err := repo.ReadResults(ctx, "user-a", "r1")
+	if err != nil {
+		t.Fatalf("ReadResults: %v", err)
+	}
+	if got != "the results" {
+		t.Fatalf("unexpected results content: %q", got)
+	}
+}
+
+// TestFileRunRepository_ReadResults_NoResultsYet verifies ReadResults
+// returns ("", nil) for a run with an empty ResultsPath (not yet produced).
+func TestFileRunRepository_ReadResults_NoResultsYet(t *testing.T) {
+	repo := newTestRunRepo(t)
+	ctx := context.Background()
+	if err := repo.SaveRun(ctx, &domain.Run{ID: "r1", OwnerUserID: "user-a"}); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+
+	got, err := repo.ReadResults(ctx, "user-a", "r1")
+	if err != nil {
+		t.Fatalf("ReadResults: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("expected empty results content, got %q", got)
+	}
+}
+
+// TestFileRunRepository_ReadResults_NotFound verifies ReadResults is scoped
+// to its owner like every other RunRepository method.
+func TestFileRunRepository_ReadResults_NotFound(t *testing.T) {
+	repo := newTestRunRepo(t)
+	if _, err := repo.ReadResults(context.Background(), "user-a", "missing"); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }

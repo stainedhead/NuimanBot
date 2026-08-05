@@ -54,11 +54,11 @@ func (s *Server) handleBots(w http.ResponseWriter, r *http.Request) {
 
 	// Render template
 	data := struct {
-		Title string
-		Bots  []*BotConfig
+		*BaseData
+		Bots []*BotConfig
 	}{
-		Title: "Bots",
-		Bots:  bots,
+		BaseData: s.baseDataFor(user, "Bots", "bots"),
+		Bots:     bots,
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

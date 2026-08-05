@@ -47,6 +47,18 @@ func (s *Service) UnviewedCount(ctx context.Context, ownerUserID string) (int, e
 	return s.runs.CountUnnotified(ctx, ownerUserID)
 }
 
+// ReadLog returns runID's captured processing log content, scoped to its
+// owner (FR-R17). Returns ("", nil) if the run has no log yet.
+func (s *Service) ReadLog(ctx context.Context, ownerUserID, runID string) (string, error) {
+	return s.runs.ReadLog(ctx, ownerUserID, runID)
+}
+
+// ReadResults returns runID's RESULTS.md content, scoped to its owner
+// (FR-R17). Returns ("", nil) if the run hasn't produced results yet.
+func (s *Service) ReadResults(ctx context.Context, ownerUserID, runID string) (string, error) {
+	return s.runs.ReadResults(ctx, ownerUserID, runID)
+}
+
 // SweepExpired deletes every terminal Run owned by ownerUserID that is
 // expired under policy (FR-043), measured from each Run's CreatedAt — Runs
 // are immutable historical records once terminal, so CreatedAt (unlike

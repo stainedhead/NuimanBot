@@ -80,6 +80,38 @@ func (m *MockHistoryService) UnviewedCount(_ context.Context, ownerUserID string
 	return m.unviewedCount, nil
 }
 
+// ReadLog and ReadResults mimic the old direct-os.ReadFile behavior the
+// handler used to have, reading from whatever path the test planted on the
+// mock Run's LogPath/ResultsPath fields — this is a test-double
+// simplification, not a mirror of FileRunRepository's real (fsguard-
+// confined, per-owner-directory) storage layout.
+func (m *MockHistoryService) ReadLog(_ context.Context, ownerUserID, runID string) (string, error) {
+	r, ok := m.runs[runID]
+	if !ok || r.OwnerUserID != ownerUserID {
+		return "", domain.ErrNotFound
+	}
+	return readMockFileOrEmpty(r.LogPath), nil
+}
+
+func (m *MockHistoryService) ReadResults(_ context.Context, ownerUserID, runID string) (string, error) {
+	r, ok := m.runs[runID]
+	if !ok || r.OwnerUserID != ownerUserID {
+		return "", domain.ErrNotFound
+	}
+	return readMockFileOrEmpty(r.ResultsPath), nil
+}
+
+func readMockFileOrEmpty(path string) string {
+	if path == "" {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
 func newHistoryTestServer(t *testing.T) (*Server, *MockHistoryService) {
 	t.Helper()
 	server := NewServer(":0")

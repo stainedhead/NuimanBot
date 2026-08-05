@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -33,6 +32,12 @@ type HistoryService interface {
 	// used to populate BaseData.UnviewedRunCount on every authenticated
 	// page, not just /admin/history itself.
 	UnviewedCount(ctx context.Context, ownerUserID string) (int, error)
+	// ReadLog returns runID's captured processing log content, scoped to
+	// its owner (FR-R17). Returns ("", nil) if the run has no log yet.
+	ReadLog(ctx context.Context, ownerUserID, runID string) (string, error)
+	// ReadResults returns runID's RESULTS.md content, scoped to its owner
+	// (FR-R17). Returns ("", nil) if the run hasn't produced results yet.
+	ReadResults(ctx context.Context, ownerUserID, runID string) (string, error)
 }
 
 // SetHistoryService sets the History environment's service.
@@ -146,11 +151,20 @@ func (s *Server) handleHistoryDetail(w http.ResponseWriter, r *http.Request, use
 	base := s.baseDataFor(user, "Run Detail", "history")
 	s.withUnviewedRunCount(r.Context(), base, user)
 
+	logContent, err := s.historyService.ReadLog(r.Context(), user.Username, id)
+	if err != nil {
+		slog.Error("Failed to read run log", "error", err, "run_id", id)
+	}
+	resultsContent, err := s.historyService.ReadResults(r.Context(), user.Username, id)
+	if err != nil {
+		slog.Error("Failed to read run results", "error", err, "run_id", id)
+	}
+
 	data := &RunDetailPageData{
 		BaseData:       base,
 		Run:            run,
-		LogContent:     readFileContentOrEmpty(run.LogPath),
-		ResultsContent: readFileContentOrEmpty(run.ResultsPath),
+		LogContent:     logContent,
+		ResultsContent: resultsContent,
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.templates.ExecuteTemplate(w, "run_detail.html", data); err != nil {
@@ -169,20 +183,6 @@ func (s *Server) withUnviewedRunCount(ctx context.Context, base *BaseData, user 
 		return
 	}
 	base.UnviewedRunCount = count
-}
-
-// readFileContentOrEmpty reads path and returns its content, or "" if path
-// is empty, missing, or unreadable (handled gracefully — a run's log or
-// results file may not exist yet, e.g. a still-queued run).
-func readFileContentOrEmpty(path string) string {
-	if path == "" {
-		return ""
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	return string(data)
 }
 
 // parseRunFilter parses /admin/history's query params into a
