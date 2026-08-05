@@ -655,6 +655,15 @@ worker pool's `Queue` — no new persistence mechanism, no write-ahead log.
   contention was the explicitly named trigger for reconsidering it (spec.md),
   and no such profiling has been done, because no such contention has been
   observed at this feature's current scale.
+- **This decision covers durable persistence of state; it does not by
+  itself provide crash recovery for work already in flight.** `Queue`'s
+  persisted state is correctly restart-durable for anything still waiting
+  to be dispatched, but a `RunRequest` already dequeued to a worker at the
+  moment of a crash has no reconciliation path on restart — its `Run`
+  record is left at whatever non-terminal status it last reached. This is a
+  currently-open gap in meeting the Reliability NFR in full, not resolved
+  by this ADR's choice of persistence mechanism alone; see
+  `documentation/technical-details.md`'s Queue section.
 
 ---
 

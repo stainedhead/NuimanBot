@@ -401,7 +401,7 @@ MCP tools are loaded at startup from `mcp.json`. Servers that fail to initialize
 Delivered 2026-08-05 (`specs/260805-nuimanbot-extend-context-and-ui`, not yet archived). Domain entities, file-based repositories (fsguard-confined), the worker-pool/scheduler subsystem, all six web environments plus Settings, network-access middleware, and a per-user WebSocket push transport are implemented and tested (including `-race` and adversarial path-traversal/cross-owner-IDOR tests). **What is real and working end-to-end:**
 
 - Creating, listing, retaining (including "Never"), and deleting Chats, Projects, Jobs, and Chores, all strictly per-user isolated
-- The Job/Chore FIFO queue and configurable N-worker pool, restart-durable (queue state and in-flight run records survive a process restart)
+- The Job/Chore FIFO queue and configurable N-worker pool: queued-but-not-yet-dispatched work survives a process restart. A run already dequeued to a worker at the moment of a crash does not yet auto-recover — it stays stuck at its last status rather than being requeued or marked failed (a known, unaddressed gap; see `documentation/technical-details.md`'s Queue section)
 - Chore cron scheduling (`robfig/cron/v3`), including skip-if-still-running and unconfirmed-schedule-never-fires semantics
 - History listing/filtering and the unviewed-run notification badge
 - Read-only Memories browsing over the existing memory store

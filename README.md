@@ -381,6 +381,8 @@ See [User Onboarding Guide](support_docs/user-onboarding.md) for usage examples.
 - Per-Job/Chore/Run/Memories "chat with the agent" interfaces are not built yet
 - Configured retention windows (Chats/Projects/History) are not yet automatically enforced
 - The WebSocket push transport for live run status/log/notification updates is real and tested server-side, but no browser-side script consumes it yet — the UI needs a manual refresh
+- A run already dispatched to a worker at the moment of a server crash does not auto-recover on restart (the queue's own pending-work state is restart-durable; an in-flight run is not)
+- Deleting a Chore with an active run removes its record immediately rather than deferring like Jobs do; a soft-deleted Job is not yet automatically cleaned up once its run finishes
 
 See [Product Summary](documentation/product-summary.md#persistent-agent-workspace-chats-projects-jobs-chores-history-memories--in-progress) for the complete, itemized status and the [Web Workspace Guide](support_docs/web-workspace-guide.md) for what to expect when using it today.
 

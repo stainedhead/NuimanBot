@@ -40,6 +40,8 @@ This part of NuimanBot is new, and it is honest to say up front: **the organizin
 - There's no "chat about this specific Job/Chore/run/memory" conversation yet — those panels are planned but not built.
 - Setting a retention period (e.g., "delete Chats after 90 days") is recorded, but nothing currently goes and deletes anything automatically yet.
 - Run status and notification badges don't update live on screen — refresh the page to see the latest status.
+- If the server restarts while a Job/Chore run is actively executing (not just waiting in the queue), that run can get stuck showing its last status rather than resuming or being marked failed automatically.
+- Deleting a Chore while its run is active removes the Chore's record right away; deleting a Job in the same situation marks it for removal but doesn't yet automatically finish cleaning it up once the run ends.
 
 If you're looking to actually get work done with NuimanBot today, use the existing chat gateways (Telegram/Slack/CLI) — see the [User Onboarding Guide](user-onboarding.md). Use this web workspace to get familiar with Projects, Jobs, and Chores organization ahead of the agent being connected to them.
 
@@ -104,7 +106,7 @@ A Project is a durable workspace tied to a real folder on disk — unlike a Chat
 
 ### Deleting a Project
 
-Deleting a Project removes the Project record, but **does not** touch the files in its output directory, and does not delete any Job or Chore that references it — those will simply fail with a clear error the next time they try to run against a Project that's gone.
+Deleting a Project removes the Project record, but **does not** touch the files in its output directory, and does not delete any Job or Chore that references it. Today, since Jobs/Chores don't yet do real agent work (see [What to Expect Today](#what-to-expect-today)), a Job/Chore pointed at a deleted Project won't actually notice — it will still "complete" with a placeholder result rather than reporting an error. Once real agent execution is connected, a Job/Chore referencing a deleted Project is intended to fail clearly instead.
 
 ### Retention
 
@@ -133,7 +135,7 @@ Open the Job's detail page to see its current status, or check [History](#histor
 
 ### Deleting a Job
 
-If a Job's run is currently in progress, deleting it marks it for removal but lets the in-progress run finish first — nothing is killed mid-run. Once no run is active, the Job and its history are removed.
+If a Job's run is currently in progress, deleting it marks it for removal rather than deleting it outright — nothing running is killed mid-run. As of this writing, that mark is not yet automatically cleared once the run finishes; a Job in this state may need a follow-up delete or admin cleanup rather than disappearing on its own.
 
 ---
 
@@ -158,7 +160,7 @@ If a Chore's next scheduled time arrives while its previous run is still going, 
 
 ### Deleting a Chore
 
-Same in-flight-run handling as Jobs: an active run is allowed to finish before the Chore record is fully removed.
+Unlike Jobs, deleting a Chore removes it immediately, even if a run is currently in progress — the run itself keeps executing to completion, but the Chore's record disappears from your list right away rather than waiting. Bringing this in line with Jobs' behavior is planned but not done yet.
 
 ---
 

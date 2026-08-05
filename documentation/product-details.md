@@ -379,7 +379,8 @@
   - ✅ User retains direct filesystem access to the output directory outside the app (including `AGENTS.md`); last-write-wins if the agent and the user's own editor both write it, by design (no cross-boundary locking)
   - ✅ Retention configurable independently of Chat retention, including "Never"
   - ✅ All Project file operations are path-confined via `fsguard.ResolveWithin` — a crafted path cannot escape the Project's output/hidden directories
-  - ✅ Deleting a Project does not delete Jobs/Chores that reference it; their next run fails with a clear `Error` ("referenced Project no longer exists") instead of executing against a missing directory
+  - ✅ Deleting a Project does not delete Jobs/Chores that reference it — the Job/Chore record and its history remain
+  - ❌ A referencing Job/Chore's next run is **not yet** detected as stale: `StubExecutor` never reads `Job.WorkingDirectory` or checks whether the referenced Project still exists — it always "succeeds" against its own placeholder artifact directory regardless. The spec's intended behavior (fail with `Error = "referenced Project no longer exists"`) is a requirement on the future real `Executor`, not current behavior.
   - ⚠️ The primary intended path to edit `AGENTS.md` — "chat with the agent in the Project's context" — is not available yet, since no chat surface in this feature invokes the agent (see FR-025); today `AGENTS.md` can only be created via the "Add AGENTS.md" control or edited directly on disk
 
 #### FR-027: Persistent Agent Workspace — Jobs
@@ -391,7 +392,7 @@
   - ✅ A Job can run in the context of a Chat or a Project; a Project-context Job defaults to that Project's output directory as its working directory
   - ✅ Jobs are enqueued onto the shared, durable FIFO queue (`internal/infrastructure/scheduler.Queue`) and executed by the configurable worker pool in order
   - ✅ Every run records timing (start/end/duration) and a processing log, retrievable via History
-  - ✅ Deleting a Job with an active run soft-marks it (`PendingDeletion`); the in-flight run is allowed to finish before the record is removed, and no new run is enqueued for a Job pending deletion
+  - 🔶 Deleting a Job whose most recent status is `Running`/`Queued` soft-marks it (`job.PendingDeletion = true`, persisted) instead of deleting outright — confirmed in `jobs.Service.DeleteJob`. Two parts of the intended behavior are **not yet implemented**, both called out as explicit `TODO`s in the code: (1) nothing automatically hard-deletes a `PendingDeletion` Job once its run reaches a terminal state — it stays soft-marked indefinitely until acted on again; (2) `domain.Job.IsQueueable()` (the method meant to prevent enqueueing a new run for a pending-deletion Job) is defined but **not called anywhere** in production code, so this guard is not currently enforced at enqueue time
   - ❌ **Execution does not invoke the agent.** `internal/infrastructure/scheduler.StubExecutor` drives each run through a real Queued → Running → Completed/Failed lifecycle and writes a placeholder `RESULTS.md` explicitly stating no agent/LLM invocation occurred. The queueing, concurrency, and persistence pipeline is genuine and tested; the work product is not.
   - ❌ Per-Job chat interface (spec FR-029) is not built in this pass
   - ⚠️ In-app notification on run completion (spec FR-030) has the transport (WebSocket push) but no browser-side consumer yet — see FR-030's note under History/Execution below
@@ -405,7 +406,7 @@
   - ✅ An agent-proposed schedule requires explicit user confirmation (`ScheduleConfirmed`) before it can fire; an unconfirmed schedule never fires and does not silently expire
   - ✅ `internal/infrastructure/scheduler.ChoreScheduler` polls every 30 seconds (`defaultChoreSchedulerInterval`) for due Chores using `robfig/cron/v3` (see ADR-010) and either enqueues a new Run or records a skipped Run ("skipped — previous run still active") if the Chore's previous run is still executing (FR-035's skip-if-still-running)
   - ✅ `NextFireTime` is advanced and persisted on every tick regardless of fire/skip outcome, so a scheduler outage doesn't cause repeated catch-up fires for the same missed window
-  - ✅ Deleting a Chore with an active run soft-marks it, mirroring Jobs
+  - ❌ **Deleting a Chore does not yet soft-mark it.** `chores.Service.DeleteChore` is a plain, immediate, ownership-scoped delete — the `PendingDeletion`-while-active-run behavior spec'd for Jobs (and originally intended to mirror across both) is an explicit `TODO` in the code: this usecase package has no visibility into in-flight runs (that lives in the worker pool, which it must not import per Clean Architecture layering) without further orchestration work not yet done. Deleting a Chore whose run is currently executing removes the Chore record immediately; the in-flight Run itself is unaffected (the worker already has the dequeued `RunRequest`) but nothing prevents the record's immediate disappearance from the user's list mid-run.
   - ❌ Execution is the same `StubExecutor` placeholder described under FR-027 — Chores do not invoke the agent yet
   - ❌ Per-Chore chat interface (spec FR-037) is not built in this pass
 
@@ -1919,7 +1920,7 @@ retention_defaults:
 **Testing:**
 - Domain coverage 97.9%; `usecase/chats` 91.7%, `usecase/chores` 90.2%, `usecase/jobs` 93.0%, `usecase/projects` 94.2%, `usecase/history` 100%, `usecase/memories` 100%, `usecase/settings` 100%
 - Adversarial path-traversal tests per file-based repository (crafted IDs, absolute paths, NUL bytes, sibling-directory prefix confusion) and per-environment cross-owner-IDOR tests (`TestHandle*_CrossOwnerReturns404`)
-- WebSocket hub tested under `-race` (handshake, per-user isolation, slow-client drop); worker pool and queue restart-durability tested explicitly
+- WebSocket hub tested under `-race` (handshake, per-user isolation, slow-client drop); the `Queue`'s own persist/reload round trip is tested explicitly for restart durability — this does not cover recovery of a run already dequeued to a worker at crash time (see `documentation/technical-details.md`'s Queue section)
 
 ---
 
