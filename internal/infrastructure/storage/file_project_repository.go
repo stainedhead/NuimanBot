@@ -41,12 +41,17 @@ func (r *FileProjectRepository) userDir(ownerUserID string) string {
 }
 
 // recordPath resolves projectID's on-disk record path, confined to
-// ownerUserID's own projects directory via fsguard.ResolveWithin. See
-// FileJobRepository.recordPath's doc comment for why this confinement is
-// required (projectID derives from a URL path segment) and why every
-// resolution failure maps uniformly to domain.ErrNotFound.
+// ownerUserID's own projects directory via fsguard.ResolveWithinNoEscape
+// (FR-R6: also guards against a symlink planted at projectID+".json"
+// redirecting the read/write outside the owner's projects directory — a
+// Project record is reachable by ID alone via the web adapter, so this is
+// on a more directly attacker-reachable path than the Job/Chore/Run
+// record-path siblings). See FileJobRepository.recordPath's doc comment
+// for why this confinement is required (projectID derives from a URL path
+// segment) and why every resolution failure maps uniformly to
+// domain.ErrNotFound.
 func (r *FileProjectRepository) recordPath(ownerUserID, projectID string) (string, error) {
-	path, err := fsguard.ResolveWithin(r.userDir(ownerUserID), projectID+".json")
+	path, err := fsguard.ResolveWithinNoEscape(r.userDir(ownerUserID), projectID+".json")
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", domain.ErrNotFound, err)
 	}

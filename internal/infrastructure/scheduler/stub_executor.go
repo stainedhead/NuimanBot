@@ -96,13 +96,14 @@ func (e *StubExecutor) appendLog(ctx context.Context, req RunRequest, line strin
 }
 
 // writeResults writes a placeholder RESULTS.md for req, confined under
-// e.baseDir via fsguard.ResolveWithin — demonstrating the same path-
-// confinement discipline required of any real Job/Chore file operation
-// (spec.md's Security NFR), even though this stub never touches a Project's
-// actual output directory.
+// e.baseDir via fsguard.ResolveWithinNoEscape (FR-R6: also guards against a
+// symlink-based escape) — demonstrating the same path-confinement
+// discipline required of any real Job/Chore file operation (spec.md's
+// Security NFR), even though this stub never touches a Project's actual
+// output directory.
 func (e *StubExecutor) writeResults(req RunRequest) (string, error) {
 	runDir := filepath.Join(e.baseDir, "users", req.OwnerUserID, "runs", req.RunID)
-	resultsPath, err := fsguard.ResolveWithin(runDir, "RESULTS.md")
+	resultsPath, err := fsguard.ResolveWithinNoEscape(runDir, "RESULTS.md")
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve results path: %w", err)
 	}

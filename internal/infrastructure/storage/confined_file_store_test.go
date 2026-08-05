@@ -60,6 +60,35 @@ func TestFileConfinedFileStore_WriteFile_RejectsEscape(t *testing.T) {
 	}
 }
 
+func TestFileConfinedFileStore_WriteFile_RejectsSymlinkEscape(t *testing.T) {
+	// FR-R6 regression at the actual call site jobs/chores/projects
+	// depend on (via domain.ConfinedFileStore): a symlink planted inside
+	// root — e.g. by a coding agent writing into a Project's
+	// OutputDirectory during a prior run — must not let a later write
+	// escape root, even though the lexical relPath never leaves it.
+	parent := t.TempDir()
+	root := filepath.Join(parent, "root")
+	outside := filepath.Join(parent, "outside")
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outside, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Fatal(err)
+	}
+
+	s := NewFileConfinedFileStore()
+	err := s.WriteFile(root, filepath.Join("escape", "pwned.md"), []byte("evil"))
+	if !errors.Is(err, fsguard.ErrPathEscape) {
+		t.Fatalf("expected ErrPathEscape, got %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(outside, "pwned.md")); !os.IsNotExist(statErr) {
+		t.Fatal("expected no file to have been written outside root via the symlink")
+	}
+}
+
 func TestFileConfinedFileStore_FileExists(t *testing.T) {
 	root := t.TempDir()
 	s := NewFileConfinedFileStore()

@@ -30,10 +30,12 @@ func (s *FileConfinedFileStore) EnsureDir(dir string) error {
 	return nil
 }
 
-// WriteFile resolves relPath against baseDir via fsguard.ResolveWithin and
-// writes data to it, creating or truncating the file with mode 0644.
+// WriteFile resolves relPath against baseDir via
+// fsguard.ResolveWithinNoEscape (FR-R6: also rejects a symlink-based
+// escape, not just a lexical one) and writes data to it, creating or
+// truncating the file with mode 0644.
 func (s *FileConfinedFileStore) WriteFile(baseDir, relPath string, data []byte) error {
-	path, err := fsguard.ResolveWithin(baseDir, relPath)
+	path, err := fsguard.ResolveWithinNoEscape(baseDir, relPath)
 	if err != nil {
 		return fmt.Errorf("failed to resolve confined path: %w", err)
 	}
@@ -43,10 +45,11 @@ func (s *FileConfinedFileStore) WriteFile(baseDir, relPath string, data []byte) 
 	return nil
 }
 
-// FileExists resolves relPath against baseDir via fsguard.ResolveWithin and
-// reports whether it currently exists.
+// FileExists resolves relPath against baseDir via
+// fsguard.ResolveWithinNoEscape (FR-R6) and reports whether it currently
+// exists.
 func (s *FileConfinedFileStore) FileExists(baseDir, relPath string) (bool, error) {
-	path, err := fsguard.ResolveWithin(baseDir, relPath)
+	path, err := fsguard.ResolveWithinNoEscape(baseDir, relPath)
 	if err != nil {
 		return false, fmt.Errorf("failed to resolve confined path: %w", err)
 	}
