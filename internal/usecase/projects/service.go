@@ -9,7 +9,6 @@ package projects
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -17,7 +16,6 @@ import (
 	"github.com/google/uuid"
 
 	"nuimanbot/internal/domain"
-	"nuimanbot/internal/infrastructure/fsguard"
 )
 
 // hiddenDirName is the dot-prefixed subdirectory created inside a Project's
@@ -36,12 +34,17 @@ const hiddenDirName = ".nuimanbot"
 // Service orchestrates Project create/list/get/delete/AGENTS.md management.
 type Service struct {
 	projects domain.ProjectRepository
+	files    domain.ConfinedFileStore
 	now      func() time.Time
 }
 
-// NewService creates a Projects Service backed by projects.
-func NewService(projects domain.ProjectRepository) *Service {
-	return &Service{projects: projects, now: time.Now}
+// NewService creates a Projects Service backed by projects. files performs
+// this Service's confined filesystem I/O (FR-R5): Service depends only on
+// this domain-defined interface, never on "os" or
+// internal/infrastructure/fsguard directly, per AGENTS.md's Clean
+// Architecture dependency rule.
+func NewService(projects domain.ProjectRepository, files domain.ConfinedFileStore) *Service {
+	return &Service{projects: projects, files: files, now: time.Now}
 }
 
 // CreateProject creates a new Project (FR-017), creating its OutputDirectory
@@ -65,10 +68,10 @@ func (s *Service) CreateProject(ctx context.Context, ownerUserID, name, outputDi
 	}
 	hiddenDir := filepath.Join(absOutput, hiddenDirName)
 
-	if err := os.MkdirAll(absOutput, 0755); err != nil {
+	if err := s.files.EnsureDir(absOutput); err != nil {
 		return nil, fmt.Errorf("failed to create output directory: %w", err)
 	}
-	if err := os.MkdirAll(hiddenDir, 0755); err != nil {
+	if err := s.files.EnsureDir(hiddenDir); err != nil {
 		return nil, fmt.Errorf("failed to create hidden directory: %w", err)
 	}
 
@@ -112,7 +115,8 @@ func (s *Service) DeleteProject(ctx context.Context, ownerUserID, projectID stri
 // AddAgentsFile creates a starter AGENTS.md in the Project's OutputDirectory
 // if one doesn't already exist (FR-019/FR-021), enforcing ownership.
 // Idempotent: calling this on a Project that already has an AGENTS.md is a
-// no-op, not an error. Path resolution goes through fsguard.ResolveWithin
+// no-op, not an error. Path resolution goes through s.files
+// (domain.ConfinedFileStore), which resolves via fsguard.ResolveWithin
 // rather than a direct filepath.Join, per package fsguard's mandate that
 // every Job/Chore/Project filesystem operation use it.
 //
@@ -127,19 +131,16 @@ func (s *Service) AddAgentsFile(ctx context.Context, ownerUserID, projectID stri
 		return err
 	}
 
-	path, err := fsguard.ResolveWithin(p.OutputDirectory, "AGENTS.md")
+	exists, err := s.files.FileExists(p.OutputDirectory, "AGENTS.md")
 	if err != nil {
-		return fmt.Errorf("failed to resolve AGENTS.md path: %w", err)
+		return fmt.Errorf("failed to check for existing AGENTS.md: %w", err)
 	}
-
-	if _, err := os.Stat(path); err == nil {
+	if exists {
 		return nil
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("failed to stat AGENTS.md: %w", err)
 	}
 
 	const starter = "# AGENTS.md\n\nInstructions for the agent working in this Project.\n"
-	if err := os.WriteFile(path, []byte(starter), 0644); err != nil {
+	if err := s.files.WriteFile(p.OutputDirectory, "AGENTS.md", []byte(starter)); err != nil {
 		return fmt.Errorf("failed to create AGENTS.md: %w", err)
 	}
 

@@ -8,6 +8,7 @@ import (
 	"nuimanbot/internal/adapter/web"
 	"nuimanbot/internal/domain"
 	"nuimanbot/internal/infrastructure/scheduler"
+	"nuimanbot/internal/infrastructure/storage"
 	"nuimanbot/internal/usecase/chores"
 	"nuimanbot/internal/usecase/history"
 	"nuimanbot/internal/usecase/jobs"
@@ -99,8 +100,13 @@ func (a skillNamesAdapter) SkillNames() []string {
 // so a later call (once the skill registry exists) can wire Settings'
 // worker-pool-size control against the same live instance.
 func wireExtendedContextEnvironments(ctx context.Context, app *application, webServer *web.Server) (*scheduler.WorkerPool, error) {
+	// Shared confined filesystem I/O (FR-R5): the sole implementation
+	// Projects/Jobs/Chores depend on via domain.ConfinedFileStore, keeping
+	// "os"/internal/infrastructure/fsguard out of the usecase layer.
+	confinedFiles := storage.NewFileConfinedFileStore()
+
 	// Projects (FR-017-023): no dependency on the worker pool.
-	projectsService := projects.NewService(app.ProjectRepo)
+	projectsService := projects.NewService(app.ProjectRepo, confinedFiles)
 	webServer.SetProjectsService(projectsService)
 
 	// Wrap RunRepo so every status/log/badge write also pushes a RunEvent
@@ -133,12 +139,13 @@ func wireExtendedContextEnvironments(ctx context.Context, app *application, webS
 		runRepo,
 		&jobRunEnqueuerAdapter{pool: pool},
 		&projectDirectoryLookupAdapter{repo: app.ProjectRepo},
+		confinedFiles,
 		filepath.Join(app.StoragePath, "jobs-hidden"),
 	)
 	webServer.SetJobsService(jobsService)
 
 	// Chores (FR-031-038) + their cron scheduler driver (FR-032/FR-035).
-	choresService := chores.NewService(app.ChoreRepo, scheduleEvaluatorAdapter{}, runRepo, filepath.Join(app.StoragePath, "chores-hidden"))
+	choresService := chores.NewService(app.ChoreRepo, scheduleEvaluatorAdapter{}, runRepo, confinedFiles, filepath.Join(app.StoragePath, "chores-hidden"))
 	webServer.SetChoresService(choresService)
 
 	choreScheduler := scheduler.NewChoreScheduler(app.ChoreRepo, runRepo, pool, defaultChoreSchedulerInterval)

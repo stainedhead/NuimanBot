@@ -11,7 +11,6 @@ package jobs
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -19,7 +18,6 @@ import (
 	"github.com/google/uuid"
 
 	"nuimanbot/internal/domain"
-	"nuimanbot/internal/infrastructure/fsguard"
 )
 
 // jobDescriptionFileName is the file a Job's Description is persisted to
@@ -63,6 +61,7 @@ type Service struct {
 	runs          domain.RunRepository
 	enqueuer      RunEnqueuer
 	projectLookup ProjectDirectoryLookup
+	files         domain.ConfinedFileStore
 	hiddenRoot    string
 	now           func() time.Time
 }
@@ -70,6 +69,10 @@ type Service struct {
 // NewService creates a Jobs Service backed by jobs and runs, enqueuing new
 // Runs via enqueuer and resolving Project-context working directories via
 // projectLookup (may be nil — see ProjectDirectoryLookup's doc comment).
+// files performs this Service's confined filesystem I/O (FR-R5): Service
+// depends only on this domain-defined interface, never on "os" or
+// internal/infrastructure/fsguard directly, per AGENTS.md's Clean
+// Architecture dependency rule.
 //
 // hiddenRoot is the storage root under which each Job's HiddenDirectory is
 // created, following the same per-owner layout as
@@ -79,12 +82,13 @@ type Service struct {
 // its hidden directory inside OutputDirectory) — a Job's context may be a
 // Chat, which exposes no working directory at all — so Service needs an
 // explicit storage root rather than deriving one from the Job itself.
-func NewService(jobs domain.JobRepository, runs domain.RunRepository, enqueuer RunEnqueuer, projectLookup ProjectDirectoryLookup, hiddenRoot string) *Service {
+func NewService(jobs domain.JobRepository, runs domain.RunRepository, enqueuer RunEnqueuer, projectLookup ProjectDirectoryLookup, files domain.ConfinedFileStore, hiddenRoot string) *Service {
 	return &Service{
 		jobs:          jobs,
 		runs:          runs,
 		enqueuer:      enqueuer,
 		projectLookup: projectLookup,
+		files:         files,
 		hiddenRoot:    hiddenRoot,
 		now:           time.Now,
 	}
@@ -105,7 +109,7 @@ func (s *Service) CreateJob(ctx context.Context, ownerUserID, title, description
 
 	id := uuid.NewString()
 	hiddenDir := filepath.Join(s.hiddenRoot, "users", ownerUserID, "jobs", id)
-	if err := os.MkdirAll(hiddenDir, 0755); err != nil {
+	if err := s.files.EnsureDir(hiddenDir); err != nil {
 		return nil, fmt.Errorf("failed to create job hidden directory: %w", err)
 	}
 	if err := s.writeJobDescription(hiddenDir, description); err != nil {
@@ -160,15 +164,11 @@ func (s *Service) CreateJob(ctx context.Context, ownerUserID, title, description
 }
 
 // writeJobDescription writes description to JOB-DESCRIPTION.md inside
-// hiddenDir (FR-025), resolving the path through fsguard.ResolveWithin per
-// package fsguard's mandate that every Job/Chore/Project filesystem
-// operation use it.
+// hiddenDir (FR-025), via s.files (domain.ConfinedFileStore), which
+// resolves the path through fsguard.ResolveWithin per package fsguard's
+// mandate that every Job/Chore/Project filesystem operation use it.
 func (s *Service) writeJobDescription(hiddenDir, description string) error {
-	path, err := fsguard.ResolveWithin(hiddenDir, jobDescriptionFileName)
-	if err != nil {
-		return fmt.Errorf("failed to resolve job description path: %w", err)
-	}
-	if err := os.WriteFile(path, []byte(description), 0644); err != nil {
+	if err := s.files.WriteFile(hiddenDir, jobDescriptionFileName, []byte(description)); err != nil {
 		return fmt.Errorf("failed to write job description: %w", err)
 	}
 	return nil

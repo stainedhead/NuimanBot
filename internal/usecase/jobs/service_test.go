@@ -76,7 +76,7 @@ func newTestService(t *testing.T) (*Service, *fakeEnqueuer) {
 	jobRepo := storage.NewFileJobRepository(tmp)
 	runRepo := storage.NewFileRunRepository(tmp)
 	enqueuer := &fakeEnqueuer{}
-	svc := NewService(jobRepo, runRepo, enqueuer, nil, tmp)
+	svc := NewService(jobRepo, runRepo, enqueuer, nil, storage.NewFileConfinedFileStore(), tmp)
 	return svc, enqueuer
 }
 
@@ -157,7 +157,7 @@ func TestCreateJob_ProjectContextResolvesWorkingDirectory(t *testing.T) {
 	runRepo := storage.NewFileRunRepository(tmp)
 	enqueuer := &fakeEnqueuer{}
 	lookup := &fakeProjectLookup{dirs: map[string]string{"proj-1": "/output/proj-1"}}
-	svc := NewService(jobRepo, runRepo, enqueuer, lookup, tmp)
+	svc := NewService(jobRepo, runRepo, enqueuer, lookup, storage.NewFileConfinedFileStore(), tmp)
 
 	job, err := svc.CreateJob(context.Background(), "user-a", "Refactor", "Refactor the widget module.", domain.ContextTypeProject, "proj-1")
 	if err != nil {
@@ -181,7 +181,7 @@ func TestCreateJob_StaleProjectReferenceStillCreatesJob(t *testing.T) {
 	runRepo := storage.NewFileRunRepository(tmp)
 	enqueuer := &fakeEnqueuer{}
 	lookup := &fakeProjectLookup{dirs: map[string]string{}} // proj-1 not found
-	svc := NewService(jobRepo, runRepo, enqueuer, lookup, tmp)
+	svc := NewService(jobRepo, runRepo, enqueuer, lookup, storage.NewFileConfinedFileStore(), tmp)
 
 	job, err := svc.CreateJob(context.Background(), "user-a", "Refactor", "Refactor the widget module.", domain.ContextTypeProject, "proj-1")
 	if err != nil {
@@ -213,7 +213,7 @@ func TestCreateJob_SaveJobErrorPropagates(t *testing.T) {
 	tmp := t.TempDir()
 	jobRepo := &errJobRepo{JobRepository: storage.NewFileJobRepository(tmp), saveErr: errors.New("disk full")}
 	runRepo := storage.NewFileRunRepository(tmp)
-	svc := NewService(jobRepo, runRepo, &fakeEnqueuer{}, nil, tmp)
+	svc := NewService(jobRepo, runRepo, &fakeEnqueuer{}, nil, storage.NewFileConfinedFileStore(), tmp)
 
 	if _, err := svc.CreateJob(context.Background(), "user-a", "Title", "desc", domain.ContextTypeChat, ""); err == nil {
 		t.Fatal("expected CreateJob to propagate the SaveJob error")
@@ -224,7 +224,7 @@ func TestCreateJob_SaveRunErrorPropagates(t *testing.T) {
 	tmp := t.TempDir()
 	jobRepo := storage.NewFileJobRepository(tmp)
 	runRepo := &errRunRepo{RunRepository: storage.NewFileRunRepository(tmp), saveErr: errors.New("disk full")}
-	svc := NewService(jobRepo, runRepo, &fakeEnqueuer{}, nil, tmp)
+	svc := NewService(jobRepo, runRepo, &fakeEnqueuer{}, nil, storage.NewFileConfinedFileStore(), tmp)
 
 	if _, err := svc.CreateJob(context.Background(), "user-a", "Title", "desc", domain.ContextTypeChat, ""); err == nil {
 		t.Fatal("expected CreateJob to propagate the SaveRun error")
@@ -389,7 +389,7 @@ func TestDeleteJob_SoftDeleteSaveErrorPropagates(t *testing.T) {
 	realJobRepo := storage.NewFileJobRepository(tmp)
 	runRepo := storage.NewFileRunRepository(tmp)
 	enqueuer := &fakeEnqueuer{}
-	svc := NewService(realJobRepo, runRepo, enqueuer, nil, tmp)
+	svc := NewService(realJobRepo, runRepo, enqueuer, nil, storage.NewFileConfinedFileStore(), tmp)
 
 	job, err := svc.CreateJob(context.Background(), "user-a", "job", "desc", domain.ContextTypeChat, "")
 	if err != nil {

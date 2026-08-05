@@ -59,7 +59,7 @@ func newTestServiceWithRuns(t *testing.T) (*Service, *fakeEvaluator, domain.Chor
 	eval := newFakeEvaluator()
 	hiddenRoot := t.TempDir()
 	runRepo := storage.NewFileRunRepository(t.TempDir())
-	svc := NewService(repo, eval, runRepo, hiddenRoot)
+	svc := NewService(repo, eval, runRepo, storage.NewFileConfinedFileStore(), hiddenRoot)
 	return svc, eval, repo, runRepo, hiddenRoot
 }
 
@@ -174,7 +174,7 @@ func TestCreateChore_HiddenDirectoryCreationErrorPropagates(t *testing.T) {
 	}
 	repo := newInMemoryChoreRepository()
 	eval := newFakeEvaluator()
-	svc := NewService(repo, eval, storage.NewFileRunRepository(t.TempDir()), dir)
+	svc := NewService(repo, eval, storage.NewFileRunRepository(t.TempDir()), storage.NewFileConfinedFileStore(), dir)
 
 	_, err := svc.CreateChore(context.Background(), "alice", "Title", "desc", "", dailySchedule(t), true)
 	if err == nil {
@@ -354,7 +354,7 @@ func TestDeleteChore_SoftDeleteSaveErrorPropagates(t *testing.T) {
 	tmp := t.TempDir()
 	realChoreRepo := &errSaveChoreRepo{ChoreRepository: newInMemoryChoreRepository()}
 	runRepo := storage.NewFileRunRepository(tmp)
-	svc := NewService(realChoreRepo, newFakeEvaluator(), runRepo, tmp)
+	svc := NewService(realChoreRepo, newFakeEvaluator(), runRepo, storage.NewFileConfinedFileStore(), tmp)
 
 	c, err := svc.CreateChore(context.Background(), "alice", "A1", "d", "", dailySchedule(t), true)
 	if err != nil {

@@ -15,7 +15,7 @@ import (
 func newTestService(t *testing.T) *Service {
 	t.Helper()
 	repo := storage.NewFileProjectRepository(t.TempDir())
-	return NewService(repo)
+	return NewService(repo, storage.NewFileConfinedFileStore())
 }
 
 // errorInjectingRepo wraps a real domain.ProjectRepository and lets tests
@@ -395,7 +395,7 @@ func TestCreateProject_SaveProjectError(t *testing.T) {
 		inner:   storage.NewFileProjectRepository(t.TempDir()),
 		saveErr: errors.New("save boom"),
 	}
-	s := NewService(repo)
+	s := NewService(repo, storage.NewFileConfinedFileStore())
 	_, err := s.CreateProject(context.Background(), "user-a", "proj", filepath.Join(t.TempDir(), "p"))
 	if err == nil {
 		t.Fatal("expected error when SaveProject fails")
@@ -426,7 +426,7 @@ func TestAddAgentsFile_WriteFileFailure(t *testing.T) {
 
 func TestAddAgentsFile_SaveProjectError(t *testing.T) {
 	repo := &errorInjectingRepo{inner: storage.NewFileProjectRepository(t.TempDir())}
-	s := NewService(repo)
+	s := NewService(repo, storage.NewFileConfinedFileStore())
 	ctx := context.Background()
 
 	p, err := s.CreateProject(ctx, "user-a", "proj", filepath.Join(t.TempDir(), "p"))
@@ -449,7 +449,7 @@ func TestSweepExpired_ListProjectsError(t *testing.T) {
 		inner:   storage.NewFileProjectRepository(t.TempDir()),
 		listErr: errors.New("list boom"),
 	}
-	s := NewService(repo)
+	s := NewService(repo, storage.NewFileConfinedFileStore())
 	_, err := s.SweepExpired(context.Background(), "user-a", domain.NewRetentionPolicy(24*time.Hour), time.Now())
 	if err == nil {
 		t.Fatal("expected error when ListProjects fails")
@@ -459,7 +459,7 @@ func TestSweepExpired_ListProjectsError(t *testing.T) {
 func TestSweepExpired_DeleteErrorContinuesSweep(t *testing.T) {
 	inner := storage.NewFileProjectRepository(t.TempDir())
 	repo := &errorInjectingRepo{inner: inner, deleteErrFor: map[string]error{}}
-	s := NewService(repo)
+	s := NewService(repo, storage.NewFileConfinedFileStore())
 	ctx := context.Background()
 
 	failing, err := s.CreateProject(ctx, "user-a", "failing project", filepath.Join(t.TempDir(), "p1"))

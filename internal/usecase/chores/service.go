@@ -9,7 +9,6 @@ package chores
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -17,7 +16,6 @@ import (
 	"github.com/google/uuid"
 
 	"nuimanbot/internal/domain"
-	"nuimanbot/internal/infrastructure/fsguard"
 )
 
 // descriptionFileName is the filename a Chore's Description is persisted
@@ -49,6 +47,7 @@ type Service struct {
 	chores     domain.ChoreRepository
 	evaluator  ScheduleEvaluator
 	runs       domain.RunRepository
+	files      domain.ConfinedFileStore
 	hiddenRoot string
 	now        func() time.Time
 }
@@ -59,6 +58,10 @@ type Service struct {
 // unlike Job, Chore carries no Status field of its own (see domain.Chore's
 // doc comment: "the Chore itself remains Active until deleted"), so
 // activeness must be derived from its Runs rather than read off a field.
+// files performs this Service's confined filesystem I/O (FR-R5): Service
+// depends only on this domain-defined interface, never on "os" or
+// internal/infrastructure/fsguard directly, per AGENTS.md's Clean
+// Architecture dependency rule.
 //
 // hiddenRoot is the storage root each Chore's HiddenDirectory is created
 // under, at <hiddenRoot>/users/<ownerUserID>/chores/<choreID> — deliberately
@@ -67,8 +70,8 @@ type Service struct {
 // a Chore's WorkingDirectory is optional (unlike Project's
 // OutputDirectory) and so cannot always host a nested hidden directory the
 // way Projects' ".nuimanbot" convention does.
-func NewService(chores domain.ChoreRepository, evaluator ScheduleEvaluator, runs domain.RunRepository, hiddenRoot string) *Service {
-	return &Service{chores: chores, evaluator: evaluator, runs: runs, hiddenRoot: hiddenRoot, now: time.Now}
+func NewService(chores domain.ChoreRepository, evaluator ScheduleEvaluator, runs domain.RunRepository, files domain.ConfinedFileStore, hiddenRoot string) *Service {
+	return &Service{chores: chores, evaluator: evaluator, runs: runs, files: files, hiddenRoot: hiddenRoot, now: time.Now}
 }
 
 // CreateChore creates a new Chore (FR-031), validating schedule's cron
@@ -92,14 +95,10 @@ func (s *Service) CreateChore(ctx context.Context, ownerUserID, title, descripti
 	now := s.now()
 	id := uuid.NewString()
 	hiddenDir := filepath.Join(s.hiddenRoot, "users", ownerUserID, "chores", id)
-	if err := os.MkdirAll(hiddenDir, 0755); err != nil {
+	if err := s.files.EnsureDir(hiddenDir); err != nil {
 		return nil, fmt.Errorf("failed to create hidden directory: %w", err)
 	}
-	descPath, err := fsguard.ResolveWithin(hiddenDir, descriptionFileName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve description file path: %w", err)
-	}
-	if err := os.WriteFile(descPath, []byte(description), 0644); err != nil {
+	if err := s.files.WriteFile(hiddenDir, descriptionFileName, []byte(description)); err != nil {
 		return nil, fmt.Errorf("failed to write description file: %w", err)
 	}
 
