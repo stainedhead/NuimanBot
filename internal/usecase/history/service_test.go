@@ -3,6 +3,8 @@ package history
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -392,4 +394,94 @@ type failingListRepo struct {
 
 func (f *failingListRepo) ListRuns(context.Context, string, domain.RunFilter) ([]*domain.Run, error) {
 	return nil, f.err
+}
+
+func TestReadLog_Success(t *testing.T) {
+	svc, repo := newTestService(t)
+	ctx := context.Background()
+	mustSave(t, repo, &domain.Run{ID: "r1", OwnerUserID: "alice"})
+
+	if err := repo.AppendLog(ctx, "alice", "r1", "line one\n"); err != nil {
+		t.Fatalf("AppendLog: %v", err)
+	}
+	if err := repo.AppendLog(ctx, "alice", "r1", "line two\n"); err != nil {
+		t.Fatalf("AppendLog: %v", err)
+	}
+
+	got, err := svc.ReadLog(ctx, "alice", "r1")
+	if err != nil {
+		t.Fatalf("ReadLog: %v", err)
+	}
+	if want := "line one\nline two\n"; got != want {
+		t.Fatalf("ReadLog = %q, want %q", got, want)
+	}
+}
+
+func TestReadLog_NoLogYetReturnsEmpty(t *testing.T) {
+	svc, repo := newTestService(t)
+	ctx := context.Background()
+	mustSave(t, repo, &domain.Run{ID: "r1", OwnerUserID: "alice"})
+
+	got, err := svc.ReadLog(ctx, "alice", "r1")
+	if err != nil {
+		t.Fatalf("ReadLog: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("expected empty log for a run with no appended content, got %q", got)
+	}
+}
+
+func TestReadLog_CrossOwnerIsolation(t *testing.T) {
+	svc, repo := newTestService(t)
+	ctx := context.Background()
+	mustSave(t, repo, &domain.Run{ID: "r1", OwnerUserID: "bob"})
+	if err := repo.AppendLog(ctx, "bob", "r1", "bob's log\n"); err != nil {
+		t.Fatalf("AppendLog: %v", err)
+	}
+
+	if _, err := svc.ReadLog(ctx, "alice", "r1"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for cross-owner ReadLog, got %v", err)
+	}
+}
+
+func TestReadResults_NoResultsYetReturnsEmpty(t *testing.T) {
+	svc, repo := newTestService(t)
+	ctx := context.Background()
+	mustSave(t, repo, &domain.Run{ID: "r1", OwnerUserID: "alice"})
+
+	got, err := svc.ReadResults(ctx, "alice", "r1")
+	if err != nil {
+		t.Fatalf("ReadResults: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("expected empty results for a run with no ResultsPath, got %q", got)
+	}
+}
+
+func TestReadResults_Success(t *testing.T) {
+	svc, repo := newTestService(t)
+	ctx := context.Background()
+	resultsPath := filepath.Join(t.TempDir(), "RESULTS.md")
+	if err := os.WriteFile(resultsPath, []byte("# Results\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	mustSave(t, repo, &domain.Run{ID: "r1", OwnerUserID: "alice", ResultsPath: resultsPath})
+
+	got, err := svc.ReadResults(ctx, "alice", "r1")
+	if err != nil {
+		t.Fatalf("ReadResults: %v", err)
+	}
+	if want := "# Results\n"; got != want {
+		t.Fatalf("ReadResults = %q, want %q", got, want)
+	}
+}
+
+func TestReadResults_CrossOwnerIsolation(t *testing.T) {
+	svc, repo := newTestService(t)
+	ctx := context.Background()
+	mustSave(t, repo, &domain.Run{ID: "r1", OwnerUserID: "bob", ResultsPath: filepath.Join(t.TempDir(), "RESULTS.md")})
+
+	if _, err := svc.ReadResults(ctx, "alice", "r1"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for cross-owner ReadResults, got %v", err)
+	}
 }

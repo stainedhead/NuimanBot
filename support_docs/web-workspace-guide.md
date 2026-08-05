@@ -25,23 +25,22 @@ This guide covers NuimanBot's web workspace: **Chats**, **Projects**, **Jobs**, 
 
 ## What to Expect Today
 
-This part of NuimanBot is new, and it is honest to say up front: **the organizing and scheduling pieces work today, but the agent itself is not yet plugged into them.** Please read this section before you start, so nothing here surprises you.
+This part of NuimanBot is new, and it is honest to say up front: **the organizing, scheduling, and live-update pieces work today, but the agent itself is not yet plugged into Job/Chore execution or web Chats.** Please read this section before you start, so nothing here surprises you.
 
 **Works today:**
 - Creating, naming, listing, and deleting Chats, Projects, Jobs, and Chores
 - Jobs and Chores queue correctly and run through their full lifecycle (Queued → Running → Completed)
-- Job/Chore run history, with filtering and a notification badge for runs you haven't looked at yet
-- Browsing and searching NuimanBot's long-term memory (read-only)
+- Job/Chore run history, with filtering and a notification badge for runs you haven't looked at yet, visible on every page in the workspace
+- Live status/log updates on Job, Chore, and run detail pages — no need to refresh
+- Retention windows (Chats, Projects, History) and soft-deleted Job/Chore cleanup are enforced automatically, on a recurring schedule
+- A run interrupted by a server restart is automatically marked failed rather than getting stuck
+- Browsing and searching NuimanBot's long-term memory (read-only), plus asking a quick question about a specific memory entry
 - Choosing between localhost-only and remote network access, with an optional allowlist
 
 **Not yet working — please don't rely on these:**
 - **Jobs and Chores do not do real agent work yet.** When a Job or Chore "runs," it goes through the full queue → execute → complete pipeline, but the result is a placeholder file that says no agent work was performed. Think of this as the scaffolding being built and tested before the agent is connected to it.
 - **Typing a message in a web Chat does not get you a reply.** The message is saved, but nothing responds. If you want to actually talk with NuimanBot today, use Telegram, Slack, or the CLI — those work exactly as before and are unaffected by any of this.
-- There's no "chat about this specific Job/Chore/run/memory" conversation yet — those panels are planned but not built.
-- Setting a retention period (e.g., "delete Chats after 90 days") is recorded, but nothing currently goes and deletes anything automatically yet.
-- Run status and notification badges don't update live on screen — refresh the page to see the latest status.
-- If the server restarts while a Job/Chore run is actively executing (not just waiting in the queue), that run can get stuck showing its last status rather than resuming or being marked failed automatically.
-- Deleting a Chore while its run is active removes the Chore's record right away; deleting a Job in the same situation marks it for removal but doesn't yet automatically finish cleaning it up once the run ends.
+- There's no "chat about this specific Job/Chore/run" conversation yet — those panels are planned but not built. Memories now has a similar chat panel (see [Memories](#memories)) as a preview of what's coming to the other three.
 
 If you're looking to actually get work done with NuimanBot today, use the existing chat gateways (Telegram/Slack/CLI) — see the [User Onboarding Guide](user-onboarding.md). Use this web workspace to get familiar with Projects, Jobs, and Chores organization ahead of the agent being connected to them.
 
@@ -52,7 +51,7 @@ If you're looking to actually get work done with NuimanBot today, use the existi
 1. Open your browser to the NuimanBot admin address (e.g. `https://localhost:8443/admin` — ask your administrator for the exact URL, especially if the server is configured for remote access)
 2. Sign in with your username and password
 3. If this is your first time signing in with a default password, you'll be asked to set a new one before continuing
-4. Once signed in, you'll see a left-hand navigation sidebar with **Chats**, **Projects**, **Jobs**, **Chores**, **History**, and **Memories**. (A few older pages — Dashboard, Bots, Users, Confirmations — don't have this sidebar yet; use your browser's back button or re-enter a workspace URL to get back.)
+4. Once signed in, you'll see a left-hand navigation sidebar with **Chats**, **Projects**, **Jobs**, **Chores**, **History**, and **Memories** — it also appears on Dashboard, Bots, Users, and Confirmations, so you can navigate between the older admin pages and the new workspace without losing your place.
 
 ---
 
@@ -82,7 +81,7 @@ Open a Chat and use the delete control. Deletion is immediate and cannot be undo
 
 ### Retention
 
-Chats can be set to auto-delete after a period of inactivity (see [Settings](#settings)), or kept forever ("Never"). As noted above, this setting is currently recorded but not yet acted on automatically — nothing will be deleted on your behalf yet, even if you set a retention window.
+Chats can be set to auto-delete after a period of inactivity (see [Settings](#settings)), or kept forever ("Never"). A background sweep checks every 15 minutes and deletes Chats that have passed their retention window since their last activity.
 
 ---
 
@@ -106,11 +105,11 @@ A Project is a durable workspace tied to a real folder on disk — unlike a Chat
 
 ### Deleting a Project
 
-Deleting a Project removes the Project record, but **does not** touch the files in its output directory, and does not delete any Job or Chore that references it. Today, since Jobs/Chores don't yet do real agent work (see [What to Expect Today](#what-to-expect-today)), a Job/Chore pointed at a deleted Project won't actually notice — it will still "complete" with a placeholder result rather than reporting an error. Once real agent execution is connected, a Job/Chore referencing a deleted Project is intended to fail clearly instead.
+Deleting a Project removes the Project record, but **does not** touch the files in its output directory, and does not delete any Job or Chore that references it. If a Job or Chore that references a deleted Project runs afterward, the run fails cleanly with an error explaining the Project no longer exists, rather than silently "completing."
 
 ### Retention
 
-Same model as Chats: configurable, including "Never," but not yet automatically enforced.
+Same model as Chats: configurable, including "Never," and automatically enforced by the same 15-minute background sweep.
 
 ---
 
@@ -135,7 +134,7 @@ Open the Job's detail page to see its current status, or check [History](#histor
 
 ### Deleting a Job
 
-If a Job's run is currently in progress, deleting it marks it for removal rather than deleting it outright — nothing running is killed mid-run. As of this writing, that mark is not yet automatically cleared once the run finishes; a Job in this state may need a follow-up delete or admin cleanup rather than disappearing on its own.
+If a Job's run is currently in progress, deleting it marks it for removal rather than deleting it outright — nothing running is killed mid-run. Once that run finishes, a background sweep automatically finishes removing the Job within about 15 minutes; you don't need to come back and delete it again.
 
 ---
 
@@ -160,7 +159,7 @@ If a Chore's next scheduled time arrives while its previous run is still going, 
 
 ### Deleting a Chore
 
-Unlike Jobs, deleting a Chore removes it immediately, even if a run is currently in progress — the run itself keeps executing to completion, but the Chore's record disappears from your list right away rather than waiting. Bringing this in line with Jobs' behavior is planned but not done yet.
+Deleting a Chore now works the same way as deleting a Job: if a run is currently in progress, the Chore is marked for removal rather than deleted outright, and the same background sweep finishes removing it automatically once that run completes. A Chore marked for removal never fires again in the meantime.
 
 ---
 
@@ -176,11 +175,11 @@ History is your list of every Job and Chore run you own, in one place.
 
 ### Notification badge
 
-A badge on the **History** nav item shows how many completed runs you haven't looked at yet. Opening a run clears its badge. As with the rest of this workspace, the badge doesn't update live on screen yet — refresh the page to see the current count.
+A badge showing how many completed runs you haven't looked at yet appears next to **History** in the sidebar — and on every page in the workspace, not just History itself. Opening a run clears its badge, and the badge updates live on screen the moment that happens, without a refresh.
 
 ### Retention
 
-Configurable independently from Chat and Project retention, including "Never" — again, not yet automatically enforced.
+Configurable independently from Chat and Project retention, including "Never" — automatically enforced by the same 15-minute background sweep. If a run you haven't looked at yet is deleted by this sweep, its badge count is cleared first, so the number you see never refers to a run that's already gone.
 
 ---
 
@@ -190,7 +189,8 @@ Memories is a read-only window into what NuimanBot has learned and remembered ab
 
 - Browse or search memory entries from here
 - You cannot create, edit, or delete a memory entry directly in this view — the agent is the only writer, based on what comes up in conversation
-- A chat panel for asking about or requesting changes to specific memories is planned but not built yet
+- Open a memory entry and use its **"ask about this memory"** panel to ask a quick question grounded in that entry's own content — a lightweight Q&A, not a full conversation, and it can't make changes to the entry
+- Depending on how you've talked to NuimanBot, this view may not show everything it remembers about you yet — see the note in the app if it applies to your account
 
 ---
 
@@ -202,7 +202,7 @@ Settings has two kinds of controls: **system-wide** (visible to everyone, change
 
 - **Worker pool size** — how many Jobs/Chores can run at the same time, across all users. Changing this takes effect immediately and never interrupts a run already in progress.
 - **Network access mode** — localhost-only (the safe default) or remote. Note: switching this here changes who's *allowed* to connect, but if you're moving to remote access for the first time, your administrator also needs to have set a bind address in the configuration file and restarted the server — this page alone won't move the server onto a new network address.
-- **Retention defaults** — the default number of days Chats, Projects, and History runs are kept before (eventually) auto-deleting, shown here for reference.
+- **Retention defaults** — the default number of days Chats, Projects, and History runs are kept before auto-deleting, shown here for reference.
 
 ### What's config-file-only for now
 
@@ -223,10 +223,10 @@ Expected for now — see [What to Expect Today](#what-to-expect-today). Use Tele
 Expected for now. The queue and execution pipeline is real; the agent isn't connected to it yet. Check back after this is announced as ready.
 
 **A run's status didn't change even though I know it finished.**
-Refresh the page. Live updates aren't wired up in the browser yet, even though the server is already sending them.
+Run status updates live on Job/Chore/Run detail pages, so this shouldn't normally happen — if it does, try refreshing the page, and check with your administrator if it keeps occurring.
 
 **I set a retention period, but nothing has been deleted.**
-Expected — retention windows are recorded but not yet enforced by an automatic cleanup process.
+Give it up to 15 minutes — retention is enforced by a periodic background sweep, not instantly the moment something expires. If it's been longer than that and nothing was deleted, check with your administrator.
 
 **I can't reach the workspace from another computer.**
 Your administrator needs to enable remote access in `config.yaml` (and possibly add you to an allowlist) — see the [Configuration Reference](configuration-reference.md#network-access--workspace-configuration). By default, NuimanBot only accepts connections from the same machine it's running on.

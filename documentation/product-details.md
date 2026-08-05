@@ -367,7 +367,7 @@
   - ✅ Transcript download/export in JSON and Markdown, reusing `chat.Service.ExportConversation`
   - ✅ Strict per-user isolation: cross-owner access by ID returns 404, never 403
   - ❌ **The web Chats UI does not generate agent replies.** Posting a message calls `ChatsService.AppendUserMessage`, which appends a user-role message and returns — no LLM call occurs. This is specific to the new web Chats environment; the CLI/Telegram/Slack/Buzz gateways' chat loop is unaffected.
-  - ❌ Retention is configurable but not automatically enforced: `chats.Service.SweepExpired` exists but nothing schedules or invokes it yet
+  - ✅ Retention is configurable and automatically enforced: `internal/infrastructure/scheduler.RetentionSweeper` polls every 15 minutes and invokes `chats.Service.SweepExpired` for every user in the system
 
 #### FR-026: Persistent Agent Workspace — Projects
 - **Priority:** P1 (High)
@@ -377,10 +377,10 @@
   - ✅ User can create a Project with a configured output directory; a hidden backend directory for agent-managed context is created alongside it and never shown in the Project's file view
   - ✅ UI provides a subdued "Add AGENTS.md" control that creates a starter `AGENTS.md` in the output directory if one doesn't already exist
   - ✅ User retains direct filesystem access to the output directory outside the app (including `AGENTS.md`); last-write-wins if the agent and the user's own editor both write it, by design (no cross-boundary locking)
-  - ✅ Retention configurable independently of Chat retention, including "Never"
+  - ✅ Retention configurable independently of Chat retention, including "Never" — automatically enforced by `RetentionSweeper` every 15 minutes
   - ✅ All Project file operations are path-confined via `fsguard.ResolveWithin` — a crafted path cannot escape the Project's output/hidden directories
   - ✅ Deleting a Project does not delete Jobs/Chores that reference it — the Job/Chore record and its history remain
-  - ❌ A referencing Job/Chore's next run is **not yet** detected as stale: `StubExecutor` never reads `Job.WorkingDirectory` or checks whether the referenced Project still exists — it always "succeeds" against its own placeholder artifact directory regardless. The spec's intended behavior (fail with `Error = "referenced Project no longer exists"`) is a requirement on the future real `Executor`, not current behavior.
+  - ✅ A referencing Job/Chore's next run is now detected as stale (FR-R12): `StubExecutor.checkProjectExists` resolves the Job/Chore's context and, if it is `ContextTypeProject`, confirms the Project still exists before proceeding — a deleted Project fails the Run cleanly with `Error = "referenced Project no longer exists"` instead of silently "succeeding" against a placeholder artifact directory.
   - ⚠️ The primary intended path to edit `AGENTS.md` — "chat with the agent in the Project's context" — is not available yet, since no chat surface in this feature invokes the agent (see FR-025); today `AGENTS.md` can only be created via the "Add AGENTS.md" control or edited directly on disk
 
 #### FR-027: Persistent Agent Workspace — Jobs
@@ -392,10 +392,10 @@
   - ✅ A Job can run in the context of a Chat or a Project; a Project-context Job defaults to that Project's output directory as its working directory
   - ✅ Jobs are enqueued onto the shared, durable FIFO queue (`internal/infrastructure/scheduler.Queue`) and executed by the configurable worker pool in order
   - ✅ Every run records timing (start/end/duration) and a processing log, retrievable via History
-  - 🔶 Deleting a Job whose most recent status is `Running`/`Queued` soft-marks it (`job.PendingDeletion = true`, persisted) instead of deleting outright — confirmed in `jobs.Service.DeleteJob`. Two parts of the intended behavior are **not yet implemented**, both called out as explicit `TODO`s in the code: (1) nothing automatically hard-deletes a `PendingDeletion` Job once its run reaches a terminal state — it stays soft-marked indefinitely until acted on again; (2) `domain.Job.IsQueueable()` (the method meant to prevent enqueueing a new run for a pending-deletion Job) is defined but **not called anywhere** in production code, so this guard is not currently enforced at enqueue time
+  - ✅ Deleting a Job whose most recent status is `Running`/`Queued` soft-marks it (`job.PendingDeletion = true`, persisted) instead of deleting outright — confirmed in `jobs.Service.DeleteJob`. A `PendingDeletion` Job is now automatically hard-deleted once its Run reaches a terminal state, via `jobs.Service.CleanupPendingDeletion` (FR-R9), invoked every 15 minutes by `internal/infrastructure/scheduler.RetentionSweeper`. (`domain.Job.IsQueueable()`, the guard originally meant to prevent enqueueing a new run for a pending-deletion Job, was removed as dead code — the only enqueue path, `CreateJob`, always builds a brand-new Job that is queueable by construction, and there is no re-run/retry path anywhere in the codebase today for it to guard; an equivalent check should be reintroduced if such a flow is added.)
   - ❌ **Execution does not invoke the agent.** `internal/infrastructure/scheduler.StubExecutor` drives each run through a real Queued → Running → Completed/Failed lifecycle and writes a placeholder `RESULTS.md` explicitly stating no agent/LLM invocation occurred. The queueing, concurrency, and persistence pipeline is genuine and tested; the work product is not.
   - ❌ Per-Job chat interface (spec FR-029) is not built in this pass
-  - ⚠️ In-app notification on run completion (spec FR-030) has the transport (WebSocket push) but no browser-side consumer yet — see FR-030's note under History/Execution below
+  - ✅ In-app notification on run completion (spec FR-030) has both the transport (WebSocket push) and a browser-side consumer (`internal/adapter/web/static/run-events.js`, loaded from the Job detail page) — the badge and run status now update live without a manual refresh
 
 #### FR-028: Persistent Agent Workspace — Chores
 - **Priority:** P1 (High)
@@ -406,7 +406,7 @@
   - ✅ An agent-proposed schedule requires explicit user confirmation (`ScheduleConfirmed`) before it can fire; an unconfirmed schedule never fires and does not silently expire
   - ✅ `internal/infrastructure/scheduler.ChoreScheduler` polls every 30 seconds (`defaultChoreSchedulerInterval`) for due Chores using `robfig/cron/v3` (see ADR-010) and either enqueues a new Run or records a skipped Run ("skipped — previous run still active") if the Chore's previous run is still executing (FR-035's skip-if-still-running)
   - ✅ `NextFireTime` is advanced and persisted on every tick regardless of fire/skip outcome, so a scheduler outage doesn't cause repeated catch-up fires for the same missed window
-  - ❌ **Deleting a Chore does not yet soft-mark it.** `chores.Service.DeleteChore` is a plain, immediate, ownership-scoped delete — the `PendingDeletion`-while-active-run behavior spec'd for Jobs (and originally intended to mirror across both) is an explicit `TODO` in the code: this usecase package has no visibility into in-flight runs (that lives in the worker pool, which it must not import per Clean Architecture layering) without further orchestration work not yet done. Deleting a Chore whose run is currently executing removes the Chore record immediately; the in-flight Run itself is unaffected (the worker already has the dequeued `RunRequest`) but nothing prevents the record's immediate disappearance from the user's list mid-run.
+  - ✅ **Deleting a Chore now has full parity with Jobs (FR-R8).** `chores.Service.DeleteChore` soft-marks the record (`PendingDeletion = true`) when its most recent Run is `Queued`/`Running`, rather than deleting outright; `chores.Service.CleanupPendingDeletion` (FR-R9), invoked every 15 minutes by `RetentionSweeper`, hard-deletes it once that Run reaches a terminal state. A `PendingDeletion` Chore is never re-fired: `domain.Chore.IsDue` returns false for one, so `ChoreScheduler`'s due-Chore loop naturally skips it — no separate enforcement needed at schedule-fire time.
   - ❌ Execution is the same `StubExecutor` placeholder described under FR-027 — Chores do not invoke the agent yet
   - ❌ Per-Chore chat interface (spec FR-037) is not built in this pass
 
@@ -418,18 +418,19 @@
   - ✅ Lists the user's own runs, filterable by source (Job/Chore), date range, and status
   - ✅ Each run exposes its status, start/end timing, log, and results path (`RESULTS.md`)
   - ✅ An unviewed-run notification badge count (`HistoryService.UnviewedCount`) is available on every authenticated page, cleared per-run via `MarkViewed`; a retention sweep deleting an unviewed run decrements the count rather than leaving it dangling on a deleted run
-  - ✅ Retention configurable independently of Chat/Project retention, including "Never" (subject to the same "not yet automatically enforced" gap as FR-025/FR-026)
+  - ✅ Retention configurable independently of Chat/Project retention, including "Never" — automatically enforced by `RetentionSweeper` every 15 minutes, same as Chat/Project retention (FR-025/FR-026)
   - ✅ Run status/log/notification-badge changes are published server-side over WebSocket (`web.NotifyingRunRepository` wraps `RunRepository` so every `SaveRun`/`AppendLog`/`MarkNotified` also calls `Hub.Publish`) — verified end-to-end under `-race`
-  - ❌ No browser-side JavaScript consumes the WebSocket feed yet, so the badge and run status still require a manual page refresh to update, despite the server-side transport being real
+  - ✅ A browser-side consumer (`internal/adapter/web/static/run-events.js`) subscribes to the WebSocket feed from the Job/Chore/Run detail pages, so the badge and run status update live without a manual refresh
   - ❌ Per-run chat interface grounded in that run's log/results (spec FR-042) is not built in this pass
 
 #### FR-030: Persistent Agent Workspace — Memories
 - **Priority:** P1 (High)
-- **Status:** 🔶 Partial — read-only browse complete, chat-driven edits not built
-- **Description:** Read-only browse/search view over the existing self-organizing memory store
+- **Status:** 🔶 Partial — read-only browse and per-item chat complete; `ownerUserID`→`ConversationID` mapping gap remains
+- **Description:** Read-only browse/search view over the existing self-organizing memory store, plus a minimal per-item "ask about this memory" chat
 - **Acceptance Criteria:**
   - ✅ Lists/searches memory cells (`internal/domain/memoryv2`) visible to the current user, with no create/edit/delete controls in the UI — the agent remains the sole writer
-  - ❌ The chat interface for discussing/requesting edits to memory entries (spec FR-047) is not built in this pass, for the same reason as FR-025/FR-027/FR-028/FR-029: no chat surface in this feature invokes the agent
+  - ✅ A per-item chat interface (spec FR-047, FR-R4) is built — Memories is the first of the four environments to get one, serving as the reference implementation the per-Job/Chore/Run chats are meant to follow. It is a minimal, grounded Q&A: one LLM call per question, scoped to that memory cell's own content, with no persisted chat history and no access to the full agent orchestration engine.
+  - ⚠️ Memories' `ownerUserID`→`ConversationID` mapping is a confirmed, documented gap: memory cells created via the CLI gateway are keyed to a single shared placeholder identity (`"cli:cli_user"`), not the web-admin session username Memories queries by, and no identity bridge exists yet between the two systems. The UI carries a visible notice that it may not show everything.
 
 #### FR-031: Persistent Agent Workspace — Settings & Network Access
 - **Priority:** P1 (High)
@@ -1132,7 +1133,7 @@ NuimanBot has two separate, independently-implemented injection-detection paths:
 3. `JobsService.CreateJob` persists the Description as `JOB-DESCRIPTION.md` in the Job's hidden directory, sets `WorkingDirectory` to the Project's `OutputDirectory`, and enqueues a `RunRequest` onto the shared FIFO queue (`internal/infrastructure/scheduler.Queue`), which persists the new queue state to disk before the call returns
 4. The `WorkerPool`'s dispatch loop picks up the request once a worker slot is free (respecting FIFO order and the configured concurrency limit) and hands it to `StubExecutor.Execute`
 5. `StubExecutor` transitions the Run: `Queued` → `Running` (persisted, logged), writes a placeholder `RESULTS.md` under the run's artifact directory via `fsguard.ResolveWithin`, then → `Completed` (persisted, logged) — **no LLM/agent call occurs**; this demonstrates the pipeline, not real task completion
-6. Every `SaveRun`/`AppendLog` call happens through `web.NotifyingRunRepository`, which also publishes a `RunEvent` to the owning user's WebSocket connections (if any are open) — but no browser-side script listens for it yet, so the UI does not update live
+6. Every `SaveRun`/`AppendLog` call happens through `web.NotifyingRunRepository`, which also publishes a `RunEvent` to the owning user's WebSocket connections (if any are open); `run-events.js` on the Job detail page consumes it, so the UI updates live without a refresh
 7. User navigates to History, sees the completed run, its timing, and its (placeholder) results
 
 **Postconditions:**
@@ -1891,8 +1892,8 @@ gateways:
 **Functional Specification:**
 - **Domain:** `Project`/`Job`/`Chore`/`Run` entities (`internal/domain`), plus `RetentionPolicy` ("Never" = nil period), `Schedule` (cron expression + optional preset), `NetworkAccessConfig`, and `WorkerPoolConfig` value objects. Chats extend the existing `Conversation`/`ConversationRepository` rather than introducing a new entity (ADR-009).
 - **Persistence:** File-based repositories (`FileProjectRepository`, `FileJobRepository`, `FileChoreRepository`, `FileRunRepository`) modeled on the existing `FileConversationRepository`, using `AtomicFileWriter` (temp-file + rename) for crash-safe writes — no new database introduced (ADR-012). All record/log paths are confined via `fsguard.ResolveWithin` (TC-006).
-- **Execution:** A durable FIFO `Queue` (`internal/infrastructure/scheduler`) persists queued work to disk on every mutation; a `WorkerPool` runs up to N concurrent workers (Settings-configurable, default 3) pulling from the queue; a `ChoreScheduler` polls every 30s using `robfig/cron/v3` (ADR-010) to enqueue due Chores, implementing skip-if-still-running. Execution itself is currently a `StubExecutor` placeholder — see FR-027/FR-028's Known Limitations.
-- **Live updates:** A per-user WebSocket `Hub` (`internal/adapter/web/websocket_handler.go`) delivers Run status/log/notification-badge events, chosen over polling because `gorilla/websocket` was already a dependency (ADR-011). No browser-side consumer exists yet.
+- **Execution:** A durable FIFO `Queue` (`internal/infrastructure/scheduler`) persists queued work to disk on every mutation; a `WorkerPool` runs up to N concurrent workers (Settings-configurable, default 3) pulling from the queue; a `ChoreScheduler` polls every 30s using `robfig/cron/v3` (ADR-010) to enqueue due Chores, implementing skip-if-still-running. Execution itself is currently a `StubExecutor` placeholder — see FR-027/FR-028's Known Limitations. On startup, `scheduler.ReconcileInterruptedRuns` scans for any Run left non-terminal by a prior crash and marks it `Failed` (`Error = "run interrupted by server restart"`) so it never stays silently stuck. Every 15 minutes, `scheduler.RetentionSweeper` iterates every user and enforces the configured Chat/Project/History retention windows plus `CleanupPendingDeletion` for Jobs and Chores.
+- **Live updates:** A per-user WebSocket `Hub` (`internal/adapter/web/websocket_handler.go`) delivers Run status/log/notification-badge events, chosen over polling because `gorilla/websocket` was already a dependency (ADR-011). A browser-side consumer (`internal/adapter/web/static/run-events.js`), loaded from the Job/Chore/Run detail pages, subscribes and applies these events live.
 - **Network access:** `networkAllowlistMiddleware` wraps the whole `ServeMux`, enforcing an optional allowlist pre-authentication in remote-access mode (SC-008); localhost-only is the safe default.
 - **Isolation:** every environment scopes reads/writes by `ownerUserID` (the session's `Username`) at the repository layer, with cross-owner access uniformly mapped to 404 (SC-007).
 
@@ -1912,13 +1913,11 @@ retention_defaults:
 
 **Known Limitations (see FR-025–FR-031 for detail):**
 - No environment in this feature invokes the agent/LLM — Job/Chore execution uses `StubExecutor`, and the web Chats UI does not generate assistant replies
-- Per-Job/Chore/Run/Memories "chat with the agent" interfaces are not built
-- Retention windows are configured but not automatically swept
-- No browser-side WebSocket consumer; UI updates require a manual refresh
-- `dashboard.html`/`bots.html`/`users.html`/`confirmations.html` do not yet use the new left-nav sidebar
+- Per-Job/Chore/Run "chat with the agent" interfaces are not built (Memories now has one — see FR-030 — as the reference implementation the other three are meant to follow)
+- Memories' `ownerUserID`→`ConversationID` mapping is a confirmed gap: no identity bridge exists yet between the web-admin account system and the CLI/Telegram/Buzz gateway identity system
 
 **Testing:**
-- Domain coverage 97.9%; `usecase/chats` 91.7%, `usecase/chores` 90.2%, `usecase/jobs` 93.0%, `usecase/projects` 94.2%, `usecase/history` 100%, `usecase/memories` 100%, `usecase/settings` 100%
+- Domain coverage 97.9%; `usecase/chats` 91.7%, `usecase/chores` 93.2%, `usecase/jobs` 92.2%, `usecase/projects` 96.4%, `usecase/history` 100%, `usecase/memories` 100%, `usecase/settings` 100%
 - Adversarial path-traversal tests per file-based repository (crafted IDs, absolute paths, NUL bytes, sibling-directory prefix confusion) and per-environment cross-owner-IDOR tests (`TestHandle*_CrossOwnerReturns404`)
 - WebSocket hub tested under `-race` (handshake, per-user isolation, slow-client drop); the `Queue`'s own persist/reload round trip is tested explicitly for restart durability — this does not cover recovery of a run already dequeued to a worker at crash time (see `documentation/technical-details.md`'s Queue section)
 
@@ -2136,15 +2135,20 @@ Not a new phase — this is the punch list against Feature 9 / FR-025–FR-031 a
 **Planned Work:**
 - Replace `StubExecutor` with a real agent-invoking `Executor` (wiring `internal/usecase/chat` and the existing tool-calling loop into a Job/Chore run)
 - Wire the web Chats environment to actually call the LLM (today it only persists the user's message)
-- Build the per-Job, per-Chore, per-Run, and Memories chat interfaces (spec FR-029/FR-037/FR-042/FR-047)
-- Schedule/invoke the existing retention-sweep logic (`chats.Service.SweepExpired` and its Project/History equivalents) so configured retention windows actually delete data
-- Add a browser-side WebSocket consumer so Run status/log/notification-badge updates render live instead of requiring a page refresh
-- Extend the new left-nav sidebar to `dashboard.html`/`bots.html`/`users.html`/`confirmations.html`
+- Build the per-Job, per-Chore, and per-Run chat interfaces (spec FR-029/FR-037/FR-042) — Memories' equivalent (FR-047) shipped in the review-fix pass and is the reference implementation to follow
+- Close the Memories `ownerUserID`→`ConversationID` identity-bridge gap between the web-admin account system and the CLI/Telegram/Buzz gateway identity system
 - Make allowlist entries and the remote bind address editable from Settings (currently config-file-only); rebind the listener when the network mode changes at runtime, or clearly document that a restart is required
-- Bring `FileConversationRepository` onto the `fsguard` path-confinement pattern used by the four new file-based repositories
 
-**Priority:** P1 (High) — the queueing/scheduling/persistence pipeline is production-quality, but the feature does not deliver its core value (autonomous agent work) until execution is real
-**Status:** 🔶 Foundation complete, execution and live-update work outstanding
+**Completed in the review-fix pass (2026-08-05), no longer outstanding:**
+- Retention-sweep logic (`chats.Service.SweepExpired` and its Project/History equivalents) is now scheduled — `scheduler.RetentionSweeper` invokes it for every user every 15 minutes, alongside `CleanupPendingDeletion` for Jobs and Chores
+- A browser-side WebSocket consumer (`run-events.js`) now renders Run status/log/notification-badge updates live, without a page refresh
+- The left-nav sidebar (and its notification badge) now covers `dashboard.html`/`bots.html`/`users.html`/`confirmations.html` as well as the six new environments
+- `FileConversationRepository` now routes through the `fsguard` path-confinement pattern used by the four new file-based repositories (FR-R13)
+- Chore soft-delete (`PendingDeletion`) now has full parity with Job (FR-R8/FR-R9)
+- Restart recovery: `scheduler.ReconcileInterruptedRuns` marks any Run left non-terminal by a crash as `Failed` on startup
+
+**Priority:** P1 (High) — the queueing/scheduling/persistence/live-update pipeline is production-quality, but the feature does not deliver its core value (autonomous agent work) until execution is real
+**Status:** 🔶 Foundation, scheduling, and live updates complete; agent-invoking execution outstanding
 
 ### Scalability Path
 

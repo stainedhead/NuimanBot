@@ -217,7 +217,7 @@ MCP tools are loaded at startup from `mcp.json`. Servers that fail to initialize
 
 **Security Controls (All Tools):**
 - Custom-built (no external imports for built-in tools)
-- RBAC role assigned per tool (permission-gated via `ExecuteWithUser`/`checkPermission`; not yet reached by the live chat tool-calling loop — see [Security Architecture](#security-architecture))
+- RBAC role assigned per tool (permission-gated via `ExecuteWithUser`/`checkPermission`; enforced end-to-end in the live chat tool-calling loop since the FR-001/FR-002 fix — see [Security Architecture](#security-architecture))
 - Per-tool rate limiting
 - Timeout enforcement (30s default; 30s hard limit for MCP tools)
 - Output validation: secret redaction (`OutputSanitizer`) AND injection-pattern detection (`OutputValidator`) — two distinct mechanisms run on all tool output, including MCP output, regardless of MCP trust level

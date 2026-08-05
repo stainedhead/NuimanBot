@@ -599,14 +599,12 @@ buffer (spec.md Edge Case #5).
 - The transport itself — handshake, per-user channel isolation, bounded
   per-client send buffers so one slow client can't stall delivery to
   others — is implemented and verified under `-race`.
-- Choosing WebSocket over polling was a bet that paid off on the
-  *transport* side but not yet on the *product* side: **no browser-side
-  JavaScript consumes this feed yet**. The server pushes every `RunEvent`
-  correctly; nothing in the shipped templates subscribes to `/ws` or updates
-  the DOM from it. This is the single largest gap between "architecturally
-  correct" and "user-visible" in this feature — see
-  `documentation/product-summary.md`'s "Persistent Agent Workspace — In
-  Progress" for the full list this sits alongside.
+- Choosing WebSocket over polling paid off on both the *transport* and the
+  *product* side: a browser-side consumer (`internal/adapter/web/static/run-events.js`)
+  now subscribes to `/ws` from the Job/Chore/Run detail pages and updates the
+  DOM live — status transitions and log growth are visible without a manual
+  refresh. See `documentation/product-summary.md`'s "Persistent Agent
+  Workspace — In Progress" for what else remains partial in this feature.
 - Treating this as net-new engineering (not a reused pattern) was the right
   call in hindsight: Buzz's Nostr usage of `gorilla/websocket` is a relay
   *client*; this feature needed a connection-accepting *server* with
@@ -777,9 +775,12 @@ disguised placeholder. Wire it as the only `Executor` implementation in
   or `ChoreScheduler`.
 - The same "infrastructure real, product value deferred" pattern applies to
   the web Chats environment (ADR-009's consequences) and to the per-Job/
-  Chore/Run/Memories chat interfaces (not built this pass) — all four gaps
-  share one root cause: no piece of this feature invokes
-  `internal/usecase/chat`'s agent/tool-calling loop. Closing that
+  Chore/Run chat interfaces (still not built this pass). Memories now has a
+  minimal per-item chat (FR-047/FR-R4) — grounded Q&A over that memory
+  cell's own content, one LLM call per question, no persisted history — as
+  the reference implementation the other three are meant to follow; it does
+  not invoke `internal/usecase/chat`'s full agent/tool-calling loop, which
+  remains the shared root cause of the other three gaps. Closing that
   end-to-end is the natural next-phase scope, tracked in
   `documentation/product-details.md`'s "Post-Feature: Persistent Agent
   Workspace — Remaining Work."
