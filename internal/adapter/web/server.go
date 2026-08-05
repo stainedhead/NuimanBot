@@ -41,6 +41,11 @@ type Server struct {
 	botService          BotService
 	confirmationService ConfirmationService
 	chatsService        ChatsService
+	projectsService     ProjectsService
+	jobsService         JobsService
+	choresService       ChoresService
+	historyService      HistoryService
+	memoriesService     MemoriesService
 	networkAccess       *networkAccessState
 }
 
@@ -182,6 +187,21 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	}
 	mux.Handle("/admin/chats", userHandler(s.handleChats))
 	mux.Handle("/admin/chats/", userHandler(s.handleChatSubroutes))
+
+	// Projects/Jobs/Chores/History/Memories environment routes (FR-017-047):
+	// per-user, RoleUser, same composition as Chats above. Each
+	// <env>_handler.go owns its own handler implementations; this file only
+	// owns route registration.
+	mux.Handle("/admin/projects", userHandler(s.handleProjects))
+	mux.Handle("/admin/projects/", userHandler(s.handleProjectSubroutes))
+	mux.Handle("/admin/jobs", userHandler(s.handleJobs))
+	mux.Handle("/admin/jobs/", userHandler(s.handleJobSubroutes))
+	mux.Handle("/admin/chores", userHandler(s.handleChores))
+	mux.Handle("/admin/chores/", userHandler(s.handleChoreSubroutes))
+	mux.Handle("/admin/history", userHandler(s.handleHistory))
+	mux.Handle("/admin/history/", userHandler(s.handleHistorySubroutes))
+	mux.Handle("/admin/memories", userHandler(s.handleMemories))
+	mux.Handle("/admin/memories/", userHandler(s.handleMemorySubroutes))
 
 	mux.Handle("/admin/", adminHandler(s.handleAdminIndex))
 }
