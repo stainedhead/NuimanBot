@@ -8,29 +8,33 @@
 
 This branch adds six new web-admin environments (Chats, Projects, Jobs, Chores, History, Memories) plus Settings and network-access configuration to NuimanBot — roughly 15,500 lines across domain entities, a net-new worker-pool/scheduler subsystem, four file-based repositories, a WebSocket push layer, and ~2,900 lines of tests. The engineering is disciplined in the places that matter most for a first pass of this size: per-user data isolation is enforced at the repository layer (not just the UI) and is backed by dedicated cross-owner-returns-404 tests in every one of the six new handlers; the network-access allowlist's fail-closed/fail-open semantics (Edge Case #11) are implemented correctly at both the config-decode and domain layers; the WebSocket hub correctly authenticates on upgrade, checks `Origin`, and isolates per-user channels; and the FIFO queue has real restart-durability tests, not just in-memory happy-path coverage.
 
-That discipline does not extend evenly to every subsystem. Two Reliability/Security-NFR-level gaps stand out: queued Jobs survive a restart, but a Run already dequeued to a worker at crash time does not (no reconciliation of Runs stuck in `Running` state on startup), and the retention system is fully modeled (`RetentionPolicy`, per-environment `SweepExpired` methods) but never invoked by anything — three FRs promise automatic deletion that currently never happens. A new, previously-unreviewed finding of similar weight: three usecase packages (`jobs`, `chores`, `projects`) import `internal/infrastructure/fsguard` directly and perform raw `os.MkdirAll`/`os.WriteFile`/`os.Stat` calls, inverting the Clean Architecture dependency rule AGENTS.md mandates — this is the only clear-cut architecture-layering violation found among the new code (`domain` has zero non-stdlib imports; `internal/infrastructure/scheduler` never imports `adapter`). A second new finding: `fsguard.ResolveWithin` is explicitly documented as lexical-only (no symlink resolution), and none of its seven call sites perform the `EvalSymlinks` mitigation its own doc comment calls for, leaving a documented-but-unaddressed symlink-escape gap in the one mechanism the spec designates as the sandboxing enforcement point. A third: the Memories environment's `ownerUserID → ConversationID` scoping is an explicitly self-flagged, unverified assumption in the code — worth a reviewer's explicit sign-off before relying on it, per the comment's own request.
+That discipline does not extend evenly to every subsystem. Two Reliability/Security-NFR-level gaps stand out: queued Jobs survive a restart, but a Run already dequeued to a worker at crash time does not (no reconciliation of Runs stuck in `Running` state on startup), and the retention system is fully modeled (`RetentionPolicy`, per-environment `SweepExpired` methods) but never invoked by anything — three FRs promise automatic deletion that currently never happens. A new, previously-unreviewed finding of similar weight: three usecase packages (`jobs`, `chores`, `projects`) import `internal/infrastructure/fsguard` directly and perform raw `os.MkdirAll`/`os.WriteFile`/`os.Stat` calls, inverting the Clean Architecture dependency rule AGENTS.md mandates — this is the only clear-cut architecture-layering violation found among the new code (`domain` has zero non-stdlib imports; `internal/infrastructure/scheduler` never imports `adapter`). A second new finding: `fsguard.ResolveWithin` is explicitly documented as lexical-only (no symlink resolution), and none of its eight call sites perform the `EvalSymlinks` mitigation its own doc comment calls for, leaving a documented-but-unaddressed symlink-escape gap in the one mechanism the spec designates as the sandboxing enforcement point. A third: the Memories environment's `ownerUserID → ConversationID` scoping is an explicitly self-flagged, unverified assumption in the code — worth a reviewer's explicit sign-off before relying on it, per the comment's own request.
 
-The deliberate scope decision to ship `StubExecutor` (no LLM/agent invocation) instead of wiring real agent execution is sound engineering judgment for a first pass and is not re-litigated here. The finding that overlaps with it — Chats persisting messages but never invoking the LLM at all — is treated separately below because it defeats the primary purpose of the Chats environment specifically (a user who sends a message never gets a reply, full stop), distinct from Jobs/Chores having a placeholder execution backend.
+The deliberate scope decision to ship `StubExecutor` (no LLM/agent invocation) instead of wiring real agent execution is sound engineering judgment for a first pass and is not re-litigated here. The finding that overlaps with it — Chats persisting messages but never invoking the LLM at all — is the same category of descope (wiring real agent/LLM orchestration into a new environment) and, on review, is scored as P1 rather than P0: see FR-R1's rationale below.
 
 Two additional findings, independently verified against the code directly (not carried over from the Step 4 known-gaps list), round out this pass. First, a P0: `internal/usecase/projects/service.go`'s `CreateProject` accepts a user-supplied `outputDirectory` with no root confinement — only `filepath.Abs(filepath.Clean(...))` — and the route creating it (`/admin/projects`) is gated by the lowest role (`RoleUser`), not admin-only. Any authenticated non-admin user can therefore point a Project at the application's own `data/` directory or another user's tree, and the app will `MkdirAll` and later write `AGENTS.md` into it — `fsguard`'s confinement only applies to paths *relative to* this already-unconfined root, so the hardening built on top of it doesn't help. This breaks FR-010 and the Security NFR exactly as directly as the other P0s. Second, a P1: the History notification badge (FR-044) that `nav.html` renders on every page is only ever populated by `history_handler.go`'s own page renders — `BaseData.UnviewedRunCount` defaults to zero everywhere else (`server.go:321-325,337`, with a comment acknowledging the gap) — so a user must already be on the History page to see the count, defeating the badge's purpose as an ambient, cross-page indicator (FR-030/FR-038 are effectively unmet outside that one page as a result).
 
+**Review-pass note (Step 6 PRD review, 2026-08-05):** two priority calls were revisited against this document's own "true blocker" test (breaks a stated NFR/security guarantee or a core FR entirely, vs. a preference wearing a P0 label), and both changes are applied in place below rather than left as commentary:
+- **FR-R1 (Chats never invokes the agent) downgraded P0→P1.** None of FR-011–016 require an agent reply — all six are satisfied exactly as implemented. The finding's own accepted resolution path ("document the deferral in `implementation-notes.md`, add a UI notice that replies aren't available yet") is a documentation and copy fix, not a functional one — a P0 whose acceptance criteria can be discharged by a paragraph and a UI string is not a true blocker. It is, functionally, the same category of work — wiring real agent/LLM orchestration into a new environment — that this same review explicitly declines to score as a blocker for Jobs/Chores' `StubExecutor` descope, and implementation-notes.md documents that decision for the `Executor` seam; it simply never made (or wrote down) the equivalent call for Chats. That asymmetry is the actual gap, and it's now closed by scoring both consistently.
+- **FR-R6 (`fsguard.ResolveWithin` symlink-escape gap) upgraded P1→P0.** The Security NFR text — "Job/Chore filesystem access is sandboxed to the assigned Project's output directory — no path traversal outside it" — describes *worker-executed* (i.e., agent-initiated) filesystem access, the same access path Job/Chore runs use to write into a Project's output directory on the user's behalf. Under that reading, an agent turn that writes into the directory (including one driven by a manipulated or injected prompt) can plant a symlink that a later `ResolveWithin`-confined operation follows outside the sandbox — a complete, currently-unmitigated breach of that guarantee at all eight call sites, not a partial or theoretical one, and not reducible to "the user already has this access via FR-022" (FR-022 covers direct user filesystem access; it says nothing about what the *agent*, acting inside the sandbox, can be tricked into placing there). See FR-R6 below for the tightened acceptance criteria (a demonstrating test is evidence of the gap, not its fix).
+
+FR-R18 (Project output directory unconfined) was independently checked against this same test and confirmed as a true P0: it requires no agent involvement or injected prompt at all — any authenticated non-admin user can, via a single form submission, point a Project at the app's own `data/` directory or another user's tree, which is a direct, complete, trivially-reachable breach of FR-010 ("full isolation, including from admins") and the Security NFR. It is left at P0 unchanged.
+
 **Findings: 19 total — 5 P0, 9 P1, 5 P2.**
+
+## Scope
+
+**Goal:** Close all 19 findings below (5 P0, 9 P1, 5 P2) so the branch matches spec.md's 47 FRs, 13 Edge Cases, and NFRs, without introducing new user-facing scope beyond what spec.md already promised.
+
+**Non-Goals (this fix pass):**
+- Wiring the *live* Chats reply loop (FR-R1, via full `internal/usecase/chat` multi-turn/tool/RBAC orchestration) and replacing Jobs/Chores' `StubExecutor` with real agent execution are both separately-scoped follow-up efforts, not targets of this pass — FR-R1's acceptance criteria accepts "implement, or explicitly document the deferral + notify the user in the UI" precisely so this pass isn't blocked on that larger integration. This is distinct from FR-R4 (per-item Job/Chore/Run/Memory chat), which stays in scope and P0: it's a narrower, single-turn/context-grounded interaction, not the full orchestration engine, and its acceptance criteria requires implementing at least one as a template — no documentation-only fallback.
+- No new user-facing features beyond what spec.md's 47 FRs already describe.
+- Carried forward from spec.md's own Non-Goals, still out of scope here: Chore pause/disable, user-initiated run cancellation, storage/disk quota enforcement or warning UI, a general Chats file browser, real-time multi-user collaborative Project editing.
+- A live HTTP listener rebind for Settings' network-access mode (FR-R11) may remain out of scope for this pass provided the UI stops presenting config-file-only fields as live-editable.
 
 ---
 
 ## P0 Findings (true blockers — break a stated NFR/security guarantee or a core FR entirely)
-
-### FR-R1: Web Chats never invokes the agent — no reply is ever produced
-
-**Finding:** `internal/usecase/chats/service.go` and `internal/adapter/web/chats_handler.go` implement create/list/persist/retain/delete/export for Chats (FR-011–FR-016) by extending `domain.Conversation`/`ConversationRepository`, but neither the handler nor the service ever calls into `internal/usecase/chat` (the existing LLM/tool/RBAC orchestration engine) or any other agent-invocation path. A user sending a message in the web Chats UI gets it persisted and nothing else — no assistant turn is ever appended. Other gateways (Telegram, Slack, CLI, Buzz) are unaffected; this is specific to the new web Chats environment's wiring.
-
-**Why it matters:** Chats is the flagship new interactive surface (spec.md Goals: "Persistent, organized workspace for agent interaction"). Without an agent reply, the environment satisfies its CRUD/retention/export sub-requirements but delivers none of its stated purpose. This is distinct from the Jobs/Chores `StubExecutor` descope: that one still produces an observable Run lifecycle end-to-end; this one produces literally no agent output under any circumstance.
-
-**Acceptance criteria:**
-- Sending a message in the web Chats UI results in an assistant reply appended to the conversation, using the existing `internal/usecase/chat` orchestration (or an explicitly documented equivalent), within the same reliability/observability guarantees already applied to other gateways.
-- If deferring this to a follow-up pass is the accepted call, `implementation-notes.md`'s "Deviations from Plan" section must say so explicitly (it currently does not — it only documents the Job/Chore `Executor` deferral) and the Chats UI must visibly communicate to the user that replies are not yet available, rather than silently doing nothing.
-
----
 
 ### FR-R2: No restart-recovery for a Run already dequeued to a worker at crash time
 
@@ -65,8 +69,21 @@ Two additional findings, independently verified against the code directly (not c
 **Why it matters:** This is called out by the task brief as "a real gap against multiple numbered FRs, not a minor nit," and independent reading confirms that characterization — four distinct FRs, spanning four of the six new environments, have no implementation at all (not even a placeholder UI element), as opposed to a stub backend. Given the environments' entire post-hoc-review workflow (per spec.md's Success Criteria: "per-run chat grounded in run log/results") depends on this, its total absence materially narrows what a user can actually do with Job/Chore/Run/Memory records once created.
 
 **Acceptance criteria:**
-- Either implement a minimal per-item chat interface for at least one of the four (Job, Chore, Run, Memory) grounded in that item's own context (description/log/results/memory content) as a template the other three can follow, or
-- If deferred to a follow-up pass, document that decision explicitly in `implementation-notes.md`'s "Deviations from Plan" (currently silent on this) and ensure each detail page's UI clearly communicates "chat not yet available" rather than omitting the affordance with no explanation.
+- Implement a minimal per-item chat interface for at least one of the four (Job, Chore, Run, Memory) grounded in that item's own context (description/log/results/memory content) as a template the other three can follow. (A P0 whose acceptance criteria are satisfiable purely by documenting a deferral is not a true blocker — see the FR-R1 downgrade rationale above — so that option is deliberately not offered here; unlike FR-R1, four numbered FRs are completely unimplemented, not merely under-scoped, which is what keeps this one at P0.)
+- The remaining three follow the same template in a fast-follow pass; each detail page's UI must not silently omit the affordance — if a given item's chat isn't yet live, it says so rather than showing nothing.
+
+---
+
+### FR-R6: `fsguard.ResolveWithin` is lexical-only; no call site mitigates symlink escape despite the doc comment requiring it
+
+**Finding:** `fsguard.go`'s own doc comment states: *"ResolveWithin is a pure path computation and performs no filesystem I/O (in particular, it does not resolve symlinks — callers that subsequently open the returned path should use O_NOFOLLOW-equivalent care, or resolve baseDir itself via filepath.EvalSymlinks before calling ResolveWithin, if symlink escape... is a concern for that call site)."* `grep` across every caller (`stub_executor.go`, `file_run_repository.go`, `file_project_repository.go`, `file_chore_repository.go`, `file_job_repository.go`, `jobs/service.go`, `chores/service.go`, `projects/service.go`) shows zero uses of `filepath.EvalSymlinks` or any `O_NOFOLLOW`-equivalent open flag anywhere in the new code. `fsguard_test.go` has strong adversarial coverage for `../` traversal, absolute-path rejection, NUL-byte rejection, and sibling-directory-prefix confusion (`TestResolveWithin_SiblingDirectoryPrefixNotConfused`) — but no symlink-escape test, consistent with the gap.
+
+**Why it matters:** spec.md's Security NFR states plainly: *"Job/Chore filesystem access is sandboxed to the assigned Project's output directory — no path traversal outside it."* That guarantee describes *worker-executed* (agent-initiated) filesystem access — the path a Job/Chore run uses to write into a Project's output directory on the user's behalf — not merely direct user access (which FR-022 already grants and is a separate concern). An agent turn writing into that directory, including one driven by a manipulated or injected prompt, can plant a symlink that a later `ResolveWithin`-confined operation follows outside the sandbox, despite `ResolveWithin` reporting success. This is the one mechanism the spec designates as the sandboxing enforcement point (Risks table: "Centralize path-resolution/validation in one place... used by every Job/Chore/Project file operation"), and the gap is total — zero of eight call sites mitigate it — not partial, which is what makes this a true blocker rather than defense-in-depth polish.
+
+**Acceptance criteria:**
+- Add an adversarial test that creates a symlink inside a confined base directory pointing outside it and shows `ResolveWithin` currently returns a path that, when opened, escapes the sandbox. This demonstrates the exposure; it is not itself the fix.
+- Close the gap via `filepath.EvalSymlinks` on resolved paths (or an equivalent guard) before use, at minimum for every Project-output-directory call site (`file_project_repository.go`, `stub_executor.go`/whichever `Executor` is live, and the `jobs`/`chores`/`projects` usecase call sites once FR-R5 relocates them) — since that's the directory both the agent and a non-admin user can write into per FR-020/FR-022.
+- Re-run the new adversarial test to confirm it now passes at the fixed call sites.
 
 ---
 
@@ -85,6 +102,18 @@ Two additional findings, independently verified against the code directly (not c
 
 ## P1 Findings (high — significant FR gap or real bug)
 
+### FR-R1: Web Chats never invokes the agent — no reply is ever produced
+
+**Finding:** `internal/usecase/chats/service.go` and `internal/adapter/web/chats_handler.go` implement create/list/persist/retain/delete/export for Chats (FR-011–FR-016) by extending `domain.Conversation`/`ConversationRepository`, but neither the handler nor the service ever calls into `internal/usecase/chat` (the existing LLM/tool/RBAC orchestration engine) or any other agent-invocation path. A user sending a message in the web Chats UI gets it persisted and nothing else — no assistant turn is ever appended. Other gateways (Telegram, Slack, CLI, Buzz) are unaffected; this is specific to the new web Chats environment's wiring.
+
+**Why it matters:** Chats is the flagship new interactive surface (spec.md Goals: "Persistent, organized workspace for agent interaction"), and this is a real, user-visible gap — a user sending a message gets no reply, full stop. It is scored P1, not P0 (**downgraded from P0 during Step 6 PRD review** — see the Executive Summary's "Review-pass note"): none of the six numbered Chats FRs (011–016) require an agent reply, and all six are satisfied exactly as implemented; and this is functionally the same category of work — wiring real agent/LLM orchestration into a new environment for the first time — that the same review explicitly declines to score as a blocker for the Jobs/Chores `StubExecutor` descope. The asymmetry worth fixing isn't severity, it's documentation: Jobs/Chores' equivalent descope is written down in `implementation-notes.md`'s "Deviations from Plan"; Chats' is not.
+
+**Acceptance criteria:**
+- Sending a message in the web Chats UI results in an assistant reply appended to the conversation, using the existing `internal/usecase/chat` orchestration (or an explicitly documented equivalent), within the same reliability/observability guarantees already applied to other gateways. This is the preferred resolution given Chats is the flagship new surface.
+- If deferring this to a follow-up pass remains the accepted call, `implementation-notes.md`'s "Deviations from Plan" section must say so explicitly, using the same treatment already given the Job/Chore `Executor` deferral, and the Chats UI must visibly communicate to the user that replies are not yet available, rather than silently doing nothing.
+
+---
+
 ### FR-R5: `internal/usecase/{jobs,chores,projects}` import `internal/infrastructure/fsguard` directly and perform raw filesystem I/O — Clean Architecture layering violation
 
 **Finding:** `internal/usecase/jobs/service.go`, `chores/service.go`, and `projects/service.go` all `import "nuimanbot/internal/infrastructure/fsguard"` directly, and all three call `os.MkdirAll`/`os.WriteFile`/`os.Stat` inline (e.g. `jobs/service.go:108,171`; `chores/service.go:88,95`; `projects/service.go:68,71,135,142`). Per AGENTS.md: *"Use Case Layer: Orchestrates domain entities. Defines repository/service interfaces... Dependencies flow inward only. Inner layers define interfaces; outer layers implement them."* Here the usecase layer both imports a concrete infrastructure package and performs the filesystem I/O itself, rather than depending on a domain-defined interface that an infrastructure implementation satisfies via DI.
@@ -98,19 +127,6 @@ By contrast, `internal/domain/{project,job,chore,run,retention,schedule}.go` hav
 - `internal/infrastructure/storage` (or a new small package) implements it using `fsguard.ResolveWithin` + `os`.
 - `jobs`, `chores`, `projects` usecase services depend only on the new interface, with no `os` or `fsguard` import remaining in any of the three `service.go` files.
 - Existing tests continue to pass against a fake implementation of the new interface.
-
----
-
-### FR-R6: `fsguard.ResolveWithin` is lexical-only; no call site mitigates symlink escape despite the doc comment requiring it
-
-**Finding:** `fsguard.go`'s own doc comment states: *"ResolveWithin is a pure path computation and performs no filesystem I/O (in particular, it does not resolve symlinks — callers that subsequently open the returned path should use O_NOFOLLOW-equivalent care, or resolve baseDir itself via filepath.EvalSymlinks before calling ResolveWithin, if symlink escape... is a concern for that call site)."* `grep` across every caller (`stub_executor.go`, `file_run_repository.go`, `file_project_repository.go`, `file_chore_repository.go`, `file_job_repository.go`, `jobs/service.go`, `chores/service.go`, `projects/service.go`) shows zero uses of `filepath.EvalSymlinks` or any `O_NOFOLLOW`-equivalent open flag anywhere in the new code. `fsguard_test.go` has strong adversarial coverage for `../` traversal, absolute-path rejection, NUL-byte rejection, and sibling-directory-prefix confusion (`TestResolveWithin_SiblingDirectoryPrefixNotConfused`) — but no symlink-escape test, consistent with the gap.
-
-**Why it matters:** spec.md's Security NFR states plainly: *"Job/Chore filesystem access is sandboxed to the assigned Project's output directory — no path traversal outside it."* A Project's output directory is a location the owning user (and, per FR-020/FR-022, the agent) has direct read/write access to — either could place a symlink inside it pointing outside the sandbox. Every subsequent `ResolveWithin`-confined read/write against a path that traverses through that symlink would silently escape confinement, despite `ResolveWithin` reporting success. This is the one mechanism the spec designates as the sandboxing enforcement point (Risks table: "Centralize path-resolution/validation in one place... used by every Job/Chore/Project file operation"), so a gap here undercuts that guarantee everywhere it's used, not just one call site.
-
-**Acceptance criteria:**
-- At minimum, document and test the actual current exposure: add a test that creates a symlink inside a confined base directory pointing outside it, and shows `ResolveWithin` currently returns a path that, when opened, escapes the sandbox — making the gap explicit rather than implicit.
-- Close the gap for at least the highest-risk call sites (Project output directory operations, since that's the one directory a non-admin user has direct filesystem access to per FR-022) via `filepath.EvalSymlinks` on resolved paths before use, or an equivalent guard.
-- Re-run the new adversarial test to confirm it now passes.
 
 ---
 
@@ -270,17 +286,56 @@ By contrast, `internal/domain/{project,job,chore,run,retention,schedule}.go` hav
 
 ---
 
+## Fix-Pass Execution Guidance (mandatory)
+
+This is a code-review-findings PRD, not a fresh feature — per this pipeline's review guidance for that case, the fix pass must follow TDD, get a code review per fix, and use agent teammates with git worktrees for parallel workstreams. Concretely:
+
+**TDD, per finding.** Each of the 19 findings is its own Red-Green-Refactor cycle: write the failing test that encodes the finding's acceptance criteria first (e.g., FR-R2's crash-simulation test, FR-R6's symlink-escape test, FR-R18's traversal/absolute-path-escape tests), confirm it fails for the right reason, implement the minimal fix, then refactor. Do not batch multiple findings' Red phases into one commit — a reviewer must be able to trace each fix to the specific finding it closes.
+
+**Code review per fix.** Run `dev-flow:review-code` (or an equivalent focused review) against each finding's diff before it merges — not once at the end of all 19. Give FR-R6, FR-R18, and FR-R5 (the security- and architecture-sensitive fixes) a second reviewer pass: this same review process already missed FR-R18 once (it was absent from the Step 4 known-gaps list and only surfaced via a parallel review pass), which is itself a reason not to single-review the highest-stakes fixes here.
+
+**Quality gates, every fix** (AGENTS.md's Pre-Completion Checklist): `go fmt ./...` → `go mod tidy` → `go vet ./...` → `golangci-lint run` → `go test ./...` → `go build -o bin/nuimanbot ./cmd/nuimanbot` → `./bin/nuimanbot --help`. Additionally:
+- Any fix touching `internal/infrastructure/scheduler` or the WebSocket path in `internal/adapter/web` must pass `go test -race` on those packages — this review's Positive Observations note it's currently clean; it must stay clean after every fix.
+- The 13 existing `TestHandle*_CrossOwnerReturns404` tests must keep passing unmodified after every fix, since FR-R5 and FR-R18 touch the exact repository/service code paths those tests exercise.
+
+**Agent teammates and git worktrees, by workstream.** Findings are grouped below by shared-file/shared-concern collision, not just priority — groups can run fully in parallel (one teammate + worktree/branch per group); findings inside a group must be sequenced or done by the same teammate to avoid conflicting edits and ordering bugs.
+
+| Workstream | Findings | Why grouped | Sequencing |
+|---|---|---|---|
+| A — Restart & retention sweeps | FR-R2, FR-R3, FR-R9 | All add a startup-reconciliation or periodic-sweep loop wired into `cmd/nuimanbot`'s DI; FR-R9's own text says it can combine with FR-R3's sweep loop. | FR-R3 first (sweep scaffold) → FR-R9 (extends the same loop to `PendingDeletion`) → FR-R2 (separate startup-only reconciliation; can proceed in parallel with R3/R9 but coordinate on the shared `cmd/nuimanbot` wiring file). |
+| B — Filesystem layering & sandboxing | FR-R5, FR-R6, FR-R18, FR-R13 | FR-R5/FR-R6/FR-R18 all touch `fsguard` call sites or the usecase/infrastructure boundary in `jobs`/`chores`/`projects`/`file_project_repository.go`. | FR-R5 first (relocates `fsguard` calls out of usecase into a new infrastructure interface), then FR-R6 (adds `EvalSymlinks` at the relocated call sites — don't fix it twice). FR-R18 (output-directory root confinement) can start in parallel but must rebase against FR-R5 before merging, since both touch `projects/service.go`. FR-R13 (`file_conversation_repository.go`) is fully independent. |
+| C — Chore parity | FR-R8 | Chore soft-delete, mirroring Jobs. | Must merge *before* FR-R9 (workstream A) extends the cleanup sweep to Chores — FR-R9 assumes Chores already soft-delete correctly. |
+| D — Deferred agent-facing surfaces | FR-R1, FR-R4 | Both are "implement, or explicitly document the deferral + UI notice" calls for agent-facing chat/reply surfaces. | Independent of every other workstream (touch `chats`/`jobs`/`chores`/`history`/`memories` handlers+templates only); ideally the same teammate, since the fallback documentation path is identical for both. |
+| E — Live-update & observability plumbing | FR-R10, FR-R19 | Both wire an already-correct backend computation through to the browser/every page (WebSocket consumer JS; `UnviewedRunCount` on every `BaseData` build). | Independent of every other workstream; coordinate only if both touch `server.go`'s `BaseData` construction in the same edit window. |
+| F — Settings & execution edge cases | FR-R11, FR-R12, FR-R14, FR-R15 | Narrow, independent fixes with no file overlap with each other or the groups above. | Fully parallelizable. |
+| G — Consistency polish | FR-R16, FR-R17 | Template/adapter-layer polish; no security or data-integrity stakes. | Fully parallelizable; lowest scheduling priority. |
+
+Suggested execution: one agent teammate per workstream (A–G), each in its own git worktree/branch, running TDD + quality gates + per-finding code review inside that worktree; merge in dependency order (A's internal R3→R9→R2 sequencing, B's R5→R6 sequencing, C landing before A's R9) — everything else merges whenever its workstream is green.
+
+---
+
+## Open Questions
+
+No human is available mid-pipeline for follow-up, so each item states the default the fix pass proceeds under rather than a question that blocks work:
+
+1. **FR-R7:** Is memory cell `ConversationID` keyed per-user or per-session for a given gateway? *Default:* treat as unverified; FR-R7's acceptance criteria (trace one real gateway end-to-end, add an integration test) is itself the resolution mechanism the fix pass executes, not a prerequisite research task someone else must answer first.
+2. **FR-R1 / FR-R4:** Implement the agent-facing surface, or defer with documentation + UI notice? *Default:* attempt the "implement" path first (preferred per both findings' acceptance criteria); if genuinely blocked by the scope of `internal/usecase/chat` integration, fall back to "defer + document in `implementation-notes.md` + UI notice" — either outcome closes the finding, but the choice must be recorded, not left silent as it is today.
+3. **FR-R11:** Is a live network-listener rebind in scope for this pass? *Default:* no — out of scope; the fix only needs to stop the Settings UI from presenting config-file-only fields (allowlist, bind address) as if they were live-editable.
+4. **FR-R18:** What is the correct allowed root for Project output directories? *Default:* confine under `<storagePath>/users/<ownerUserID>/projects/`, matching the existing per-user storage convention already used by Chats/Jobs/Chores/History, unless the implementer finds an existing per-deployment "projects root" config value already wired elsewhere in `internal/config`.
+
+---
+
 ## Summary Table
 
 | # | Finding | Priority |
 |---|---|---|
-| FR-R1 | Web Chats never invokes the agent — no reply ever produced | P0 |
 | FR-R2 | No restart-recovery for a Run dequeued at crash time | P0 |
 | FR-R3 | Retention sweep implemented but never scheduled/invoked | P0 |
 | FR-R4 | Per-item chat interfaces (FR-029/037/042/047) deferred entirely | P0 |
+| FR-R6 | `fsguard.ResolveWithin` has no symlink-escape mitigation at any call site (agent-writable sandbox) | P0 |
 | FR-R18 | Project output directory unconfined — reachable, non-admin arbitrary directory write | P0 |
+| FR-R1 | Web Chats never invokes the agent — no reply ever produced *(downgraded from P0, see Executive Summary)* | P1 |
 | FR-R5 | Usecase layer imports `infrastructure/fsguard` + raw `os` I/O (Clean Architecture violation) | P1 |
-| FR-R6 | `fsguard.ResolveWithin` has no symlink-escape mitigation at any call site | P1 |
 | FR-R7 | Memories `ownerUserID→ConversationID` mapping is a self-flagged unverified assumption | P1 |
 | FR-R8 | `chores.Service.DeleteChore` has no soft-delete (inconsistent with Jobs) | P1 |
 | FR-R9 | `PendingDeletion` Jobs/Chores have no terminal-state cleanup sweep | P1 |
