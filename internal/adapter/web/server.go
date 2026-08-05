@@ -212,10 +212,15 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.Handle("/admin/settings", userHandler(s.handleSettings))
 
 	// WebSocket endpoint (P6.8): pushes Job/Chore Run status/log/
-	// notification-badge updates to the connecting session's own user
-	// (handleWebSocket enforces this via s.getCurrentUser, mirroring
-	// userHandler's RoleUser posture without the redirect-on-force-
-	// password-change behavior, which doesn't apply to a non-page route).
+	// notification-badge updates to the connecting session's own user.
+	// handleWebSocket enforces authentication directly via
+	// s.getCurrentUser (401 if no valid session) rather than going
+	// through userHandler/requireRole(domain.RoleUser): RoleUser is the
+	// floor of the Role enum (see domain.Role), so any authenticated
+	// session already satisfies it and requireRole's role check would be
+	// redundant here. requirePasswordChange's redirect-on-force-change
+	// behavior is deliberately not applied either, since a 302 makes no
+	// sense as a response to a WebSocket handshake.
 	mux.HandleFunc("/ws", s.handleWebSocket)
 
 	mux.Handle("/admin/", adminHandler(s.handleAdminIndex))

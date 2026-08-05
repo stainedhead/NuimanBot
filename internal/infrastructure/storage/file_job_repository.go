@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"nuimanbot/internal/domain"
+	"nuimanbot/internal/infrastructure/fsguard"
 )
 
 // FileJobRepository implements domain.JobRepository using per-owner,
@@ -33,8 +34,24 @@ func (r *FileJobRepository) userDir(ownerUserID string) string {
 	return filepath.Join(r.basePath, "users", ownerUserID, "jobs")
 }
 
-func (r *FileJobRepository) recordPath(ownerUserID, jobID string) string {
-	return filepath.Join(r.userDir(ownerUserID), jobID+".json")
+// recordPath resolves jobID's on-disk record path, confined to
+// ownerUserID's own jobs directory via fsguard.ResolveWithin. jobID
+// ultimately derives from a URL path segment (see
+// adapter/web/jobs_handler.go's jobIDAndActionFromPath), so it must never
+// be joined directly — a crafted jobID containing ".." could otherwise
+// walk outside the confining directory entirely (verified: an unconfined
+// filepath.Join here allows reading arbitrary files elsewhere on disk,
+// including other users' records, when called with such an ID). Any
+// resolution failure (path escape, NUL byte, absolute path) is mapped to
+// domain.ErrNotFound uniformly across all operations — including writes —
+// so this never discloses anything beyond "not accessible to you",
+// matching every other cross-owner-access path in this codebase.
+func (r *FileJobRepository) recordPath(ownerUserID, jobID string) (string, error) {
+	path, err := fsguard.ResolveWithin(r.userDir(ownerUserID), jobID+".json")
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", domain.ErrNotFound, err)
+	}
+	return path, nil
 }
 
 // SaveJob creates or updates a Job.
@@ -50,7 +67,11 @@ func (r *FileJobRepository) writeLocked(j *domain.Job) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal job: %w", err)
 	}
-	if err := r.writer.Write(r.recordPath(j.OwnerUserID, j.ID), data, 0644); err != nil {
+	path, err := r.recordPath(j.OwnerUserID, j.ID)
+	if err != nil {
+		return err
+	}
+	if err := r.writer.Write(path, data, 0644); err != nil {
 		return fmt.Errorf("failed to write job record: %w", err)
 	}
 	return nil
@@ -65,7 +86,11 @@ func (r *FileJobRepository) GetJob(_ context.Context, ownerUserID, jobID string)
 
 // readLocked reads and unmarshals a Job; callers must hold r.mu (read or write).
 func (r *FileJobRepository) readLocked(ownerUserID, jobID string) (*domain.Job, error) {
-	data, err := os.ReadFile(r.recordPath(ownerUserID, jobID))
+	path, err := r.recordPath(ownerUserID, jobID)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, domain.ErrNotFound
@@ -115,7 +140,10 @@ func (r *FileJobRepository) DeleteJob(_ context.Context, ownerUserID, jobID stri
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	path := r.recordPath(ownerUserID, jobID)
+	path, err := r.recordPath(ownerUserID, jobID)
+	if err != nil {
+		return err
+	}
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
 			return domain.ErrNotFound

@@ -51,6 +51,52 @@ func TestFileRunRepository_CrossOwnerIsolation(t *testing.T) {
 	}
 }
 
+// TestFileRunRepository_GetRun_RejectsPathTraversal is a P7.1 adversarial
+// test mirroring the Job repository's: runID derives from a URL path
+// segment, so a crafted value must never escape the calling user's own
+// runs directory.
+func TestFileRunRepository_GetRun_RejectsPathTraversal(t *testing.T) {
+	repo := newTestRunRepo(t)
+	ctx := context.Background()
+
+	malicious := []string{
+		"../../../etc/passwd",
+		"..",
+		"../bob/runs/some-run",
+		"run/../../escape",
+	}
+	for _, id := range malicious {
+		if _, err := repo.GetRun(ctx, "alice", id); !errors.Is(err, domain.ErrNotFound) {
+			t.Errorf("GetRun(%q): expected ErrNotFound, got %v", id, err)
+		}
+		if err := repo.DeleteRun(ctx, "alice", id); !errors.Is(err, domain.ErrNotFound) {
+			t.Errorf("DeleteRun(%q): expected ErrNotFound, got %v", id, err)
+		}
+		if err := repo.AppendLog(ctx, "alice", id, "x"); !errors.Is(err, domain.ErrNotFound) {
+			t.Errorf("AppendLog(%q): expected ErrNotFound, got %v", id, err)
+		}
+	}
+}
+
+// TestFileRunRepository_GetRun_CannotReadAnotherUsersRecordViaTraversal
+// plants a real Run for "bob" and confirms alice cannot read it via a
+// crafted runID that traverses out of her own directory and back into
+// bob's.
+func TestFileRunRepository_GetRun_CannotReadAnotherUsersRecordViaTraversal(t *testing.T) {
+	repo := newTestRunRepo(t)
+	ctx := context.Background()
+
+	bobRun := &domain.Run{ID: "legit-run", OwnerUserID: "bob", SourceType: domain.SourceTypeJob, SourceID: "job-1", Status: domain.RunStatusQueued, CreatedAt: time.Now()}
+	if err := repo.SaveRun(ctx, bobRun); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+
+	craftedID := "../../bob/runs/legit-run"
+	if _, err := repo.GetRun(ctx, "alice", craftedID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for cross-owner traversal via runID %q, got err=%v (should never disclose bob's run)", craftedID, err)
+	}
+}
+
 func TestFileRunRepository_ListRuns_FilterAndOrder(t *testing.T) {
 	repo := newTestRunRepo(t)
 	ctx := context.Background()
@@ -132,7 +178,11 @@ func TestFileRunRepository_AppendLog(t *testing.T) {
 	if err := repo.AppendLog(ctx, "user-a", "r1", "line two\n"); err != nil {
 		t.Fatalf("AppendLog: %v", err)
 	}
-	data, err := os.ReadFile(repo.logPath("user-a", "r1"))
+	logPath, err := repo.logPath("user-a", "r1")
+	if err != nil {
+		t.Fatalf("logPath: %v", err)
+	}
+	data, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatalf("reading log file: %v", err)
 	}
@@ -206,7 +256,11 @@ func TestFileRunRepository_DeleteRun_RemovesLogToo(t *testing.T) {
 	if _, err := repo.GetRun(ctx, "user-a", "r1"); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound after delete, got %v", err)
 	}
-	if _, err := os.Stat(repo.logPath("user-a", "r1")); !os.IsNotExist(err) {
+	logPath, err := repo.logPath("user-a", "r1")
+	if err != nil {
+		t.Fatalf("logPath: %v", err)
+	}
+	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
 		t.Fatalf("expected log file to be removed, stat err: %v", err)
 	}
 }

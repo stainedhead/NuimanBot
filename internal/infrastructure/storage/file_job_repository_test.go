@@ -109,6 +109,52 @@ func TestFileJobRepository_DeleteJob(t *testing.T) {
 	}
 }
 
+// TestFileJobRepository_GetJob_RejectsPathTraversal is a P7.1 adversarial
+// test: jobID ultimately derives from a URL path segment
+// (adapter/web/jobs_handler.go's jobIDAndActionFromPath), so a crafted
+// value must never escape the calling user's own jobs directory. Before
+// recordPath routed through fsguard.ResolveWithin, some of these reached
+// arbitrary files elsewhere on disk.
+func TestFileJobRepository_GetJob_RejectsPathTraversal(t *testing.T) {
+	repo := newTestJobRepo(t)
+	ctx := context.Background()
+
+	malicious := []string{
+		"../../../etc/passwd",
+		"..",
+		"../bob/jobs/some-job",
+		"job/../../escape",
+	}
+	for _, id := range malicious {
+		if _, err := repo.GetJob(ctx, "alice", id); !errors.Is(err, domain.ErrNotFound) {
+			t.Errorf("GetJob(%q): expected ErrNotFound, got %v", id, err)
+		}
+		if err := repo.DeleteJob(ctx, "alice", id); !errors.Is(err, domain.ErrNotFound) {
+			t.Errorf("DeleteJob(%q): expected ErrNotFound, got %v", id, err)
+		}
+	}
+}
+
+// TestFileJobRepository_GetJob_CannotReadAnotherUsersRecordViaTraversal
+// plants a real Job for "bob" and confirms alice cannot read it by crafting
+// a jobID that traverses out of her own directory and back into bob's —
+// the concrete cross-owner exploitation this confinement prevents, beyond
+// the generic escape-to-arbitrary-file case above.
+func TestFileJobRepository_GetJob_CannotReadAnotherUsersRecordViaTraversal(t *testing.T) {
+	repo := newTestJobRepo(t)
+	ctx := context.Background()
+
+	bobJob := &domain.Job{ID: "legit-job", OwnerUserID: "bob", Title: "Bob's private job", Status: domain.JobStatusQueued}
+	if err := repo.SaveJob(ctx, bobJob); err != nil {
+		t.Fatalf("SaveJob: %v", err)
+	}
+
+	craftedID := "../../bob/jobs/legit-job"
+	if _, err := repo.GetJob(ctx, "alice", craftedID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for cross-owner traversal via jobID %q, got err=%v (should never disclose bob's job)", craftedID, err)
+	}
+}
+
 func TestFileJobRepository_NotFoundCases(t *testing.T) {
 	repo := newTestJobRepo(t)
 	ctx := context.Background()

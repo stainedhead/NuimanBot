@@ -41,6 +41,56 @@ func TestFileProjectRepository_SaveAndGet(t *testing.T) {
 	}
 }
 
+// TestFileProjectRepository_GetProject_RejectsPathTraversal is a P7.1
+// adversarial test mirroring the Job repository's: projectID derives from
+// a URL path segment, so a crafted value must never escape the calling
+// user's own projects directory.
+func TestFileProjectRepository_GetProject_RejectsPathTraversal(t *testing.T) {
+	repo := newTestProjectRepo(t)
+	ctx := context.Background()
+
+	malicious := []string{
+		"../../../etc/passwd",
+		"..",
+		"../bob/projects/some-project",
+		"project/../../escape",
+	}
+	for _, id := range malicious {
+		if _, err := repo.GetProject(ctx, "alice", id); !errors.Is(err, domain.ErrNotFound) {
+			t.Errorf("GetProject(%q): expected ErrNotFound, got %v", id, err)
+		}
+		if err := repo.DeleteProject(ctx, "alice", id); !errors.Is(err, domain.ErrNotFound) {
+			t.Errorf("DeleteProject(%q): expected ErrNotFound, got %v", id, err)
+		}
+	}
+}
+
+// TestFileProjectRepository_GetProject_CannotReadAnotherUsersRecordViaTraversal
+// plants a real Project for "bob" and confirms alice cannot read it via a
+// crafted projectID that traverses out of her own directory and back into
+// bob's.
+func TestFileProjectRepository_GetProject_CannotReadAnotherUsersRecordViaTraversal(t *testing.T) {
+	repo := newTestProjectRepo(t)
+	ctx := context.Background()
+
+	bobProject := &domain.Project{
+		ID:          "legit-project",
+		OwnerUserID: "bob",
+		Name:        "Bob's private project",
+		Retention:   domain.NeverExpire(),
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	if err := repo.SaveProject(ctx, bobProject); err != nil {
+		t.Fatalf("SaveProject: %v", err)
+	}
+
+	craftedID := "../../bob/projects/legit-project"
+	if _, err := repo.GetProject(ctx, "alice", craftedID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for cross-owner traversal via projectID %q, got err=%v (should never disclose bob's project)", craftedID, err)
+	}
+}
+
 func TestFileProjectRepository_GetNotFound(t *testing.T) {
 	repo := newTestProjectRepo(t)
 	_, err := repo.GetProject(context.Background(), "user-a", "does-not-exist")

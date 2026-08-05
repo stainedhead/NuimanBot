@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"nuimanbot/internal/domain"
+	"nuimanbot/internal/infrastructure/fsguard"
 )
 
 // FileRunRepository implements domain.RunRepository using per-owner,
@@ -39,12 +40,27 @@ func (r *FileRunRepository) userDir(ownerUserID string) string {
 	return filepath.Join(r.basePath, "users", ownerUserID, "runs")
 }
 
-func (r *FileRunRepository) recordPath(ownerUserID, runID string) string {
-	return filepath.Join(r.userDir(ownerUserID), runID+".json")
+// recordPath resolves runID's on-disk record path, confined to
+// ownerUserID's own runs directory via fsguard.ResolveWithin. See
+// FileJobRepository.recordPath's doc comment for why this confinement is
+// required (runID derives from a URL path segment) and why every
+// resolution failure maps uniformly to domain.ErrNotFound.
+func (r *FileRunRepository) recordPath(ownerUserID, runID string) (string, error) {
+	path, err := fsguard.ResolveWithin(r.userDir(ownerUserID), runID+".json")
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", domain.ErrNotFound, err)
+	}
+	return path, nil
 }
 
-func (r *FileRunRepository) logPath(ownerUserID, runID string) string {
-	return filepath.Join(r.userDir(ownerUserID), runID+".log")
+// logPath resolves runID's on-disk log path, confined the same way as
+// recordPath.
+func (r *FileRunRepository) logPath(ownerUserID, runID string) (string, error) {
+	path, err := fsguard.ResolveWithin(r.userDir(ownerUserID), runID+".log")
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", domain.ErrNotFound, err)
+	}
+	return path, nil
 }
 
 // SaveRun creates or updates a Run.
@@ -59,14 +75,22 @@ func (r *FileRunRepository) writeLocked(run *domain.Run) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal run: %w", err)
 	}
-	if err := r.writer.Write(r.recordPath(run.OwnerUserID, run.ID), data, 0644); err != nil {
+	path, err := r.recordPath(run.OwnerUserID, run.ID)
+	if err != nil {
+		return err
+	}
+	if err := r.writer.Write(path, data, 0644); err != nil {
 		return fmt.Errorf("failed to write run record: %w", err)
 	}
 	return nil
 }
 
 func (r *FileRunRepository) readLocked(ownerUserID, runID string) (*domain.Run, error) {
-	data, err := os.ReadFile(r.recordPath(ownerUserID, runID))
+	path, err := r.recordPath(ownerUserID, runID)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, domain.ErrNotFound
@@ -168,7 +192,10 @@ func (r *FileRunRepository) AppendLog(_ context.Context, ownerUserID, runID, chu
 		return err
 	}
 
-	path := r.logPath(ownerUserID, runID)
+	path, err := r.logPath(ownerUserID, runID)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("failed to create runs directory: %w", err)
 	}
@@ -223,7 +250,10 @@ func (r *FileRunRepository) DeleteRun(_ context.Context, ownerUserID, runID stri
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	path := r.recordPath(ownerUserID, runID)
+	path, err := r.recordPath(ownerUserID, runID)
+	if err != nil {
+		return err
+	}
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
 			return domain.ErrNotFound
@@ -233,7 +263,9 @@ func (r *FileRunRepository) DeleteRun(_ context.Context, ownerUserID, runID stri
 	if err := os.Remove(path); err != nil {
 		return fmt.Errorf("failed to delete run record: %w", err)
 	}
-	_ = os.Remove(r.logPath(ownerUserID, runID)) // Best-effort; log may not exist.
+	if logPath, err := r.logPath(ownerUserID, runID); err == nil {
+		_ = os.Remove(logPath) // Best-effort; log may not exist.
+	}
 	return nil
 }
 

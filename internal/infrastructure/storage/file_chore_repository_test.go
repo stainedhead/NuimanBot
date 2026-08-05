@@ -47,6 +47,49 @@ func TestFileChoreRepository_CrossOwnerIsolation(t *testing.T) {
 	}
 }
 
+// TestFileChoreRepository_GetChore_RejectsPathTraversal is a P7.1
+// adversarial test mirroring TestFileJobRepository_GetJob_RejectsPathTraversal:
+// choreID derives from a URL path segment, so a crafted value must never
+// escape the calling user's own chores directory.
+func TestFileChoreRepository_GetChore_RejectsPathTraversal(t *testing.T) {
+	repo := newTestChoreRepo(t)
+	ctx := context.Background()
+
+	malicious := []string{
+		"../../../etc/passwd",
+		"..",
+		"../bob/chores/some-chore",
+		"chore/../../escape",
+	}
+	for _, id := range malicious {
+		if _, err := repo.GetChore(ctx, "alice", id); !errors.Is(err, domain.ErrNotFound) {
+			t.Errorf("GetChore(%q): expected ErrNotFound, got %v", id, err)
+		}
+		if err := repo.DeleteChore(ctx, "alice", id); !errors.Is(err, domain.ErrNotFound) {
+			t.Errorf("DeleteChore(%q): expected ErrNotFound, got %v", id, err)
+		}
+	}
+}
+
+// TestFileChoreRepository_GetChore_CannotReadAnotherUsersRecordViaTraversal
+// plants a real Chore for "bob" and confirms alice cannot read it via a
+// crafted choreID that traverses out of her own directory and back into
+// bob's.
+func TestFileChoreRepository_GetChore_CannotReadAnotherUsersRecordViaTraversal(t *testing.T) {
+	repo := newTestChoreRepo(t)
+	ctx := context.Background()
+
+	bobChore := &domain.Chore{ID: "legit-chore", OwnerUserID: "bob", Title: "Bob's private chore"}
+	if err := repo.SaveChore(ctx, bobChore); err != nil {
+		t.Fatalf("SaveChore: %v", err)
+	}
+
+	craftedID := "../../bob/chores/legit-chore"
+	if _, err := repo.GetChore(ctx, "alice", craftedID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for cross-owner traversal via choreID %q, got err=%v (should never disclose bob's chore)", craftedID, err)
+	}
+}
+
 func TestFileChoreRepository_ListChores(t *testing.T) {
 	repo := newTestChoreRepo(t)
 	ctx := context.Background()

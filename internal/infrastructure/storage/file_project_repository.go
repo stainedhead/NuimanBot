@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"nuimanbot/internal/domain"
+	"nuimanbot/internal/infrastructure/fsguard"
 )
 
 // FileProjectRepository implements domain.ProjectRepository using
@@ -39,8 +40,17 @@ func (r *FileProjectRepository) userDir(ownerUserID string) string {
 	return filepath.Join(r.basePath, "users", ownerUserID, "projects")
 }
 
-func (r *FileProjectRepository) recordPath(ownerUserID, projectID string) string {
-	return filepath.Join(r.userDir(ownerUserID), projectID+".json")
+// recordPath resolves projectID's on-disk record path, confined to
+// ownerUserID's own projects directory via fsguard.ResolveWithin. See
+// FileJobRepository.recordPath's doc comment for why this confinement is
+// required (projectID derives from a URL path segment) and why every
+// resolution failure maps uniformly to domain.ErrNotFound.
+func (r *FileProjectRepository) recordPath(ownerUserID, projectID string) (string, error) {
+	path, err := fsguard.ResolveWithin(r.userDir(ownerUserID), projectID+".json")
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", domain.ErrNotFound, err)
+	}
+	return path, nil
 }
 
 // SaveProject creates or updates a Project.
@@ -52,7 +62,11 @@ func (r *FileProjectRepository) SaveProject(_ context.Context, p *domain.Project
 	if err != nil {
 		return fmt.Errorf("failed to marshal project: %w", err)
 	}
-	if err := r.writer.Write(r.recordPath(p.OwnerUserID, p.ID), data, 0644); err != nil {
+	path, err := r.recordPath(p.OwnerUserID, p.ID)
+	if err != nil {
+		return err
+	}
+	if err := r.writer.Write(path, data, 0644); err != nil {
 		return fmt.Errorf("failed to write project record: %w", err)
 	}
 	return nil
@@ -63,7 +77,11 @@ func (r *FileProjectRepository) GetProject(_ context.Context, ownerUserID, proje
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	data, err := os.ReadFile(r.recordPath(ownerUserID, projectID))
+	path, err := r.recordPath(ownerUserID, projectID)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, domain.ErrNotFound
@@ -114,7 +132,10 @@ func (r *FileProjectRepository) DeleteProject(_ context.Context, ownerUserID, pr
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	path := r.recordPath(ownerUserID, projectID)
+	path, err := r.recordPath(ownerUserID, projectID)
+	if err != nil {
+		return err
+	}
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
 			return domain.ErrNotFound

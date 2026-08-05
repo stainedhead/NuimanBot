@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"nuimanbot/internal/domain"
+	"nuimanbot/internal/infrastructure/fsguard"
 )
 
 // FileChoreRepository implements domain.ChoreRepository using per-owner,
@@ -37,8 +38,17 @@ func (r *FileChoreRepository) userDir(ownerUserID string) string {
 	return filepath.Join(r.usersRootDir(), ownerUserID, "chores")
 }
 
-func (r *FileChoreRepository) recordPath(ownerUserID, choreID string) string {
-	return filepath.Join(r.userDir(ownerUserID), choreID+".json")
+// recordPath resolves choreID's on-disk record path, confined to
+// ownerUserID's own chores directory via fsguard.ResolveWithin. See
+// FileJobRepository.recordPath's doc comment for why this confinement is
+// required (choreID derives from a URL path segment) and why every
+// resolution failure maps uniformly to domain.ErrNotFound.
+func (r *FileChoreRepository) recordPath(ownerUserID, choreID string) (string, error) {
+	path, err := fsguard.ResolveWithin(r.userDir(ownerUserID), choreID+".json")
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", domain.ErrNotFound, err)
+	}
+	return path, nil
 }
 
 // SaveChore creates or updates a Chore.
@@ -53,14 +63,22 @@ func (r *FileChoreRepository) writeLocked(c *domain.Chore) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal chore: %w", err)
 	}
-	if err := r.writer.Write(r.recordPath(c.OwnerUserID, c.ID), data, 0644); err != nil {
+	path, err := r.recordPath(c.OwnerUserID, c.ID)
+	if err != nil {
+		return err
+	}
+	if err := r.writer.Write(path, data, 0644); err != nil {
 		return fmt.Errorf("failed to write chore record: %w", err)
 	}
 	return nil
 }
 
 func (r *FileChoreRepository) readLocked(ownerUserID, choreID string) (*domain.Chore, error) {
-	data, err := os.ReadFile(r.recordPath(ownerUserID, choreID))
+	path, err := r.recordPath(ownerUserID, choreID)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, domain.ErrNotFound
@@ -120,7 +138,10 @@ func (r *FileChoreRepository) DeleteChore(_ context.Context, ownerUserID, choreI
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	path := r.recordPath(ownerUserID, choreID)
+	path, err := r.recordPath(ownerUserID, choreID)
+	if err != nil {
+		return err
+	}
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
 			return domain.ErrNotFound
