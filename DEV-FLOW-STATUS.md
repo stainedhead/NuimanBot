@@ -21,8 +21,8 @@
 | 7  | Archive Original Spec            | ✅ Complete (moved to specs/archive/260805-nuimanbot-extend-context-and-ui/, commit 7813d6f) | 2026-08-05T20:32:26Z | 2026-08-05T20:34:27Z | 2 |
 | 8  | Spec Review Fixes                | ✅ Complete (specs/260805-nuimanbot-extend-context-and-ui-auto-review/, commit 605ba64) | 2026-08-05T20:34:55Z | 2026-08-05T20:41:42Z | 7 |
 | 9  | Implement Review Fixes           | ✅ Complete (all 19 findings closed, 0 lint issues, tests green) | 2026-08-05T20:41:42Z | 2026-08-05T22:36:31Z | 115 |
-| 10 | Archive Fixes Spec               | 🔄 In Progress | 2026-08-05T22:36:31Z | — | — |
-| 11 | Final Quality Pass               | ⬜ Pending | — | — | — |
+| 10 | Archive Fixes Spec               | ✅ Complete (specs/archive/260805-nuimanbot-extend-context-and-ui-auto-review/, commit 38aa2a8) | 2026-08-05T22:36:31Z | 2026-08-05T22:38:40Z | 2 |
+| 11 | Final Quality Pass               | 🔄 In Progress | 2026-08-05T22:38:40Z | — | — |
 | 12 | Process Analysis Report          | ⬜ Pending | — | — | — |
 | 13 | Archive Spec                     | ⬜ Pending | — | — | — |
 | 14 | Open Pull Request                | ⬜ Pending | — | — | — |
