@@ -138,7 +138,7 @@ func wireExtendedContextEnvironments(ctx context.Context, app *application, webS
 	webServer.SetJobsService(jobsService)
 
 	// Chores (FR-031-038) + their cron scheduler driver (FR-032/FR-035).
-	choresService := chores.NewService(app.ChoreRepo, scheduleEvaluatorAdapter{}, filepath.Join(app.StoragePath, "chores-hidden"))
+	choresService := chores.NewService(app.ChoreRepo, scheduleEvaluatorAdapter{}, runRepo, filepath.Join(app.StoragePath, "chores-hidden"))
 	webServer.SetChoresService(choresService)
 
 	choreScheduler := scheduler.NewChoreScheduler(app.ChoreRepo, runRepo, pool, defaultChoreSchedulerInterval)

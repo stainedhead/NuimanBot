@@ -48,11 +48,18 @@ type ScheduleEvaluator interface {
 type Service struct {
 	chores     domain.ChoreRepository
 	evaluator  ScheduleEvaluator
+	runs       domain.RunRepository
 	hiddenRoot string
 	now        func() time.Time
 }
 
-// NewService creates a Chores Service backed by chores and evaluator.
+// NewService creates a Chores Service backed by chores and evaluator. runs
+// is used by DeleteChore (FR-R8) to check whether a Chore has an active
+// (non-terminal) Run before deciding between a soft- and hard-delete —
+// unlike Job, Chore carries no Status field of its own (see domain.Chore's
+// doc comment: "the Chore itself remains Active until deleted"), so
+// activeness must be derived from its Runs rather than read off a field.
+//
 // hiddenRoot is the storage root each Chore's HiddenDirectory is created
 // under, at <hiddenRoot>/users/<ownerUserID>/chores/<choreID> — deliberately
 // mirroring FileChoreRepository's own
@@ -60,8 +67,8 @@ type Service struct {
 // a Chore's WorkingDirectory is optional (unlike Project's
 // OutputDirectory) and so cannot always host a nested hidden directory the
 // way Projects' ".nuimanbot" convention does.
-func NewService(chores domain.ChoreRepository, evaluator ScheduleEvaluator, hiddenRoot string) *Service {
-	return &Service{chores: chores, evaluator: evaluator, hiddenRoot: hiddenRoot, now: time.Now}
+func NewService(chores domain.ChoreRepository, evaluator ScheduleEvaluator, runs domain.RunRepository, hiddenRoot string) *Service {
+	return &Service{chores: chores, evaluator: evaluator, runs: runs, hiddenRoot: hiddenRoot, now: time.Now}
 }
 
 // CreateChore creates a new Chore (FR-031), validating schedule's cron
@@ -135,20 +142,57 @@ func (s *Service) GetChore(ctx context.Context, ownerUserID, choreID string) (*d
 	return s.chores.GetChore(ctx, ownerUserID, choreID)
 }
 
-// DeleteChore deletes a Chore by ID, scoped to its owner.
+// DeleteChore deletes a Chore by ID, scoped to its owner (FR-R8, spec.md
+// Edge Case #3, mirroring jobs.Service.DeleteJob): if the Chore has a Run in
+// a non-terminal state (Queued or Running), the record is soft-marked
+// PendingDeletion instead of removed, so the in-flight/queued run is not
+// killed mid-write; otherwise the record is deleted outright.
 //
-// TODO(soft-delete): spec.md Edge Case #3 requires that deleting a
-// Job/Chore while its run is active soft-marks it (PendingDeletion) and
-// defers the actual delete until that run reaches a terminal state. This
-// usecase package has no visibility into in-flight runs — that lives in
-// the worker pool (internal/infrastructure/scheduler), which this package
-// must not import per AGENTS.md's Clean Architecture layering — so full
-// soft-delete-pending-active-run semantics are deferred to whichever
-// component orchestrates both the worker pool and this Service (see
-// architecture.md). For now this is a plain, ownership-scoped immediate
-// delete.
+// Sweep integration deferred: a background sweep that hard-deletes a
+// PendingDeletion Chore once its run reaches a terminal state is out of
+// scope for this task — see Workstream A's FR-R9, which lands after this
+// task specifically because it assumes Chores already soft-delete
+// correctly. No new runs should be enqueued for a Chore with
+// PendingDeletion set; enforcing that at schedule-fire time also belongs to
+// that future sweep/scheduler integration, not this Service.
 func (s *Service) DeleteChore(ctx context.Context, ownerUserID, choreID string) error {
+	c, err := s.chores.GetChore(ctx, ownerUserID, choreID)
+	if err != nil {
+		return err
+	}
+
+	active, err := s.hasActiveRun(ctx, ownerUserID, choreID)
+	if err != nil {
+		return err
+	}
+	if active {
+		c.PendingDeletion = true
+		c.UpdatedAt = s.now()
+		if err := s.chores.SaveChore(ctx, c); err != nil {
+			return fmt.Errorf("failed to soft-delete chore: %w", err)
+		}
+		return nil
+	}
+
 	return s.chores.DeleteChore(ctx, ownerUserID, choreID)
+}
+
+// hasActiveRun reports whether choreID has any Run in a non-terminal state
+// (Queued or Running). Chore carries no Status field of its own to consult
+// directly (unlike Job), so DeleteChore derives activeness from the Run
+// history instead.
+func (s *Service) hasActiveRun(ctx context.Context, ownerUserID, choreID string) (bool, error) {
+	sourceType := domain.SourceTypeChore
+	runs, err := s.runs.ListRuns(ctx, ownerUserID, domain.RunFilter{SourceType: &sourceType, SourceID: &choreID})
+	if err != nil {
+		return false, fmt.Errorf("failed to check chore's active runs: %w", err)
+	}
+	for _, r := range runs {
+		if !r.Status.IsTerminal() {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // ConfirmSchedule confirms an agent-proposed schedule (FR-033), computing
