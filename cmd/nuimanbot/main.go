@@ -45,6 +45,7 @@ import (
 	"nuimanbot/internal/tools/websearch"
 	"nuimanbot/internal/usecase/botmgmt"
 	"nuimanbot/internal/usecase/chat"
+	"nuimanbot/internal/usecase/chats"
 	usecaseconfig "nuimanbot/internal/usecase/config"
 	llm "nuimanbot/internal/usecase/llm"
 	"nuimanbot/internal/usecase/memory"
@@ -83,6 +84,7 @@ type application struct {
 	MemorySceneRepo      memoryv2.MemorySceneRepository // Memory v2 scene repository
 	MemoryAdmin          cliadapter.MemoryAdmin         // Optional admin operations for memory CLI
 	ConfirmationStore    security.ConfirmationStore     // Part C confirmation store, shared with web/REST UI wiring (P5.8/P5.9)
+	ConversationRepo     domain.ConversationRepository  // Backs the web admin's Chats environment (specs/260805-nuimanbot-extend-context-and-ui)
 }
 
 func main() {
@@ -386,6 +388,7 @@ func main() {
 		MemorySceneRepo:      memorySceneRepo,
 		MemoryAdmin:          memoryAdmin,
 		ConfirmationStore:    confirmationStore,
+		ConversationRepo:     fileRepos.Conversation,
 	}
 
 	// 12. Run application in goroutine
@@ -983,6 +986,15 @@ func (app *application) Run(ctx context.Context) error {
 
 		// Wire services into Web UI
 		webServer.SetProfileService(profileService)
+
+		// Wire the Chats environment (FR-011-FR-016, specs/260805-nuimanbot-extend-context-and-ui):
+		// extends the existing Conversation/ConversationRepository rather
+		// than a new entity/store.
+		webServer.SetChatsService(chats.NewService(app.ConversationRepo))
+
+		// Wire network access (FR-005-FR-008): an absent config section
+		// resolves to the secure localhost-only default via ToDomain().
+		webServer.SetNetworkAccessConfig(app.Config.NetworkAccess.ToDomain())
 
 		// Wire Part C's confirmation admin UI (P5.8): lists pending
 		// confirmations and resolves them via ChatService.ResolveConfirmation.
