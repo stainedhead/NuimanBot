@@ -35,6 +35,7 @@ import (
 	"nuimanbot/internal/infrastructure/logger"
 	inframcp "nuimanbot/internal/infrastructure/mcp"
 	personainfra "nuimanbot/internal/infrastructure/persona"
+	"nuimanbot/internal/infrastructure/scheduler"
 	infrasecurity "nuimanbot/internal/infrastructure/security"
 	skillinfra "nuimanbot/internal/infrastructure/skill"
 	"nuimanbot/internal/infrastructure/storage"
@@ -52,6 +53,7 @@ import (
 	memoryv2uc "nuimanbot/internal/usecase/memoryv2"
 	"nuimanbot/internal/usecase/profile"
 	"nuimanbot/internal/usecase/security"
+	"nuimanbot/internal/usecase/settings"
 	skillusecase "nuimanbot/internal/usecase/skill"
 	"nuimanbot/internal/usecase/tool"
 	"nuimanbot/internal/usecase/tool/coding_agent"
@@ -85,6 +87,12 @@ type application struct {
 	MemoryAdmin          cliadapter.MemoryAdmin         // Optional admin operations for memory CLI
 	ConfirmationStore    security.ConfirmationStore     // Part C confirmation store, shared with web/REST UI wiring (P5.8/P5.9)
 	ConversationRepo     domain.ConversationRepository  // Backs the web admin's Chats environment (specs/260805-nuimanbot-extend-context-and-ui)
+	ProjectRepo          domain.ProjectRepository       // Backs the web admin's Projects environment
+	JobRepo              domain.JobRepository           // Backs the web admin's Jobs environment
+	ChoreRepo            domain.ChoreRepository         // Backs the web admin's Chores environment
+	RunRepo              domain.RunRepository           // Backs the web admin's History environment and the Job/Chore worker pool
+	StoragePath          string                         // Base data directory, reused for the worker pool's queue/scheduler persistence and Job/Chore hidden directories
+	WorkerPool           *scheduler.WorkerPool          // Set once wireExtendedContextEnvironments runs inside Run(); read later by the Settings environment's wiring
 }
 
 func main() {
@@ -389,6 +397,11 @@ func main() {
 		MemoryAdmin:          memoryAdmin,
 		ConfirmationStore:    confirmationStore,
 		ConversationRepo:     fileRepos.Conversation,
+		ProjectRepo:          fileRepos.Project,
+		JobRepo:              fileRepos.Job,
+		ChoreRepo:            fileRepos.Chore,
+		RunRepo:              fileRepos.Run,
+		StoragePath:          storagePath,
 	}
 
 	// 12. Run application in goroutine
@@ -996,6 +1009,18 @@ func (app *application) Run(ctx context.Context) error {
 		// resolves to the secure localhost-only default via ToDomain().
 		webServer.SetNetworkAccessConfig(app.Config.NetworkAccess.ToDomain())
 
+		// Wire Projects/Jobs/Chores/History/Memories (FR-017-047) and start
+		// the Job/Chore worker pool + cron scheduler — the largest net-new
+		// subsystem (specs/260805-nuimanbot-extend-context-and-ui). Settings
+		// (FR-001-004) is wired later, once the skill registry exists (see
+		// below) — it shares this same pool for its worker-pool-size control.
+		pool, err := wireExtendedContextEnvironments(ctx, app, webServer)
+		if err != nil {
+			slog.Error("Failed to wire extended-context environments", "error", err)
+		} else {
+			app.WorkerPool = pool
+		}
+
 		// Wire Part C's confirmation admin UI (P5.8): lists pending
 		// confirmations and resolves them via ChatService.ResolveConfirmation.
 		if app.ChatService != nil && app.ConfirmationStore != nil {
@@ -1076,6 +1101,19 @@ func (app *application) Run(ctx context.Context) error {
 		}
 	} else {
 		slog.Info("Agent Skills system disabled (no roots configured)")
+	}
+
+	// Wire Settings (FR-001-004), now that the skill registry exists.
+	// app.WorkerPool is nil if the web UI is disabled or wiring failed
+	// earlier — wireSettingsEnvironment tolerates that by simply not being
+	// called (Settings is a web-admin-only environment; nothing needs it
+	// when app.WebServer is nil).
+	if app.WebServer != nil && app.WorkerPool != nil {
+		wireSettingsEnvironment(app.WebServer, app.WorkerPool, skillRegistry, settings.RetentionDefaults{
+			ChatDays:    app.Config.RetentionDefaults.ChatDays,
+			ProjectDays: app.Config.RetentionDefaults.ProjectDays,
+			HistoryDays: app.Config.RetentionDefaults.HistoryDays,
+		})
 	}
 
 	// Create skill CLI command handler

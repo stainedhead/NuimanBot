@@ -1,8 +1,8 @@
 package web
 
 import (
+	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -257,13 +257,25 @@ func hasForcePasswordChange(session *Session) bool {
 	return session.ForcePasswordChange
 }
 
-// extractRemoteIP returns the client's IP address from RemoteAddr, stripping the port.
-// X-Forwarded-For is intentionally NOT used because this server is not behind a
-// trusted reverse proxy; trusting that header would allow IP spoofing.
+// extractRemoteIP returns the client's IP address from RemoteAddr, stripping
+// the port. X-Forwarded-For is intentionally NOT used because this server is
+// not behind a trusted reverse proxy; trusting that header would allow IP
+// spoofing.
+//
+// Uses net.SplitHostPort rather than a manual LastIndex(":") split: an IPv6
+// RemoteAddr is bracketed (e.g. "[::1]:54321"), and a naive last-colon split
+// would return "[::1]" (brackets still attached) instead of "::1" — which
+// then fails to match localhostHosts / an allowlist entry written as "::1",
+// silently denying legitimate IPv6 loopback/allowlisted traffic. This was
+// caught by manual end-to-end verification of networkAllowlistMiddleware:
+// curl to "localhost" resolved to "::1" on this machine and was incorrectly
+// rejected in AccessModeLocalhostOnly before this fix.
 func extractRemoteIP(r *http.Request) string {
-	host := r.RemoteAddr
-	if idx := strings.LastIndex(host, ":"); idx != -1 {
-		host = host[:idx]
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		// RemoteAddr without a port (unusual, but be defensive rather than
+		// returning a mis-parsed value that then fails every comparison).
+		return r.RemoteAddr
 	}
 	return host
 }

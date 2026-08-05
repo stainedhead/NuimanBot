@@ -17,6 +17,13 @@ type fileStorageRepositories struct {
 	MemoryScene     memoryv2.MemorySceneRepository
 	MemoryCellFile  *storage.FileMemoryCellRepository  // Concrete type for admin operations
 	MemorySceneFile *storage.FileMemorySceneRepository // Concrete type for admin operations
+
+	// Project/Job/Chore/Run back the web admin's extended-context
+	// environments (specs/260805-nuimanbot-extend-context-and-ui).
+	Project domain.ProjectRepository
+	Job     domain.JobRepository
+	Chore   domain.ChoreRepository
+	Run     domain.RunRepository
 }
 
 // initializeFileStorage creates all file-based repositories
@@ -37,10 +44,14 @@ func initializeFileStorage(basePath, encryptionKey string) (*fileStorageReposito
 		MemoryScene:     sceneRepo,
 		MemoryCellFile:  cellRepo,
 		MemorySceneFile: sceneRepo,
+		Project:         storage.NewFileProjectRepository(basePath),
+		Job:             storage.NewFileJobRepository(basePath),
+		Chore:           storage.NewFileChoreRepository(basePath),
+		Run:             storage.NewFileRunRepository(basePath),
 	}
 
 	slog.Info("File-based storage initialized successfully",
-		"repositories", 6,
+		"repositories", 10,
 	)
 
 	return repos, nil
