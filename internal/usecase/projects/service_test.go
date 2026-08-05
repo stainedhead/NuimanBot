@@ -331,6 +331,42 @@ func TestAddAgentsFile_Idempotent(t *testing.T) {
 	}
 }
 
+func TestAddAgentsFile_RejectsOutputDirectoryOutsideAllowedRoot(t *testing.T) {
+	// Defense in depth for FR-R18 (flagged by second-reviewer pass):
+	// CreateProject validates outputDirectory against the allowed root at
+	// creation time, but a Project record's OutputDirectory could still
+	// end up outside it later — a pre-fix record, or the on-disk
+	// directory replaced with a symlink escaping the root (FR-022 grants
+	// the user direct filesystem access to it). AddAgentsFile must not
+	// blindly trust the persisted value on every subsequent use.
+	repo := storage.NewFileProjectRepository(t.TempDir())
+	root := t.TempDir()
+	s := NewService(repo, storage.NewFileConfinedFileStore(), root)
+	ctx := context.Background()
+
+	outside := t.TempDir() // deliberately not under root/users/user-a/projects
+	p := &domain.Project{
+		ID:              "escaped-project",
+		OwnerUserID:     "user-a",
+		Name:            "escaped",
+		OutputDirectory: outside,
+		HiddenDirectory: filepath.Join(outside, ".nuimanbot"),
+		Retention:       domain.NeverExpire(),
+		CreatedAt:       time.Now(),
+		UpdatedAt:       time.Now(),
+	}
+	if err := repo.SaveProject(ctx, p); err != nil {
+		t.Fatalf("SaveProject: %v", err)
+	}
+
+	if err := s.AddAgentsFile(ctx, "user-a", p.ID); err == nil {
+		t.Fatal("expected AddAgentsFile to reject a Project whose OutputDirectory is outside the allowed root")
+	}
+	if _, statErr := os.Stat(filepath.Join(outside, "AGENTS.md")); !os.IsNotExist(statErr) {
+		t.Fatal("expected no AGENTS.md to have been written outside the allowed root")
+	}
+}
+
 func TestAddAgentsFile_CrossOwnerIsolation(t *testing.T) {
 	s, root := newTestService(t)
 	ctx := context.Background()

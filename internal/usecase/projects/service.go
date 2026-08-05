@@ -151,6 +151,17 @@ func (s *Service) DeleteProject(ctx context.Context, ownerUserID, projectID stri
 // rather than a direct filepath.Join, per package fsguard's mandate that
 // every Job/Chore/Project filesystem operation use it.
 //
+// Re-validates OutputDirectory against the owner's allowed root on every
+// call (FR-R18 defense in depth, added after a second-reviewer pass on the
+// initial fix flagged that CreateProject's confinement check only ran
+// once, at creation time): FR-022 grants the user direct filesystem access
+// to a Project's OutputDirectory, so its on-disk identity is not
+// permanently trustworthy just because it passed validation when the
+// Project was created — nothing stops an entry along that path from being
+// replaced with a symlink afterward. Job/Chore run execution against a
+// Project's OutputDirectory has this same residual exposure and does not
+// yet re-validate; tracked as a follow-up (see implementation-notes.md).
+//
 // No locking is introduced around this write (spec.md Edge Case #8): the
 // agent (via chat, not built by this Service) and the user (via direct
 // filesystem access, FR-022) may both write AGENTS.md, and last write wins,
@@ -160,6 +171,11 @@ func (s *Service) AddAgentsFile(ctx context.Context, ownerUserID, projectID stri
 	p, err := s.projects.GetProject(ctx, ownerUserID, projectID)
 	if err != nil {
 		return err
+	}
+
+	allowedRoot := filepath.Join(s.allowedRootBase, "users", ownerUserID, "projects")
+	if err := s.files.Confine(allowedRoot, p.OutputDirectory); err != nil {
+		return fmt.Errorf("%w: project OutputDirectory is no longer within the allowed root: %v", domain.ErrInvalidInput, err)
 	}
 
 	exists, err := s.files.FileExists(p.OutputDirectory, "AGENTS.md")
