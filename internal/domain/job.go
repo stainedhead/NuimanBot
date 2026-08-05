@@ -72,13 +72,3 @@ type Job struct {
 	// UpdatedAt is the Job's last-modification time.
 	UpdatedAt time.Time
 }
-
-// IsQueueable reports whether this Job may currently be enqueued for a new
-// run: it must not be pending deletion (Edge Case #3) and must not already
-// have a run in flight.
-func (j *Job) IsQueueable() bool {
-	if j.PendingDeletion {
-		return false
-	}
-	return j.Status != JobStatusRunning && j.Status != JobStatusQueued
-}

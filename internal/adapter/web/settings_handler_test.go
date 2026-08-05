@@ -4,8 +4,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
+
+	"nuimanbot/internal/domain"
 )
 
 // MockSettingsService is a test double for SettingsService.
@@ -154,6 +157,33 @@ func TestHandleSettings_AdminInvalidWorkerPoolSizeRejected(t *testing.T) {
 	}
 }
 
+// FR-R15: a worker_pool_size above domain.MaxWorkerPoolSize must be
+// rejected the same way a non-positive value already is.
+func TestHandleSettings_AdminWorkerPoolSizeAboveUpperBoundRejected(t *testing.T) {
+	server, mock := newSettingsTestServer(t)
+	cookie := sessionCookieFor(server, "admin", "admin")
+	csrfToken := server.auth.GenerateCSRFToken()
+	form := url.Values{}
+	form.Set("worker_pool_size", strconv.Itoa(domain.MaxWorkerPoolSize+1))
+	form.Set("csrf_token", csrfToken)
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/settings", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 (re-render with flash error), got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), strconv.Itoa(domain.MaxWorkerPoolSize)) {
+		t.Fatalf("expected validation error message mentioning the upper bound, got body: %s", w.Body.String())
+	}
+	if len(mock.setPoolSizeCalls) != 0 {
+		t.Fatal("expected no SetWorkerPoolSize call for a value above the upper bound")
+	}
+}
+
 func TestHandleSettings_AdminInvalidCSRFRejected(t *testing.T) {
 	server, mock := newSettingsTestServer(t)
 	cookie := sessionCookieFor(server, "admin", "admin")
@@ -194,6 +224,41 @@ func TestHandleSettings_AdminCanChangeNetworkMode(t *testing.T) {
 	}
 	if got := server.NetworkAccessConfig().Mode; string(got) != "remote" {
 		t.Fatalf("expected network mode to be updated to remote, got %v", got)
+	}
+}
+
+// FR-R11: the Settings page must not present config-file-only network
+// fields (bind address, allowlist) as if they were live-editable via the
+// UI, and must clarify that Network access mode only affects the
+// allowlist-check middleware's behavior — not the actual listener bind
+// address, which is fixed at process start from config.yaml.
+func TestHandleSettings_NetworkFieldsIndicateConfigFileOnly(t *testing.T) {
+	server, _ := newSettingsTestServer(t)
+	server.SetNetworkAccessConfig(domain.NetworkAccessConfig{
+		Mode:        domain.AccessModeLocalhostOnly,
+		BindAddress: "0.0.0.0:8443",
+		Allowlist:   []string{"example.com"},
+	})
+	cookie := sessionCookieFor(server, "admin", "admin")
+	req := httptest.NewRequest(http.MethodGet, "/admin/settings", nil)
+	req.RemoteAddr = "127.0.0.1:54321"
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	server.httpServer.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d, body: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+
+	if !strings.Contains(body, "0.0.0.0:8443") {
+		t.Fatal("expected the bind address value to be displayed on the Settings page")
+	}
+	if !strings.Contains(body, "config file only") && !strings.Contains(body, "config-file-only") {
+		t.Fatal("expected the page to mark bind address/allowlist as config-file-only, not live-editable")
+	}
+	if !strings.Contains(body, "does not change the server's listening address") {
+		t.Fatal("expected an explanatory note that Network access mode does not rebind the actual listener")
 	}
 }
 

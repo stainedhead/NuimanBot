@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -99,11 +100,16 @@ func (s *Server) handleSettingsUpdate(w http.ResponseWriter, r *http.Request) {
 
 	if raw := r.FormValue("worker_pool_size"); raw != "" {
 		n, err := strconv.Atoi(raw)
-		if err != nil || n <= 0 {
+		switch {
+		case err != nil || n <= 0:
 			flashErr = "Worker pool size must be a positive integer."
-		} else if err := s.settingsService.SetWorkerPoolSize(n); err != nil {
-			slog.Error("Failed to update worker pool size", "error", err)
-			flashErr = "Failed to update worker pool size."
+		case n > domain.MaxWorkerPoolSize:
+			flashErr = fmt.Sprintf("Worker pool size must not exceed %d.", domain.MaxWorkerPoolSize)
+		default:
+			if err := s.settingsService.SetWorkerPoolSize(n); err != nil {
+				slog.Error("Failed to update worker pool size", "error", err)
+				flashErr = "Failed to update worker pool size."
+			}
 		}
 	}
 

@@ -15,6 +15,9 @@ func TestWorkerPoolConfig_Validate(t *testing.T) {
 		{"one", 1, false},
 		{"zero", 0, true},
 		{"negative", -1, true},
+		{"at upper bound", MaxWorkerPoolSize, false},
+		{"one above upper bound", MaxWorkerPoolSize + 1, true},
+		{"arbitrarily large (fat-fingered digit)", 999999, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

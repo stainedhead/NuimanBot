@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -11,6 +12,11 @@ import (
 	"nuimanbot/internal/domain"
 	"nuimanbot/internal/infrastructure/fsguard"
 )
+
+// errProjectDeleted is the exact Edge Case #2 error message a Run must be
+// failed with when its source Job/Chore references a Project that has
+// since been deleted.
+var errProjectDeleted = errors.New("referenced Project no longer exists")
 
 // StubExecutor is a functional, non-LLM-invoking Executor: it drives a Run
 // through its real lifecycle (Running -> Completed/Failed), appending log
@@ -25,14 +31,19 @@ import (
 // nothing else in this package depends on StubExecutor specifically, only
 // on the Executor interface.
 type StubExecutor struct {
-	runs    domain.RunRepository
-	baseDir string // root directory for run artifacts: <baseDir>/users/<ownerUserID>/runs/<runID>/
+	runs     domain.RunRepository
+	jobs     domain.JobRepository
+	chores   domain.ChoreRepository
+	projects domain.ProjectRepository
+	baseDir  string // root directory for run artifacts: <baseDir>/users/<ownerUserID>/runs/<runID>/
 }
 
 // NewStubExecutor creates a StubExecutor. baseDir is the root under which
 // each run's RESULTS.md is written, confined via fsguard.ResolveWithin.
-func NewStubExecutor(runs domain.RunRepository, baseDir string) *StubExecutor {
-	return &StubExecutor{runs: runs, baseDir: baseDir}
+// jobs/chores/projects back the FR-R12/Edge Case #2 check: before running,
+// a Project-scoped Job/Chore's referenced Project must still exist.
+func NewStubExecutor(runs domain.RunRepository, jobs domain.JobRepository, chores domain.ChoreRepository, projects domain.ProjectRepository, baseDir string) *StubExecutor {
+	return &StubExecutor{runs: runs, jobs: jobs, chores: chores, projects: projects, baseDir: baseDir}
 }
 
 // Execute implements Executor.
@@ -53,6 +64,11 @@ func (e *StubExecutor) Execute(ctx context.Context, req RunRequest) {
 
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		e.finishFailed(ctx, req, run, ctxErr)
+		return
+	}
+
+	if err := e.checkProjectExists(ctx, req); err != nil {
+		e.finishFailed(ctx, req, run, err)
 		return
 	}
 
@@ -85,6 +101,45 @@ func (e *StubExecutor) finishFailed(ctx context.Context, req RunRequest, run *do
 		slog.Error("stub executor: failed to save failed status", "runID", req.RunID, "error", err)
 	}
 	e.appendLog(ctx, req, fmt.Sprintf("[%s] run failed: %s\n", ended.Format(time.RFC3339), msg))
+}
+
+// checkProjectExists implements FR-R12/Edge Case #2: if req's source Job or
+// Chore runs in the context of a Project, that Project must still exist. A
+// source record that can't itself be resolved (e.g. no Job/Chore repository
+// wired, or the record is otherwise missing) is not this check's concern —
+// it simply proceeds, since that is a distinct failure mode from "the
+// Project was deleted".
+func (e *StubExecutor) checkProjectExists(ctx context.Context, req RunRequest) error {
+	contextType, contextID, ok := e.resolveContext(ctx, req)
+	if !ok || contextType != domain.ContextTypeProject {
+		return nil
+	}
+	if _, err := e.projects.GetProject(ctx, req.OwnerUserID, contextID); err != nil {
+		return errProjectDeleted
+	}
+	return nil
+}
+
+// resolveContext looks up req's source Job or Chore to determine its
+// ContextType/ContextID. ok is false if the source can't be resolved (no
+// repository wired, or the record is missing).
+func (e *StubExecutor) resolveContext(ctx context.Context, req RunRequest) (contextType domain.ContextType, contextID string, ok bool) {
+	switch req.SourceType {
+	case domain.SourceTypeJob:
+		j, err := e.jobs.GetJob(ctx, req.OwnerUserID, req.SourceID)
+		if err != nil {
+			return "", "", false
+		}
+		return j.ContextType, j.ContextID, true
+	case domain.SourceTypeChore:
+		c, err := e.chores.GetChore(ctx, req.OwnerUserID, req.SourceID)
+		if err != nil {
+			return "", "", false
+		}
+		return c.ContextType, c.ContextID, true
+	default:
+		return "", "", false
+	}
 }
 
 // appendLog is a best-effort log append; a logging failure must never mask

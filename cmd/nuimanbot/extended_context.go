@@ -151,7 +151,7 @@ func wireExtendedContextEnvironments(ctx context.Context, app *application, webS
 	}
 
 	runsArtifactRoot := filepath.Join(app.StoragePath, "scheduler", "runs")
-	executor := scheduler.NewStubExecutor(runRepo, runsArtifactRoot)
+	executor := scheduler.NewStubExecutor(runRepo, app.JobRepo, app.ChoreRepo, app.ProjectRepo, runsArtifactRoot)
 
 	poolConfig := app.Config.WorkerPool.ToDomain() // defaults an unset/invalid value to DefaultWorkerPoolSize
 	pool := scheduler.NewWorkerPool(queue, executor, poolConfig.MaxConcurrentWorkers)

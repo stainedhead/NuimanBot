@@ -37,9 +37,24 @@
                         <option value="remote" {{if eq .NetworkMode "remote"}}selected{{end}}>Remote</option>
                     </select>
                     <p class="text-xs text-gray-500 mt-1">
-                        {{if .HasAllowlist}}Allowlist configured: {{.AllowlistCount}} entr{{if eq .AllowlistCount 1}}y{{else}}ies{{end}}
+                        Changes here only affect the allowlist-check that runs against connections already reaching this
+                        process — it does not change the server's listening address. The bind address is fixed at
+                        process start.
+                    </p>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Bind address <span class="text-gray-400">(config file only)</span></label>
+                    <input type="text" value="{{.NetworkBindAddress}}" disabled
+                           class="mt-1 rounded-md border-gray-300 bg-gray-100 text-gray-500 shadow-sm w-64">
+                    <p class="text-xs text-gray-500 mt-1">Not editable here. Set network_access.bind_address in config.yaml and restart to change it.</p>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Allowlist <span class="text-gray-400">(config file only)</span></label>
+                    <p class="text-xs text-gray-500 mt-1">
+                        {{if .HasAllowlist}}{{.AllowlistCount}} entr{{if eq .AllowlistCount 1}}y{{else}}ies{{end}} configured
                         {{if eq .AllowlistCount 0}}(empty — all remote sources are currently denied, fail-closed){{end}}
-                        {{else}}No allowlist configured (all remote sources allowed in Remote mode). Edit config.yaml's network_access.allowlist to restrict.{{end}}
+                        {{else}}No allowlist configured (all remote sources allowed in Remote mode).{{end}}
+                        Not editable here. Edit network_access.allowlist in config.yaml and restart to change it.
                     </p>
                 </div>
                 <button type="submit" class="btn-primary">Save</button>

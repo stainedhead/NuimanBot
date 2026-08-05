@@ -197,6 +197,16 @@ func (s *Service) GetJob(ctx context.Context, ownerUserID, jobID string) (*domai
 // runs should be enqueued for a Job with PendingDeletion set, but enforcing
 // that at enqueue time also belongs to that future sweep/worker
 // integration, not this Service.
+//
+// FR-R14 decision: domain.Job previously had an IsQueueable() guard
+// (PendingDeletion + not-already-running/queued) encoding exactly this
+// invariant, but it had no caller — CreateJob (the only place that
+// enqueues) always builds a brand-new Job, which is queueable by
+// construction. There is no re-run/re-enqueue path anywhere in this
+// codebase today for IsQueueable to guard, so it was removed as dead code
+// rather than wired in speculatively. Reintroduce an equivalent check at
+// whatever point a re-run/retry flow is added, guarding that flow's
+// enqueue call specifically.
 func (s *Service) DeleteJob(ctx context.Context, ownerUserID, jobID string) error {
 	job, err := s.jobs.GetJob(ctx, ownerUserID, jobID)
 	if err != nil {
