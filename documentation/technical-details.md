@@ -1,8 +1,8 @@
 # NuimanBot Technical Documentation
 
-**Version:** 1.2
-**Last Updated:** 2026-08-02
-**Completion Status:** 100% Complete
+**Version:** 1.3
+**Last Updated:** 2026-08-05
+**Completion Status:** Core Platform 100% Complete — Persistent Agent Workspace In Progress
 **CI/CD Status:** ✅ All Pipelines Passing
 
 ---
@@ -23,10 +23,11 @@
 12. [TLS Auto-Generation Architecture](#tls-auto-generation-architecture)
 13. [Web Admin Security Architecture](#web-admin-security-architecture)
 14. [Ingatan Memory Backend Architecture](#ingatan-memory-backend-architecture)
-15. [Configuration](#configuration)
-16. [Testing Strategy](#testing-strategy)
-17. [CI/CD Pipeline](#cicd-pipeline)
-18. [Deployment Architecture](#deployment-architecture)
+15. [Persistent Agent Workspace Architecture](#persistent-agent-workspace-architecture)
+16. [Configuration](#configuration)
+17. [Testing Strategy](#testing-strategy)
+18. [CI/CD Pipeline](#cicd-pipeline)
+19. [Deployment Architecture](#deployment-architecture)
 
 ---
 
@@ -1521,6 +1522,190 @@ func BuildMemoryRepositories(cfg *config.NuimanBotConfig) (
 **Graceful degradation:** `BuildMemoryRepositoriesWithFallback` (called at startup) pings the Ingatan server. On failure, it logs a warning and falls back to built-in storage — chat functionality is never blocked.
 
 **Store prefix validation:** `^[a-z0-9][a-z0-9-]{1,30}$` — validated at factory construction time; returns descriptive error if invalid.
+
+---
+
+## Persistent Agent Workspace Architecture
+
+Delivered 2026-08-05 (`specs/260805-nuimanbot-extend-context-and-ui`). Extends the existing web admin (`internal/adapter/web`, previously scoped to bots/users/confirmations) with six user-facing environments — **Chats, Projects, Jobs, Chores, History, Memories** — plus **Settings** and configurable network access. This section covers the architecture as built; see `documentation/product-summary.md`'s "Persistent Agent Workspace — In Progress" and `documentation/product-details.md`'s FR-025–FR-031 for exactly what is and isn't wired to real agent execution yet, and `documentation/architectural-decision-record.md` (ADR-009 onward) for why each significant decision was made.
+
+### Layering
+
+The feature follows the same Clean Architecture layering as the rest of the codebase; no new layer or pattern was introduced:
+
+```
+internal/domain                    Project, Job, Chore, Run, RetentionPolicy, Schedule,
+                                    NetworkAccessConfig, WorkerPoolConfig, and the
+                                    *Repository interfaces (ProjectRepository, JobRepository,
+                                    ChoreRepository, RunRepository) — zero external deps
+
+internal/usecase/{chats,projects,  Per-environment orchestration services (CRUD, ownership
+  jobs,chores,history,memories,    checks, retention sweep logic). Each depends only on
+  settings}                        domain interfaces plus small local interfaces for
+                                    cross-cutting needs (e.g. jobs.RunEnqueuer,
+                                    chores.ScheduleEvaluator) — never on
+                                    internal/infrastructure/scheduler directly.
+
+internal/adapter/web               *_handler.go per environment + websocket_handler.go +
+                                    templates/. Defines the *Service interfaces each handler
+                                    depends on (ChatsService, ProjectsService, JobsService,
+                                    ChoresService, HistoryService, MemoriesService,
+                                    SettingsService), implemented by the usecase services above.
+
+internal/infrastructure/storage    FileProjectRepository, FileJobRepository,
+                                    FileChoreRepository, FileRunRepository — modeled on the
+                                    existing FileConversationRepository, AtomicFileWriter-backed.
+
+internal/infrastructure/scheduler  Net-new subsystem: Queue (durable FIFO), WorkerPool
+                                    (N concurrent workers), ChoreScheduler (cron polling),
+                                    StubExecutor (placeholder Executor implementation),
+                                    cron.go (robfig/cron/v3 wrapper).
+
+internal/infrastructure/fsguard    Net-new path-confinement helper (ResolveWithin),
+                                    used by every Project/Job/Chore/Run file operation.
+
+cmd/nuimanbot/extended_context.go  DI wiring: constructs the queue/pool/scheduler, wraps
+                                    RunRepository with the WebSocket-publishing decorator,
+                                    and wires all six usecase services into the web Server.
+```
+
+`cmd/nuimanbot/extended_context.go` is the composition root for this feature: `wireExtendedContextEnvironments` builds the worker pool, queue, `ChoreScheduler`, and Projects/Jobs/Chores/History/Memories services and starts the scheduler goroutine; `wireSettingsEnvironment` wires Settings separately because it needs the skill registry, which isn't constructed until later in `main.go`'s `Run()`.
+
+### Domain Entities
+
+All defined in `internal/domain` with zero external dependencies, following the existing entity style (doc-commented, no behavior beyond small helper methods):
+
+| Entity | File | Purpose |
+|---|---|---|
+| `Project` | `project.go` | Durable, directory-scoped workspace: `OutputDirectory` (user-visible), `HiddenDirectory` (agent-managed, never shown), `Retention`. `AgentsFilePath()` computes where `AGENTS.md` would live. |
+| `Job` | `job.go` | One-time task: `Title`, `Description`, `HiddenDirectory` (holds `JOB-DESCRIPTION.md`), `ContextType`/`ContextID` (Chat or Project), `WorkingDirectory`, `Status` (`Queued`/`Running`/`Completed`/`Failed`). `IsQueueable()` guards against enqueueing a pending-deletion or already-running/queued Job. |
+| `Chore` | `chore.go` | Recurring task: same shape as `Job` plus `Schedule`, `ScheduleConfirmed` (false = agent-proposed, pending user approval, never fires), `NextFireTime` (persisted for restart durability). Has no terminal status of its own — stays `Active` until deleted; each firing produces its own `Run`. `IsDue(now)` checks confirmed + not-pending-deletion + `NextFireTime` arrived. |
+| `Run` | `run.go` | A single Job/Chore execution record: `Status` (`RunStatus`, reuses `JobStatus`'s values plus `Skipped`), `StartedAt`/`EndedAt`, `LogPath`, `ResultsPath` (a `RESULTS.md`, not a structured field), `SkipReason`, `Error`, `NotifiedAt` (drives the History badge). `Duration()` and `IsUnviewed()` are the two behavior methods. `RunFilter` supports History's source/date-range/status filtering. |
+| `RetentionPolicy` | `retention.go` | `Period *time.Duration`; `nil` = "Never". `NewRetentionPolicy` treats a non-positive duration as "Never" rather than "expire immediately" — a defensive default against a misconfigured zero value silently deleting everything. `IsExpired(lastActivity, now)` is evaluated from last-activity time, not creation time. |
+| `Schedule` | `schedule.go` | `CronExpression` (authoritative) + optional `Preset` (`hourly`/`daily`/`weekly`/`monthly`, for UI round-tripping only). Cron *grammar* validation is deliberately left to the infrastructure layer (`internal/infrastructure/scheduler`, `robfig/cron/v3`-backed) so the domain package stays free of that third-party dependency — `NewScheduleFromCron` only checks non-emptiness. |
+| `NetworkAccessConfig` | `network_access.go` | `Mode` (`AccessModeLocalhostOnly`/`AccessModeRemote`), `BindAddress`, `Allowlist` (nil = allow all, non-nil-empty = deny all). |
+| `WorkerPoolConfig` | `worker_pool_config.go` | `MaxConcurrentWorkers`; `Validate()` rejects non-positive values (config-layer `ToDomain()` defaults an invalid/unset value to `DefaultWorkerPoolSize` rather than surfacing this error at startup). |
+
+Every entity that is user-owned (`Project`, `Job`, `Chore`, `Run`) carries `OwnerUserID`, matching the codebase's existing `Conversation.UserID` pattern. **The repository interfaces go one step further than `ConversationRepository`'s existing pattern**: `Get`/`Delete` take `ownerUserID` as a parameter and resolve any cross-owner match to `domain.ErrNotFound`, not a distinct permission error — enforcing SC-007's "404, never 403" IDOR posture at the interface level, not left to each handler to remember.
+
+### Persistence: File-Based Repositories
+
+`FileProjectRepository`, `FileJobRepository`, `FileChoreRepository`, and `FileRunRepository` (`internal/infrastructure/storage`) follow the same pattern as the pre-existing `FileConversationRepository`: one JSON record per entity under a per-user directory, written via `storage.AtomicFileWriter` (temp-file + rename, so a crash mid-write never leaves a torn file), with `storage.FileLock` available for cross-process exclusion where needed. No database was introduced for this feature (see ADR-012) — the Reliability NFR ("a server restart must not lose queued Jobs, drop an in-flight run's record, or cause a Chore to miss its next scheduled fire time") is met entirely through this existing atomic-write primitive plus the `Queue`'s own persisted state (below).
+
+All four repositories' record and log paths are resolved through `internal/infrastructure/fsguard.ResolveWithin(baseDir, relPath)` rather than raw `filepath.Join`:
+
+```go
+func ResolveWithin(baseDir, relPath string) (string, error)
+```
+
+`ResolveWithin` rejects absolute `relPath` values, any path that lexically walks above `baseDir` via `..` (after `filepath.Clean`), and NUL bytes; it performs no I/O and does not resolve symlinks (a documented, deliberate scope limit — see the package doc comment). **A real defense-in-depth gap was found and fixed during this feature's own hardening pass**: the four repositories initially built their paths with raw `filepath.Join(userDir, id+".json")`, bypassing `fsguard` entirely despite the package's own doc comment mandating its use. A crafted ID like `"../../../../etc/passwd"` was confirmed, in isolation, to read an arbitrary file off disk. Production web handlers were not exploitable in practice (`net/http`'s `ServeMux` redirects literal `..` segments before routing reaches the handler), so this was defense-in-depth hardening, not a live-exploited bug — but it was a real gap between "the helper is safe" and "every call site uses it." All four repositories now route through `fsguard.ResolveWithin`, with adversarial per-repository tests (traversal strings, a concrete cross-owner plant-and-craft scenario). See ADR-013. **`FileConversationRepository` (pre-existing, backs Chats) has the identical raw-`filepath.Join` shape and was deliberately left unfixed** — flagged as a follow-up, out of scope for this feature.
+
+### Worker Pool & Scheduler Subsystem (`internal/infrastructure/scheduler`)
+
+The largest net-new subsystem in this feature — no existing job queue, worker pool, or cron scheduler existed in the codebase before this pass.
+
+**`Queue`** (`queue.go`) — a durable, in-process FIFO queue of `RunRequest`s. Every `Enqueue`/`Dequeue` persists the full queue state to disk via `AtomicFileWriter` before returning, so a crash immediately after either call cannot lose or duplicate work; `Load()` restores state at startup. Guarded by a plain `sync.Mutex`, not `storage.FileLock` — the queue is owned exclusively by this process's `WorkerPool`, so there is no cross-process writer to coordinate with.
+
+**`WorkerPool`** (`pool.go`) — runs up to `concurrency` goroutines (`SetConcurrency` adjustable live, e.g. from Settings) pulling from `Queue` on a 50ms poll tick. Reducing concurrency below the current active count never pre-empts in-flight work (Edge Case #4) — it simply stops the dispatcher from starting new workers until the count drops. Tracks `running map[string]bool` keyed by Job/Chore `SourceID`, exposed via `IsSourceRunning` — the primitive `ChoreScheduler` uses for skip-if-still-running.
+
+```go
+type Executor interface {
+    Execute(ctx context.Context, req RunRequest)
+}
+```
+
+`Executor` is the seam between the pool (concurrency/FIFO mechanics only) and actual work. **`StubExecutor`** (`stub_executor.go`) is the only implementation wired in today: it drives a `Run` through a real `Queued` → `Running` → `Completed`/`Failed` lifecycle, appends log lines, and writes a placeholder `RESULTS.md` (via `fsguard.ResolveWithin`) explicitly stating no agent/LLM invocation occurred — **it never calls out to the agent**. It exists so the rest of the pipeline (History, notification badges, WebSocket push, worker-pool bookkeeping) has a genuine, demonstrable execution path end-to-end, rather than every run sitting at `Queued` forever. Replacing it with a real agent-invoking `Executor` is a drop-in swap — nothing else in the package depends on `StubExecutor` specifically, only on the `Executor` interface.
+
+**`ChoreScheduler`** (`chore_scheduler.go`) — polls `ChoreRepository.ListAllDue(now)` every 30 seconds (`defaultChoreSchedulerInterval`, `extended_context.go`). For each due Chore: if `WorkerPool.IsSourceRunning(chore.ID)`, records a `Run{Status: Skipped}` with `SkipReason = "skipped — previous run still active"` (FR-035); otherwise creates a `Run{Status: Queued}` and enqueues it. Either way, `NextFireTime` is recomputed and persisted via `robfig/cron/v3`'s `Schedule.Next(time.Time)` (`cron.go`, wrapping the third-party parser — see ADR-010) and saved regardless of fire/skip outcome, so an extended scheduler outage doesn't produce a burst of catch-up fires once it recovers.
+
+### WebSocket Hub (`internal/adapter/web/websocket_handler.go`)
+
+`Hub` tracks connected clients keyed by owning user (`map[string]map[*wsClient]struct{}`) — a `RunEvent` is only ever delivered to WebSocket connections belonging to the Run's owner, mirroring the repository layer's per-user isolation (never a global broadcast). One WebSocket connection exists per browser tab; a user with multiple tabs open gets multiple connections, all fed from the same per-user channel.
+
+```go
+type RunEvent struct {
+    Type            string // "run_status" | "run_log" | "notification_badge"
+    RunID, SourceType, SourceID string
+    Status          string
+    LogChunk        string
+    UnnotifiedCount *int
+}
+```
+
+`web.NotifyingRunRepository` decorates `domain.RunRepository`, so every `SaveRun`/`AppendLog`/`MarkNotified` call also calls `Hub.Publish` after the underlying write succeeds — wired once in `wireExtendedContextEnvironments`, so `StubExecutor` (writer) and Jobs/Chores/History (readers, plus `MarkNotified` writer) all observe the same live stream. Delivery to a slow/stalled client is non-blocking: `clientSendBuffer` (32) bounds each client's outbound queue, and a full buffer causes that client's event to be dropped (logged) rather than blocking `Publish` for other users. `/ws` upgrades only an authenticated session (`getCurrentUser`); `CheckOrigin` enforces same-origin.
+
+**Current limitation, stated plainly**: the transport is real and tested (`-race`, per-user isolation, slow-client handling), but **no browser-side JavaScript subscribes to it yet**. Run status, logs, and the History notification badge all require a manual page refresh to reflect a change, despite the server pushing the event the moment it happens.
+
+### Network Access Configuration & Allowlist Middleware
+
+`internal/config.NetworkAccessConfig` (`network_access_config.go`) loads `network_access.mode`/`bind_address`/`allowlist` from `config.yaml`, defaulting an absent/unrecognized `mode` to `localhost_only` (fail-safe: a config typo must never silently open remote access). `ToDomain()` preserves a nil-vs-empty distinction on `Allowlist` all the way from the YAML decode: an **absent** `allowlist` key decodes to `nil` ("allow all", once `mode: remote` is an explicit admin choice); an **explicitly empty** `allowlist: []` decodes to a non-nil, zero-length slice ("deny all", fail-closed) — proven through the real `mapstructure`/viper decode path, not just at the domain-type level, since this distinction is easy to lose in a naive YAML mapping.
+
+`networkAllowlistMiddleware` (`internal/adapter/web/middleware.go`) wraps the entire `http.ServeMux` — every route, including `/health` and `/static/`, passes through it before reaching any handler, and before authentication. A server whose `NetworkAccessConfig` was never explicitly set (`Mode == ""`) passes every request through unchanged, so existing `httptest`-based callers that never configure it are unaffected; production wiring (`cmd/nuimanbot`) always calls `SetNetworkAccessConfig` with the loaded config's `ToDomain()` value, which itself defaults to `localhost_only`.
+
+**Two operational notes worth calling out explicitly:**
+- Settings' live "network mode" toggle (`handleSettingsUpdate`, `internal/adapter/web/settings_handler.go`) only accepts `worker_pool_size` and `network_mode` from the submitted form — `allowlist` and `bind_address` are render-only in the Settings UI today (config-file-only to change).
+- Changing network mode via Settings updates allowlist *enforcement* for subsequent requests immediately, but it does **not** rebind the running HTTP listener — the bind address is read once at process startup. Switching to `remote` in Settings without also having configured the right `bind_address` in `config.yaml` at startup will not make the server reachable on a new interface.
+
+### Routes
+
+| Route | Handler | Notes |
+|---|---|---|
+| `/admin/chats`, `/admin/chats/*` | `handleChats`, `handleChatSubroutes` | list/create, detail/message/delete/export |
+| `/admin/projects`, `/admin/projects/*` | `handleProjects`, `handleProjectSubroutes` | list/create, detail/delete/add-agents-file |
+| `/admin/jobs`, `/admin/jobs/*` | `handleJobs`, `handleJobSubroutes` | list/create, detail/delete |
+| `/admin/chores`, `/admin/chores/*` | `handleChores`, `handleChoreSubroutes` | list/create, detail/delete/confirm-schedule |
+| `/admin/history`, `/admin/history/*` | `handleHistory`, `handleHistorySubroutes` | list/filter, detail/mark-viewed |
+| `/admin/memories`, `/admin/memories/*` | `handleMemories`, `handleMemorySubroutes` | list/search, detail |
+| `/admin/settings` | `handleSettings` | GET renders, POST (admin-only) applies worker-pool-size/network-mode changes |
+| `/ws` | `handleWebSocket` | WebSocket upgrade; authenticated session required |
+
+All `/admin/...` routes are wrapped in the existing `userHandler`/`requireRole`/`requirePasswordChange` middleware chain — no parallel auth system was introduced. `ownerUserID` scoping throughout this feature is the authenticated session's `Username` (a stable string identifier), not `session.ID` (a per-session token) and not a UUID — the same convention `ChatsService`'s interface doc comment establishes and every other environment follows. One consequence worth noting: renaming a username would orphan that user's existing Chats/Projects/Jobs/Chores/Runs from future lookups under the current scoping.
+
+### Data Flow: Job Lifecycle (Create → Enqueue → Execute → History)
+
+```
+1. POST /admin/jobs (Title, Description, ContextType=project, ContextID=<projectID>)
+   │
+   ├─> JobsService.CreateJob
+   │     ├─ Resolves the Project's OutputDirectory via ProjectDirectoryLookup
+   │     │   (projectDirectoryLookupAdapter -> domain.ProjectRepository.GetProject)
+   │     ├─ Persists Job record (FileJobRepository, AtomicFileWriter)
+   │     ├─ Writes JOB-DESCRIPTION.md into the Job's HiddenDirectory (fsguard-confined)
+   │     ├─ Creates a Run{Status: Queued} (FileRunRepository, via NotifyingRunRepository
+   │     │   -> also Hub.Publish("run_status", Queued) to the owner's WebSocket connections)
+   │     └─ Enqueues RunRequest{RunID, OwnerUserID, SourceType: Job, SourceID}
+   │         onto the shared Queue (jobRunEnqueuerAdapter -> WorkerPool.Enqueue
+   │         -> Queue.Enqueue, persisted to <storagePath>/scheduler/queue.json
+   │         before the HTTP response is sent)
+   │
+2. WorkerPool.dispatchLoop (background goroutine, 50ms poll)
+   │
+   ├─> tryDispatch: while activeCount < concurrency, Queue.Dequeue() (FIFO,
+   │   persisted state updated) and spawn a goroutine running the request
+   │
+3. StubExecutor.Execute(ctx, req)   [placeholder — see Known Limitations]
+   │
+   ├─ RunRepository.GetRun -> Run.Status = Running, StartedAt = now
+   │   -> SaveRun (NotifyingRunRepository -> Hub.Publish("run_status", Running))
+   ├─ AppendLog("run started...") -> Hub.Publish("run_log", ...)
+   ├─ writeResults(): fsguard.ResolveWithin(runDir, "RESULTS.md"), writes a
+   │   placeholder results file stating no agent/LLM call occurred
+   └─ Run.Status = Completed, EndedAt = now, ResultsPath set
+       -> SaveRun (Hub.Publish("run_status", Completed))
+       -> AppendLog("run completed...") (Hub.Publish("run_log", ...))
+   │
+4. GET /admin/history
+   │
+   └─> HistoryService.ListRuns(ownerUserID, filter) — lists the Run with its
+       final status, timing (Run.Duration()), and ResultsPath; UnviewedCount
+       reflects it until MarkViewed clears the notification badge
+```
+
+Every `SaveRun`/`AppendLog`/`MarkNotified` call along this path also reaches the owning user's connected WebSocket clients in real time — but, per the WebSocket Hub section above, no browser-side script consumes those events yet, so a human watching History still needs to refresh the page to see the transition.
+
+### Known Limitations (Cross-Reference)
+
+This subsystem's pipeline (queueing, concurrency, cron evaluation, restart-durable persistence, per-user WebSocket transport, path confinement, and IDOR-safe repository scoping) is implemented and tested end-to-end. What is **not** yet real: agent-invoking execution (`StubExecutor` is a placeholder), agent replies in the web Chats UI, the per-Job/Chore/Run/Memories chat interfaces, an automated retention sweep, and a browser-side WebSocket consumer. See `documentation/product-summary.md`'s "Persistent Agent Workspace — In Progress" for the full, itemized list.
 
 ---
 

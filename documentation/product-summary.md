@@ -1,8 +1,8 @@
 # NuimanBot Product Summary
 
-**Version:** 1.2
-**Last Updated:** 2026-08-02
-**Status:** Production Ready (100% Complete)
+**Version:** 1.3
+**Last Updated:** 2026-08-05
+**Status:** Production Ready (Core Platform, 100% Complete) — Persistent Agent Workspace In Progress
 **CI/CD Status:** ✅ All Pipelines Passing
 
 ---
@@ -11,9 +11,11 @@
 
 NuimanBot is a **security-hardened personal AI agent** built in Go, designed as a secure alternative to existing AI agent frameworks. The project addresses critical security vulnerabilities found in similar platforms (26% of community tools contain security issues including credential leakage, prompt injection enabling RCE, and supply chain attacks) while providing enterprise-grade functionality.
 
+Beyond the core chat gateways, NuimanBot is growing into a **persistent, multi-user agent workspace**: a web UI (Chats, Projects, Jobs, Chores, History, Memories, plus Settings) that gives each user durable conversation history, a directory-scoped Project the agent can read/write against, a FIFO job queue with a configurable worker pool for one-off and cron-scheduled agent tasks, and a browsable view over the agent's long-term memory — all isolated per user, with configurable network exposure (localhost-only or remote with an IP/hostname allowlist). This workspace is **functional but partial** as of this update; see "Persistent Agent Workspace — In Progress" under [Development Status](#development-status) for exactly what runs end-to-end today versus what is still a placeholder or unwired.
+
 ### Current Status
 
-**Production-Ready** - 100% Complete
+**Production-Ready** - Core Platform 100% Complete
 
 - ✅ Core functionality complete
 - ✅ Comprehensive security hardening (TLS, JWT, rate limiting, RBAC, tool-output injection filtering, side-effecting action confirmation, SSRF hardening, MCP trust classification)
@@ -24,6 +26,7 @@ NuimanBot is a **security-hardened personal AI agent** built in Go, designed as 
 - ✅ Full observability stack
 - ✅ CI/CD automation with security scanning
 - ✅ Integration test suite (tagged //go:build integration)
+- 🔶 Persistent multi-user agent workspace (Chats, Projects, Jobs, Chores, History, Memories, Settings) — new web UI, real queueing/scheduling/persistence pipeline; agent execution is currently a placeholder (see below)
 
 ---
 
@@ -97,6 +100,23 @@ All gateways support concurrent operation with unified conversation history.
 - Token window management (provider-aware limits: 200k Claude, 128k GPT-4)
 - Conversation export (JSON, Markdown formats)
 - User preferences (model selection, temperature, context windows)
+
+### 6. Persistent Multi-User Agent Workspace (Web UI) — New, In Progress
+
+A web-based workspace, built on the existing admin UI (`internal/adapter/web`), extending it with six user-facing environments plus Settings and configurable network access:
+
+- **Chats**: lightweight, directory-less conversations, auto-named from the first message, with configurable retention (including "Never") and JSON/Markdown transcript export
+- **Projects**: durable, directory-scoped workspaces with a real output directory the user can also edit directly on disk, an optional agent-steering `AGENTS.md`, and a hidden per-Project directory for agent-managed context
+- **Jobs**: one-time agent tasks (Title + Description, persisted as `JOB-DESCRIPTION.md`) queued in FIFO order and executed by a shared, configurable worker pool
+- **Chores**: recurring, cron-scheduled agent tasks (presets or raw cron expressions) with skip-if-still-running semantics and agent-proposed-schedule confirmation
+- **History**: a per-user list of every Job/Chore run with status, timing, logs, filtering, and an unviewed-run notification badge
+- **Memories**: a read-only browse/search view over the existing self-organizing memory store (`internal/domain/memoryv2`)
+- **Settings**: system-wide worker-pool size, network access mode/allowlist, and per-user default retention windows for Chats/Projects/History
+- **Network access**: the web server can run localhost-only (default) or remote, with an optional IP/hostname allowlist enforced pre-authentication
+
+Every resource (Chat/Project/Job/Chore/Run) is strictly isolated per owning user — cross-user access by ID returns 404, never 403, so a second user's resource is never disclosed to exist, including to admins.
+
+**This is new and only partially wired end-to-end.** See "Persistent Agent Workspace — In Progress" under [Development Status](#development-status) for the specific, honest list of what works today versus what remains a placeholder.
 
 ---
 
@@ -376,11 +396,34 @@ MCP tools are loaded at startup from `mcp.json`. Servers that fail to initialize
 - ✅ **Security Hardening (Parts A-G, 2026-08-02)**: tool-output injection filtering (`OutputValidator`); prompt-boundary guardrails (`<tool_output>` delimiters + non-overridable system-prompt guardrail); side-effecting action confirmation flow (file-backed `ConfirmationStore`, plain-text yes/no + Slack/Telegram buttons + web admin modal + REST endpoints); tool RBAC correction (explicit `ToolPermissions` map, action-aware `github` checks, CI guard); SSRF hardening (IP-resolution validation + redirect revalidation with pinned-IP dialing); MCP trust classification (`read_only`/`write`/`unknown`); documentation/code parity
 - ✅ **FR-001/FR-002 — RBAC bypass in live chat fixed (P0), reconciled with the Buzz gateway's independent cross-platform RBAC fix (2026-08-04)**: the live chat tool-calling loop calls `ToolExecutionService.ExecuteWithUser`, not `Execute`, at both of `chat.Service`'s tool-execution sites, so full role-based RBAC — including the action-aware `github` split and MCP trust classification — is enforced end-to-end in live conversations, across every platform (CLI, Telegram, Slack, Buzz). Each incoming message resolves a persisted `domain.User` via `UserService` (`GetUserByPlatformUID`/`CreateUser`), defaulting new non-CLI identities to `RoleGuest` and CLI to `RoleAdmin`; `ListTools` filters the tool list by resolved role. `ExecuteWithUser`/`ListTools` carry `conversationID` so Part C's confirmation gate composes with RBAC, and confirmation-reply detection is keyed on the resolved user's persisted ID (not raw platform UID) to stay consistent with what `ExecuteWithUser` stores. Regression tests: `internal/usecase/chat/rbac_test.go`'s `TestProcessMessage_RBACEnforcedAcrossPlatforms` and `TestProcessMessage_RBAC_NonAdminCannotInvokeGitHubPRMerge`.
 
+### Persistent Agent Workspace (Chats, Projects, Jobs, Chores, History, Memories) — In Progress
+
+Delivered 2026-08-05 (`specs/260805-nuimanbot-extend-context-and-ui`, not yet archived). Domain entities, file-based repositories (fsguard-confined), the worker-pool/scheduler subsystem, all six web environments plus Settings, network-access middleware, and a per-user WebSocket push transport are implemented and tested (including `-race` and adversarial path-traversal/cross-owner-IDOR tests). **What is real and working end-to-end:**
+
+- Creating, listing, retaining (including "Never"), and deleting Chats, Projects, Jobs, and Chores, all strictly per-user isolated
+- The Job/Chore FIFO queue and configurable N-worker pool, restart-durable (queue state and in-flight run records survive a process restart)
+- Chore cron scheduling (`robfig/cron/v3`), including skip-if-still-running and unconfirmed-schedule-never-fires semantics
+- History listing/filtering and the unviewed-run notification badge
+- Read-only Memories browsing over the existing memory store
+- The WebSocket transport itself (handshake, per-user channel isolation, slow-client handling) — verified under `-race`
+
+**What is not yet real, by design of this pass — do not oversell these:**
+
+- **Jobs and Chores do not invoke the agent.** Execution is driven by a `StubExecutor` (`internal/infrastructure/scheduler`) that exercises the full Queued → Running → Completed/Failed lifecycle and writes a placeholder `RESULTS.md` stating no LLM call occurred. The pipeline is genuine; the work product is not.
+- **The web Chats environment does not generate agent replies.** Sending a message from the Chats UI persists it to the conversation (`ChatsService.AppendUserMessage`) and nothing calls the LLM — there is no assistant turn in the web UI today. (CLI/Telegram/Slack/Buzz gateways are unaffected; this is specific to the new web Chats environment.)
+- **The per-Job, per-Chore, per-Run, and Memories "chat with the agent" interfaces (FR-029/FR-037/FR-042/FR-047 in the feature spec) are not built** in this pass — explicitly deferred in the handler code, not merely undocumented.
+- **Retention is configured but not automatically enforced.** `chats.Service.SweepExpired` and the equivalent Project/History sweep logic exist but nothing schedules or calls them; a "Never"-vs-"90 days" retention setting has no operational effect yet.
+- **No browser-side JavaScript consumes the WebSocket feed yet.** Run status/log/notification-badge updates require a manual page refresh even though the server-side push transport is real and tested.
+- **Settings' network-access controls are partially wired.** Worker pool size and access mode (localhost-only/remote) can be changed live from the Settings UI; allowlist entries and the remote bind address are config-file-only (not editable from Settings), and switching mode to "remote" via Settings updates allowlist *enforcement* but does not rebind the running listener to a new address.
+- `dashboard.html`, `bots.html`, `users.html`, and `confirmations.html` (pre-existing admin pages) do not yet use the new left-nav sidebar used by the six new environments.
+
+See `documentation/technical-details.md`'s "Persistent Agent Workspace" section for architecture and `documentation/architectural-decision-record.md` (ADR-009 onward) for the reasoning behind these scope cuts.
+
 ---
 
 ## Next Steps
 
-The project is **100% complete**. All planned phases have been implemented and verified. Key achievements:
+The core platform is **100% complete**; the persistent agent workspace above is functional but partial. Key achievements:
 
 1. ✅ All core functionality implemented and tested
 2. ✅ Security hardening complete (TLS, JWT, RBAC, rate limiting, default-credential detection)
@@ -404,6 +447,7 @@ Future optional enhancements (Docker/Kubernetes packaging, linting cleanup) can 
 | `support_docs/install-and-setup.md` | Installation and system configuration |
 | `support_docs/cli-admin-guide.md` | CLI administration - user management and permissions |
 | `support_docs/skills-guide.md` | **Agent Skills user guide** - creating and using skills |
+| `support_docs/web-workspace-guide.md` | **Web workspace user guide** - using Chats, Projects, Jobs, Chores, History, and Memories |
 | `documentation/product-summary.md` | This document - executive overview |
 | `documentation/product-details.md` | Detailed requirements, workflows, constraints |
 | `documentation/technical-details.md` | Architecture, system design, API documentation |
