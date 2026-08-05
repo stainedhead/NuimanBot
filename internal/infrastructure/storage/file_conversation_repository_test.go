@@ -2,11 +2,113 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"nuimanbot/internal/domain"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestFileConversationRepository_SaveConversation_RejectsPathTraversalID(t *testing.T) {
+	// FR-R13: unlike the four newer repositories (FileJobRepository et
+	// al.), this repository built convDir/messagesFile paths via a direct
+	// filepath.Join on the caller-supplied conversation ID, with no
+	// fsguard.ResolveWithin confinement. A conv.ID containing ".." could
+	// walk outside <basePath>/users/<userID>/conversations entirely.
+	tmpDir := t.TempDir()
+	basePath := filepath.Join(tmpDir, "data")
+	repo := NewFileConversationRepository(basePath)
+
+	conv := &domain.Conversation{
+		ID:       filepath.Join("..", "..", "..", "escaped"),
+		UserID:   "user-456",
+		Platform: domain.PlatformCLI,
+		Messages: []domain.StoredMessage{
+			{Role: "user", Content: "hello", Timestamp: time.Now()},
+		},
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+
+	err := repo.SaveConversation(context.Background(), conv)
+	if err == nil {
+		t.Fatal("expected an error for a path-traversal conversation ID, not a successful escaped write")
+	}
+	if _, statErr := os.Stat(filepath.Join(tmpDir, "escaped")); !os.IsNotExist(statErr) {
+		t.Fatal("expected no directory to have been created outside basePath via the traversal ID")
+	}
+}
+
+func TestFileConversationRepository_SaveConversation_RejectsAbsolutePathID(t *testing.T) {
+	tmpDir := t.TempDir()
+	basePath := filepath.Join(tmpDir, "data")
+	repo := NewFileConversationRepository(basePath)
+
+	conv := &domain.Conversation{
+		ID:        filepath.Join(tmpDir, "escaped-absolute"),
+		UserID:    "user-456",
+		Platform:  domain.PlatformCLI,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+
+	err := repo.SaveConversation(context.Background(), conv)
+	if err == nil {
+		t.Fatal("expected an error for an absolute-path conversation ID")
+	}
+	if _, statErr := os.Stat(filepath.Join(tmpDir, "escaped-absolute")); !os.IsNotExist(statErr) {
+		t.Fatal("expected no directory to have been created outside basePath via the absolute-path ID")
+	}
+}
+
+func TestFileConversationRepository_WellFormedIDsStillWork(t *testing.T) {
+	// Acceptance criteria: behavior for well-formed IDs is unchanged.
+	tmpDir := t.TempDir()
+	basePath := filepath.Join(tmpDir, "data")
+	repo := NewFileConversationRepository(basePath)
+
+	conv := &domain.Conversation{
+		ID:       "conv-well-formed",
+		UserID:   "user-456",
+		Platform: domain.PlatformCLI,
+		Messages: []domain.StoredMessage{
+			{Role: "user", Content: "hi", Timestamp: time.Now()},
+		},
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	ctx := context.Background()
+	if err := repo.SaveConversation(ctx, conv); err != nil {
+		t.Fatalf("SaveConversation: %v", err)
+	}
+
+	got, err := repo.GetConversation(ctx, "conv-well-formed")
+	if err != nil {
+		t.Fatalf("GetConversation: %v", err)
+	}
+	if len(got.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(got.Messages))
+	}
+
+	if err := repo.AppendMessage(ctx, "conv-well-formed", domain.StoredMessage{Role: "assistant", Content: "hi back", Timestamp: time.Now()}); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+	count, err := repo.CountMessages(ctx, "conv-well-formed")
+	if err != nil {
+		t.Fatalf("CountMessages: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 messages, got %d", count)
+	}
+
+	if err := repo.DeleteConversation(ctx, "conv-well-formed"); err != nil {
+		t.Fatalf("DeleteConversation: %v", err)
+	}
+	if _, err := repo.GetConversation(ctx, "conv-well-formed"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound after delete, got %v", err)
+	}
+}
 
 func TestFileConversationRepository_SaveConversation(t *testing.T) {
 	tmpDir := t.TempDir()

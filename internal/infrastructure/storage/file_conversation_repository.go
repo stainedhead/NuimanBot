@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"nuimanbot/internal/domain"
+	"nuimanbot/internal/infrastructure/fsguard"
 	"os"
 	"path/filepath"
 	"sync"
@@ -51,24 +52,48 @@ func (r *FileConversationRepository) getUserConvDir(userID string) string {
 	return filepath.Join(r.basePath, "users", userID, "conversations")
 }
 
-// getConvDir returns the path to a specific conversation directory
-func (r *FileConversationRepository) getConvDir(userID, convID string) string {
-	return filepath.Join(r.getUserConvDir(userID), convID)
+// getConvDir resolves convID's on-disk directory, confined to userID's own
+// conversations directory via fsguard.ResolveWithin (FR-R13, matching
+// FileJobRepository.recordPath's pattern — see that method's doc comment
+// for the full rationale: an unconfined filepath.Join here would let a
+// crafted convID containing ".." walk outside the confining directory
+// entirely). Any resolution failure is mapped to domain.ErrNotFound
+// uniformly, including on writes, so this never discloses anything beyond
+// "not accessible to you".
+func (r *FileConversationRepository) getConvDir(userID, convID string) (string, error) {
+	dir, err := fsguard.ResolveWithin(r.getUserConvDir(userID), convID)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", domain.ErrNotFound, err)
+	}
+	return dir, nil
 }
 
-// getMessagesFile returns the path to a conversation's messages.jsonl file
-func (r *FileConversationRepository) getMessagesFile(userID, convID string) string {
-	return filepath.Join(r.getConvDir(userID, convID), "messages.jsonl")
+// getMessagesFile resolves the path to a conversation's messages.jsonl
+// file, confined via getConvDir.
+func (r *FileConversationRepository) getMessagesFile(userID, convID string) (string, error) {
+	dir, err := r.getConvDir(userID, convID)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "messages.jsonl"), nil
 }
 
-// getIndexFile returns the path to a user's conversation index file
-func (r *FileConversationRepository) getIndexFile(userID string) string {
-	return filepath.Join(r.getUserConvDir(userID), "index.json")
+// getIndexFile resolves the path to a user's conversation index file,
+// likewise confined via fsguard.ResolveWithin.
+func (r *FileConversationRepository) getIndexFile(userID string) (string, error) {
+	path, err := fsguard.ResolveWithin(r.getUserConvDir(userID), "index.json")
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", domain.ErrNotFound, err)
+	}
+	return path, nil
 }
 
 // loadIndex loads the conversation index for a user
 func (r *FileConversationRepository) loadIndex(userID string) (*ConversationIndex, error) {
-	indexPath := r.getIndexFile(userID)
+	indexPath, err := r.getIndexFile(userID)
+	if err != nil {
+		return nil, err
+	}
 
 	// Check if file exists
 	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
@@ -101,7 +126,10 @@ func (r *FileConversationRepository) loadIndex(userID string) (*ConversationInde
 
 // saveIndex saves the conversation index for a user
 func (r *FileConversationRepository) saveIndex(userID string, index *ConversationIndex) error {
-	indexPath := r.getIndexFile(userID)
+	indexPath, err := r.getIndexFile(userID)
+	if err != nil {
+		return err
+	}
 
 	// Ensure directory exists
 	if err := os.MkdirAll(filepath.Dir(indexPath), 0755); err != nil {
@@ -127,7 +155,10 @@ func (r *FileConversationRepository) saveIndex(userID string, index *Conversatio
 
 // loadMessages loads all messages from a conversation's JSONL file
 func (r *FileConversationRepository) loadMessages(userID, convID string) ([]domain.StoredMessage, error) {
-	messagesPath := r.getMessagesFile(userID, convID)
+	messagesPath, err := r.getMessagesFile(userID, convID)
+	if err != nil {
+		return nil, err
+	}
 
 	// Check if file exists
 	if _, err := os.Stat(messagesPath); os.IsNotExist(err) {
@@ -166,13 +197,19 @@ func (r *FileConversationRepository) SaveConversation(ctx context.Context, conv 
 	defer r.mu.Unlock()
 
 	// Ensure conversation directory exists
-	convDir := r.getConvDir(conv.UserID, conv.ID)
+	convDir, err := r.getConvDir(conv.UserID, conv.ID)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(convDir, 0755); err != nil {
 		return fmt.Errorf("failed to create conversation directory: %w", err)
 	}
 
 	// Write messages to JSONL file
-	messagesPath := r.getMessagesFile(conv.UserID, conv.ID)
+	messagesPath, err := r.getMessagesFile(conv.UserID, conv.ID)
+	if err != nil {
+		return err
+	}
 	file, err := os.Create(messagesPath)
 	if err != nil {
 		return fmt.Errorf("failed to create messages file: %w", err)
@@ -322,7 +359,10 @@ func (r *FileConversationRepository) DeleteConversation(ctx context.Context, con
 	}
 
 	// Delete conversation directory
-	convDir := r.getConvDir(userID, convID)
+	convDir, err := r.getConvDir(userID, convID)
+	if err != nil {
+		return err
+	}
 	if err := os.RemoveAll(convDir); err != nil {
 		return fmt.Errorf("failed to delete conversation directory: %w", err)
 	}
@@ -348,7 +388,10 @@ func (r *FileConversationRepository) AppendMessage(ctx context.Context, convID s
 	}
 
 	// Append message to JSONL file
-	messagesPath := r.getMessagesFile(userID, convID)
+	messagesPath, err := r.getMessagesFile(userID, convID)
+	if err != nil {
+		return err
+	}
 	file, err := os.OpenFile(messagesPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return fmt.Errorf("failed to open messages file: %w", err)
