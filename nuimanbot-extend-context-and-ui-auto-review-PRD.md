@@ -12,7 +12,9 @@ That discipline does not extend evenly to every subsystem. Two Reliability/Secur
 
 The deliberate scope decision to ship `StubExecutor` (no LLM/agent invocation) instead of wiring real agent execution is sound engineering judgment for a first pass and is not re-litigated here. The finding that overlaps with it — Chats persisting messages but never invoking the LLM at all — is treated separately below because it defeats the primary purpose of the Chats environment specifically (a user who sends a message never gets a reply, full stop), distinct from Jobs/Chores having a placeholder execution backend.
 
-**Findings: 17 total — 4 P0, 8 P1, 5 P2.**
+Two additional findings, independently verified against the code directly (not carried over from the Step 4 known-gaps list), round out this pass. First, a P0: `internal/usecase/projects/service.go`'s `CreateProject` accepts a user-supplied `outputDirectory` with no root confinement — only `filepath.Abs(filepath.Clean(...))` — and the route creating it (`/admin/projects`) is gated by the lowest role (`RoleUser`), not admin-only. Any authenticated non-admin user can therefore point a Project at the application's own `data/` directory or another user's tree, and the app will `MkdirAll` and later write `AGENTS.md` into it — `fsguard`'s confinement only applies to paths *relative to* this already-unconfined root, so the hardening built on top of it doesn't help. This breaks FR-010 and the Security NFR exactly as directly as the other P0s. Second, a P1: the History notification badge (FR-044) that `nav.html` renders on every page is only ever populated by `history_handler.go`'s own page renders — `BaseData.UnviewedRunCount` defaults to zero everywhere else (`server.go:321-325,337`, with a comment acknowledging the gap) — so a user must already be on the History page to see the count, defeating the badge's purpose as an ambient, cross-page indicator (FR-030/FR-038 are effectively unmet outside that one page as a result).
+
+**Findings: 19 total — 5 P0, 9 P1, 5 P2.**
 
 ---
 
@@ -65,6 +67,19 @@ The deliberate scope decision to ship `StubExecutor` (no LLM/agent invocation) i
 **Acceptance criteria:**
 - Either implement a minimal per-item chat interface for at least one of the four (Job, Chore, Run, Memory) grounded in that item's own context (description/log/results/memory content) as a template the other three can follow, or
 - If deferred to a follow-up pass, document that decision explicitly in `implementation-notes.md`'s "Deviations from Plan" (currently silent on this) and ensure each detail page's UI clearly communicates "chat not yet available" rather than omitting the affordance with no explanation.
+
+---
+
+### FR-R18: Project output directory is unconfined — reachable, non-admin-gated arbitrary directory creation/write
+
+**Finding:** `internal/usecase/projects/service.go`'s `CreateProject` (~lines 51-73) accepts a user-supplied `outputDirectory` and only applies `filepath.Abs(filepath.Clean(outputDirectory))` before `os.MkdirAll(absOutput, 0755)` — no containment to any allowed root. `/admin/projects` is registered with `userHandler` (`server.go:188,198`), which resolves to `s.requireRole(domain.RoleUser)` — the lowest role, not admin-gated, so any authenticated user can reach this. Once created, `AddAgentsFile` and agent-chat-driven edits write into that directory via `fsguard.ResolveWithin(p.OutputDirectory, ...)` — but `fsguard` only confines paths *relative to* `OutputDirectory`; it does nothing to constrain what `OutputDirectory` itself may be, so the confinement it provides sits on an unconfined foundation.
+
+**Why it matters:** a non-admin user can create a Project rooted at, e.g., the app's own `data/` directory (where `users.json`/`bots.json`/config live) or another user's Project/hidden directory, and the app will create it and later write into it. This directly breaks FR-010 ("full isolation, including from admins") and the Security NFR's sandboxing guarantee, which is only meaningful once the confined root is itself trustworthy — exactly the class of gap the rest of this review found the branch otherwise avoided everywhere else (IDOR, allowlist, WebSocket auth, CSRF all check out clean).
+
+**Acceptance criteria:**
+- `CreateProject` validates `outputDirectory` against a configured allowed root (e.g. a per-deployment "projects root," or confinement under `<storagePath>/users/<ownerUserID>/projects/`) using `fsguard.ResolveWithin` (or equivalent) on the directory itself, not only on paths relative to it.
+- A request pointing `outputDirectory` at the app's `data/` directory, or at another user's directory (via relative traversal or an absolute path outside the allowed root), is rejected with a clear validation error.
+- Tests cover both the relative-traversal-escape and absolute-path-outside-root cases and assert rejection; a positive-path test confirms legitimate in-root paths still work.
 
 ---
 
@@ -173,6 +188,19 @@ By contrast, `internal/domain/{project,job,chore,run,retention,schedule}.go` hav
 
 ---
 
+### FR-R19: Completion notification badge is invisible outside the History page
+
+**Finding:** `BaseData.UnviewedRunCount` (`server.go:321-325`) defaults to zero via `NewBaseData` (`server.go:337`), with a comment acknowledging the scope: "pages without one simply leave it at zero rather than requiring every handler to know about History." The only call sites for `withUnviewedRunCount`, which populates that field, are `history_handler.go:90` and `:147` — both inside History's own page renders. `nav.html:67` renders the badge on every page (since `nav` is included everywhere the new templates are used), but the value is only ever non-zero when the user is already viewing History.
+
+**Why it matters:** FR-044 describes an ambient nav-item badge whose entire purpose is to be visible from anywhere, so a user doesn't need to already suspect a run finished before checking. As implemented, a user must navigate to History — the one place they'd already know the answer — before the count populates. Combined with FR-R10 (no WebSocket consumer), this means FR-030 and FR-038 ("user receives an in-app notification when a Job/Chore run completes") are effectively unmet everywhere except that one page: the underlying computation (`UnviewedCount`) is correct, only the rendering plumbing is scoped too narrowly to satisfy what the FRs describe.
+
+**Acceptance criteria:**
+- `UnviewedRunCount` is populated for every authenticated page render (e.g. centralized in whatever shared "build BaseData for an authenticated request" path exists, or composed into every environment handler), not only History's.
+- Navigating to Dashboard, Chats, Jobs, Projects, etc. after a run completes shows the badge without visiting History first.
+- A test renders a non-History page after an unviewed completed run exists and asserts the badge count appears in the response.
+
+---
+
 ## P2 Findings (medium — polish/consistency)
 
 ### FR-R13: `FileConversationRepository` doesn't route paths through `fsguard`, unlike the four new repositories
@@ -233,6 +261,7 @@ By contrast, `internal/domain/{project,job,chore,run,retention,schedule}.go` hav
 
 ## Positive Observations
 
+- **All spec-mandated quality gates pass cleanly**, independently re-run for this review: `go vet ./...` is silent, `golangci-lint run` reports 0 issues, `go test ./...` is fully green, and a targeted `go test -race ./internal/infrastructure/scheduler/... ./internal/adapter/web/...` — the two packages with the branch's actual concurrency (worker pool, FIFO queue, WebSocket hub) — shows no detected races. This satisfies the spec's own Success Criteria checklist in full.
 - **IDOR protection is comprehensive and consistently tested.** Every one of the six new environments has dedicated `TestHandle*_CrossOwnerReturns404` tests (13 total across Chats, Chores, History, Memories, Jobs, Projects) — a genuinely strong, systematic pattern, not incidental coverage. The underlying mechanism (`ownerUserID` passed explicitly to every repository method, cross-owner lookups resolving to `ErrNotFound` at the data-access layer per `implementation-notes.md`'s documented design choice) is sound and matches Edge Case #10's requirement that existence never be disclosed across owners, including to admins.
 - **Network-access allowlist fail-closed/fail-open semantics (Edge Case #11) are correctly implemented** at both `internal/config/network_access_config.go` (decode-path nil-vs-empty preservation, verified via its own decode-path test) and `internal/domain/network_access.go`'s `IsAllowed` (nil allowlist → allow all; non-nil empty → deny all). The middleware enforces this pre-auth as required by the Security NFR.
 - **WebSocket hub is well-engineered on the server side**: auth-checked on upgrade, `Origin` validated against `r.Host` (CSRF-equivalent protection), strict per-user channel isolation keyed by `ownerUserID`, bounded per-client send buffers with drop-not-block semantics for slow clients, and proper ping/pong keepalive. The one gap (FR-R10) is entirely on the missing client-side consumer, not this implementation.
@@ -249,6 +278,7 @@ By contrast, `internal/domain/{project,job,chore,run,retention,schedule}.go` hav
 | FR-R2 | No restart-recovery for a Run dequeued at crash time | P0 |
 | FR-R3 | Retention sweep implemented but never scheduled/invoked | P0 |
 | FR-R4 | Per-item chat interfaces (FR-029/037/042/047) deferred entirely | P0 |
+| FR-R18 | Project output directory unconfined — reachable, non-admin arbitrary directory write | P0 |
 | FR-R5 | Usecase layer imports `infrastructure/fsguard` + raw `os` I/O (Clean Architecture violation) | P1 |
 | FR-R6 | `fsguard.ResolveWithin` has no symlink-escape mitigation at any call site | P1 |
 | FR-R7 | Memories `ownerUserID→ConversationID` mapping is a self-flagged unverified assumption | P1 |
@@ -257,10 +287,11 @@ By contrast, `internal/domain/{project,job,chore,run,retention,schedule}.go` hav
 | FR-R10 | WebSocket hub has no browser-side JS consumer | P1 |
 | FR-R11 | Settings network-access controls only partially wireable from the UI | P1 |
 | FR-R12 | Job/Chore run against a deleted Project doesn't fail per Edge Case #2 | P1 |
+| FR-R19 | Notification badge (FR-044) invisible outside the History page | P1 |
 | FR-R13 | `FileConversationRepository` doesn't use `fsguard`, unlike the four new repos | P2 |
 | FR-R14 | `Job.IsQueueable()` is dead code | P2 |
 | FR-R15 | `Settings.SetWorkerPoolSize` has no upper bound | P2 |
 | FR-R16 | Legacy admin pages lack the new left-nav sidebar | P2 |
 | FR-R17 | `history_handler.go` reads Run files via raw `os.ReadFile` instead of the repository | P2 |
 
-**Totals: 4 P0, 8 P1, 5 P2 (17 findings)**
+**Totals: 5 P0, 9 P1, 5 P2 (19 findings)**
