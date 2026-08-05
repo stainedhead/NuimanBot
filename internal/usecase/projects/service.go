@@ -33,9 +33,10 @@ const hiddenDirName = ".nuimanbot"
 
 // Service orchestrates Project create/list/get/delete/AGENTS.md management.
 type Service struct {
-	projects domain.ProjectRepository
-	files    domain.ConfinedFileStore
-	now      func() time.Time
+	projects        domain.ProjectRepository
+	files           domain.ConfinedFileStore
+	allowedRootBase string
+	now             func() time.Time
 }
 
 // NewService creates a Projects Service backed by projects. files performs
@@ -43,14 +44,38 @@ type Service struct {
 // this domain-defined interface, never on "os" or
 // internal/infrastructure/fsguard directly, per AGENTS.md's Clean
 // Architecture dependency rule.
-func NewService(projects domain.ProjectRepository, files domain.ConfinedFileStore) *Service {
-	return &Service{projects: projects, files: files, now: time.Now}
+//
+// allowedRootBase is the storage root CreateProject confines a requested
+// outputDirectory beneath (FR-R18): specifically
+// <allowedRootBase>/users/<ownerUserID>/projects/, mirroring the same
+// per-owner storage convention Jobs/Chores already use for their hidden
+// directories. Without this, CreateProject accepted any outputDirectory a
+// caller supplied — including the app's own data/ directory or another
+// user's tree — which fsguard.ResolveWithin then treated as a trusted root
+// for every subsequent Project file operation (AddAgentsFile, agent-chat
+// writes), so the confinement those provide sat on an unconfined
+// foundation.
+func NewService(projects domain.ProjectRepository, files domain.ConfinedFileStore, allowedRootBase string) *Service {
+	return &Service{projects: projects, files: files, allowedRootBase: allowedRootBase, now: time.Now}
 }
 
 // CreateProject creates a new Project (FR-017), creating its OutputDirectory
 // and HiddenDirectory (FR-018) on disk. Retention defaults to "Never";
 // per-user configuration of Project retention (FR-023) is a Settings
 // environment concern, out of scope for this Service.
+//
+// outputDirectory must resolve within ownerUserID's own allowed projects
+// root (FR-R18) — <allowedRootBase>/users/<ownerUserID>/projects/ — whether
+// supplied as a relative path that traverses out of it, an absolute path
+// elsewhere entirely, or a symlink planted there in advance; any of those
+// are rejected with domain.ErrInvalidInput rather than silently creating a
+// Project rooted outside the caller's own space. Note this is a
+// per-request-user restriction, not an admin gate: FR-017 ("User can create
+// a Project") and FR-010 ("full isolation, including from admins") both
+// describe Project creation as ordinary per-user self-service, so
+// /admin/projects' RoleUser route gating (see server.go) is intentional —
+// the vulnerability this closes is the unconfined destination, not who may
+// reach the endpoint.
 func (s *Service) CreateProject(ctx context.Context, ownerUserID, name, outputDirectory string) (*domain.Project, error) {
 	if ownerUserID == "" {
 		return nil, fmt.Errorf("%w: ownerUserID is required", domain.ErrInvalidInput)
@@ -66,6 +91,12 @@ func (s *Service) CreateProject(ctx context.Context, ownerUserID, name, outputDi
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid outputDirectory: %v", domain.ErrInvalidInput, err)
 	}
+
+	allowedRoot := filepath.Join(s.allowedRootBase, "users", ownerUserID, "projects")
+	if err := s.files.Confine(allowedRoot, absOutput); err != nil {
+		return nil, fmt.Errorf("%w: outputDirectory must be within your own projects root: %v", domain.ErrInvalidInput, err)
+	}
+
 	hiddenDir := filepath.Join(absOutput, hiddenDirName)
 
 	if err := s.files.EnsureDir(absOutput); err != nil {

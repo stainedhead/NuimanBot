@@ -62,4 +62,10 @@ func (s *FileConfinedFileStore) FileExists(baseDir, relPath string) (bool, error
 	}
 }
 
+// Confine verifies candidate is confined within baseDir via
+// fsguard.MustBeWithinNoEscape (FR-R18).
+func (s *FileConfinedFileStore) Confine(baseDir, candidate string) error {
+	return fsguard.MustBeWithinNoEscape(baseDir, candidate)
+}
+
 var _ domain.ConfinedFileStore = (*FileConfinedFileStore)(nil)

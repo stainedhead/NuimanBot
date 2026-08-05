@@ -113,6 +113,27 @@ func TestFileConfinedFileStore_FileExists(t *testing.T) {
 	}
 }
 
+func TestFileConfinedFileStore_Confine_AllowsWithinRoot(t *testing.T) {
+	root := t.TempDir()
+	s := NewFileConfinedFileStore()
+	candidate := filepath.Join(root, "users", "alice", "projects", "p1")
+
+	if err := s.Confine(root, candidate); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestFileConfinedFileStore_Confine_RejectsOutsideRoot(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "root")
+	outside := filepath.Join(parent, "outside")
+	s := NewFileConfinedFileStore()
+
+	if err := s.Confine(root, outside); !errors.Is(err, fsguard.ErrPathEscape) {
+		t.Fatalf("expected ErrPathEscape, got %v", err)
+	}
+}
+
 func TestFileConfinedFileStore_FileExists_RejectsEscape(t *testing.T) {
 	root := t.TempDir()
 	s := NewFileConfinedFileStore()

@@ -30,4 +30,13 @@ type ConfinedFileStore interface {
 	// confinement, currently exists. Returns fsguard.ErrPathEscape
 	// (wrapped) under the same conditions as WriteFile.
 	FileExists(baseDir, relPath string) (bool, error)
+
+	// Confine verifies that candidate — an absolute directory entirely
+	// determined by the caller (e.g. a Project's user-requested
+	// OutputDirectory), not a relative path this Service constructs
+	// itself — is confined within baseDir, including symlink-escape
+	// safety (FR-R18). Returns fsguard.ErrPathEscape (wrapped) if
+	// candidate is not baseDir or a descendant of it, whether by lexical
+	// traversal, an absolute path outside baseDir, or a symlink.
+	Confine(baseDir, candidate string) error
 }

@@ -92,9 +92,15 @@ func ResolveWithin(baseDir, relPath string) (string, error) {
 // Scope: applied at the confined-write call sites this fix pass targets
 // (domain.ConfinedFileStore's implementation, FileProjectRepository, and
 // the live Executor) — see specs/260805-nuimanbot-extend-context-and-ui-auto-review's
-// FR-R6. Record-path resolution keyed purely by server-generated UUIDs
-// (Job/Chore/Run repositories) still uses plain ResolveWithin, since an
-// ID's only user-influenced content is that it must parse as a UUID.
+// FR-R6. Job/Chore/Run record-path resolution still uses plain
+// ResolveWithin: not because the ID argument is validated (it isn't — it
+// derives from a URL path segment, same as Project's), but because the
+// only writer into any of those directories is that same repository's own
+// Save method, which always names the file via a freshly-generated
+// uuid.NewString() — nothing else ever creates an entry (symlink or
+// otherwise) inside users/<ownerUserID>/{jobs,chores,runs}/ for a
+// resolution to stumble into, so the symlink-escape scenario this function
+// defends against cannot arise there today. Revisit if that ever changes.
 func ResolveWithinNoEscape(baseDir, relPath string) (string, error) {
 	joined, err := ResolveWithin(baseDir, relPath)
 	if err != nil {
@@ -106,6 +112,53 @@ func ResolveWithinNoEscape(baseDir, relPath string) (string, error) {
 		return "", fmt.Errorf("fsguard: resolving base directory: %w", err)
 	}
 
+	return verifyNoEscape(absBase, joined)
+}
+
+// MustBeWithinNoEscape behaves like MustBeWithin, with the same additional
+// symlink-escape guarantee ResolveWithinNoEscape adds over ResolveWithin
+// (FR-R6/FR-R18): candidate is rejected if, once existing symlinks along
+// its path are resolved, it actually points outside baseDir's real
+// location — not just when it is lexically outside. Unlike
+// ResolveWithinNoEscape, candidate here is already a caller-determined
+// absolute (or base-relative) directory in its own right — e.g. a
+// Project's entirely user-supplied requested OutputDirectory being
+// validated against an allowed root — rather than a relPath this package
+// itself resolves against baseDir.
+func MustBeWithinNoEscape(baseDir, candidate string) error {
+	if err := MustBeWithin(baseDir, candidate); err != nil {
+		return err
+	}
+
+	absBase, err := filepath.Abs(filepath.Clean(baseDir))
+	if err != nil {
+		return fmt.Errorf("fsguard: resolving base directory: %w", err)
+	}
+	absCandidate, err := filepath.Abs(filepath.Clean(candidate))
+	if err != nil {
+		return fmt.Errorf("fsguard: resolving candidate path: %w", err)
+	}
+
+	_, err = verifyNoEscape(absBase, absCandidate)
+	return err
+}
+
+// verifyNoEscape is the shared symlink-walk at the core of both
+// ResolveWithinNoEscape and MustBeWithinNoEscape (FR-R6/FR-R18): given
+// absBase (baseDir, already made absolute) and joined (an absolute path
+// already known to be baseDir itself or a lexical descendant of it), it
+// confirms that resolving any symlinks actually present on disk along
+// joined's path never leaves absBase's real, symlink-resolved location.
+//
+// On success, returns the literal joined path unchanged — deliberately not
+// itself symlink-resolved — so an OS-level indirection on baseDir alone
+// (e.g. macOS's /var -> /private/var) can't produce a false-positive escape
+// or silently rewrite the result when no symlink is actually involved in
+// the path being checked. A path component that doesn't yet exist on disk
+// is treated as literal, never as a symlink, since nothing has been created
+// there yet — this makes both callers safe to use before creating a new
+// file or directory.
+func verifyNoEscape(absBase, joined string) (string, error) {
 	rel, err := filepath.Rel(absBase, joined)
 	if err != nil {
 		return "", fmt.Errorf("fsguard: computing relative path: %w", err)
@@ -117,10 +170,7 @@ func ResolveWithinNoEscape(baseDir, relPath string) (string, error) {
 	// boundaryReal is the confinement boundary's real, symlink-resolved
 	// location, used only to validate an encountered symlink (or the
 	// fully-resolved final path below) — never to reshape the return
-	// value when no symlink is actually involved, so an OS-level
-	// indirection on baseDir itself (e.g. a symlinked temp/mount root)
-	// can't produce a false-positive escape or an unexpectedly-rewritten
-	// result for the common, symlink-free case.
+	// value when no symlink is actually involved.
 	boundaryReal := absBase
 	if realBase, evalErr := filepath.EvalSymlinks(absBase); evalErr == nil {
 		boundaryReal = realBase

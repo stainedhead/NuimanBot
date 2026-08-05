@@ -106,7 +106,7 @@ func wireExtendedContextEnvironments(ctx context.Context, app *application, webS
 	confinedFiles := storage.NewFileConfinedFileStore()
 
 	// Projects (FR-017-023): no dependency on the worker pool.
-	projectsService := projects.NewService(app.ProjectRepo, confinedFiles)
+	projectsService := projects.NewService(app.ProjectRepo, confinedFiles, app.StoragePath)
 	webServer.SetProjectsService(projectsService)
 
 	// Wrap RunRepo so every status/log/badge write also pushes a RunEvent

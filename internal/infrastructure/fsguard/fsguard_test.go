@@ -328,6 +328,82 @@ func TestResolveWithinNoEscape_NonDirectoryIntermediateComponentErrors(t *testin
 	}
 }
 
+// --- MustBeWithinNoEscape (FR-R18: symlink-safe allowed-root confinement
+// for a caller-supplied absolute directory, e.g. a Project's requested
+// OutputDirectory) ---
+
+func TestMustBeWithinNoEscape_AllowsPathWithinRoot(t *testing.T) {
+	root := t.TempDir()
+	candidate := filepath.Join(root, "users", "alice", "projects", "my-project")
+	if err := MustBeWithinNoEscape(root, candidate); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestMustBeWithinNoEscape_AllowsRootItself(t *testing.T) {
+	root := t.TempDir()
+	if err := MustBeWithinNoEscape(root, root); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestMustBeWithinNoEscape_RejectsRelativeTraversalOutsideRoot(t *testing.T) {
+	root := t.TempDir()
+	// A candidate lexically built by walking ".." back out of root — the
+	// FR-R18 acceptance criteria's relative-traversal-escape case.
+	candidate := filepath.Join(root, "users", "alice", "projects", "..", "..", "..", "..", "data")
+	if err := MustBeWithinNoEscape(root, candidate); !errors.Is(err, ErrPathEscape) {
+		t.Fatalf("expected ErrPathEscape, got %v", err)
+	}
+}
+
+func TestMustBeWithinNoEscape_RejectsAbsolutePathOutsideRoot(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "allowed-root")
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(parent, "data")
+
+	if err := MustBeWithinNoEscape(root, outside); !errors.Is(err, ErrPathEscape) {
+		t.Fatalf("expected ErrPathEscape, got %v", err)
+	}
+}
+
+func TestMustBeWithinNoEscape_RejectsSymlinkEscape(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "allowed-root")
+	outside := filepath.Join(parent, "outside")
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outside, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// A pre-existing symlink at the exact candidate location, pointing
+	// outside root — e.g. an attacker planting a directory symlink before
+	// pointing a new Project's OutputDirectory at it.
+	candidate := filepath.Join(root, "escape")
+	if err := os.Symlink(outside, candidate); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := MustBeWithinNoEscape(root, candidate); !errors.Is(err, ErrPathEscape) {
+		t.Fatalf("expected ErrPathEscape, got %v", err)
+	}
+}
+
+func TestMustBeWithinNoEscape_AllowsNonExistentPathWithinRoot(t *testing.T) {
+	// A brand-new Project's OutputDirectory doesn't exist on disk yet at
+	// validation time — must still be allowed when lexically within root.
+	root := t.TempDir()
+	candidate := filepath.Join(root, "users", "alice", "projects", "not-created-yet")
+
+	if err := MustBeWithinNoEscape(root, candidate); err != nil {
+		t.Fatalf("expected non-existent in-root candidate to be allowed, got err: %v", err)
+	}
+}
+
 func TestResolveWithinNoEscape_ExistingRegularFileOverwriteAllowed(t *testing.T) {
 	base := t.TempDir()
 	target := filepath.Join(base, "AGENTS.md")
