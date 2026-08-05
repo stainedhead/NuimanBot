@@ -1,5 +1,18 @@
 /* NuimanBot Admin Custom Styles */
 
+/* Left-nav sidebar layout (P6.9 branding pass): #app-sidebar (templates/
+ * nav.html) is fixed-position and 16rem (w-64) wide. On md+ screens, offset
+ * every page's content by that width via body padding rather than editing
+ * each page template individually — every page already renders the nav
+ * partial as the first element in <body>, so this single rule covers all
+ * of them. Below md the sidebar is off-canvas (see nav.html), so no offset
+ * is applied there. */
+@media (min-width: 768px) {
+    body:has(#app-sidebar) {
+        padding-left: 16rem;
+    }
+}
+
 /* Form Styles */
 .form-group {
     @apply mb-4;
