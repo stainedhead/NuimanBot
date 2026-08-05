@@ -30,10 +30,12 @@ NuimanBot's web admin today is scoped to operational management — bots, users,
 
 ### Settings
 
-- **FR-001:** Settings environment surfaces configuration for Skills, Plugins, Users, Gateways (existing systems, not rebuilt).
-- **FR-002:** Settings environment surfaces Network Access configuration (see Access / Network).
-- **FR-003:** Settings environment surfaces retention configuration independently for Chats, Projects, and History; each supports a "Never" value (no auto-expiry) in addition to a configurable time period.
-- **FR-004:** Settings environment surfaces the Job/Chore worker pool size (N concurrent workers).
+Settings are split by scope: **system-wide/admin-only** settings apply to the whole deployment and can only be changed by an admin; **per-user** settings apply only to the logged-in user's own resources.
+
+- **FR-001:** Settings environment surfaces configuration for Skills, Plugins, and Gateways (system-wide/admin-only — existing systems, not rebuilt) and Users (system-wide/admin-only user management).
+- **FR-002:** Settings environment surfaces Network Access configuration (system-wide/admin-only; see Access / Network).
+- **FR-003:** Settings environment surfaces retention configuration independently for Chats, Projects, and History (per-user); each supports a "Never" value (no auto-expiry) in addition to a configurable time period.
+- **FR-004:** Settings environment surfaces the Job/Chore worker pool size (system-wide/admin-only — N concurrent workers is a process-level resource, not a per-user setting).
 
 ### Access / Network
 
@@ -107,7 +109,7 @@ NuimanBot's web admin today is scoped to operational management — bots, users,
 
 ## Non-Functional Requirements
 
-- **Performance:** List views (Chats, Projects, History, Memories) load within typical web-admin latency, consistent with the existing dashboard. Job/Chore run status and logs update in near-real-time while a run is active (polling or streaming), without requiring a manual page refresh.
+- **Performance:** List views (Chats, Projects, History, Memories) load within typical web-admin latency, consistent with the existing dashboard. Job/Chore run status, logs, and notification badges update in near-real-time while a run is active via a WebSocket connection (`gorilla/websocket`), without requiring a manual page refresh.
 - **Reliability:** Run state (queue position, in-flight runs, Chore schedules, next-fire times) is persisted, not held only in memory — a server restart must not lose queued Jobs, drop an in-flight run's record, or cause a Chore to miss its next scheduled fire time. New entities (Project, Job, Chore, run history) should follow the same file-based, atomic-write persistence pattern already used for conversations and memory (`internal/infrastructure/storage`, `AtomicFileWriter`) rather than introducing a new persistence mechanism.
 - **Security:** Per-user data isolation (FR-010) is enforced at the data-access layer, not just hidden in the UI. Remote-access IP/hostname allowlist enforcement happens at the network/middleware layer, before authentication, fail-closed. Existing web admin protections (CSRF, forced password change, TLS, role middleware) extend to all new environments. Job/Chore filesystem access is sandboxed to the assigned Project's output directory — no path traversal outside it.
 - **Observability:** Every Job/Chore run's full log is captured and durably stored, retrievable via History even after the run completes (subject to History retention settings, FR-043). Worker pool errors/crashes are recorded against the run, not silently dropped, and surfaced in History.
@@ -154,6 +156,7 @@ NuimanBot's web admin today is scoped to operational management — bots, users,
 | `internal/adapter/web` auth/session/CSRF/role middleware | Dependency | New environments build on existing web admin auth, not a parallel auth system. |
 | `domain.Conversation`, `ConversationRepository`, `FileConversationRepository` (`internal/infrastructure/storage/file_conversation_repository.go`) | Dependency | Existing per-user, file-based, restart-durable conversation storage (already tracks `UserID`, `CreatedAt`/`UpdatedAt`, message count, last-message snippet). Chats should extend this rather than introduce a new entity — directly reduces the "Chat domain entities" risk below. |
 | `internal/infrastructure/storage` (`AtomicFileWriter`) | Dependency | Existing atomic file-write primitive already used by conversation and memory repositories; new entities (Project, Job, Chore, run history) should persist through the same mechanism to satisfy the Reliability NFR without inventing a new storage layer. |
+| `github.com/gorilla/websocket` (already in `go.mod`) | Dependency | Currently used only by the Buzz/Nostr gateway (`internal/infrastructure/nostr/client.go`); this PRD adds its first use in the web admin, for near-real-time run status/log/notification updates. New connection-lifecycle and per-user-isolation handling for this surface is net-new work, not a reused pattern. |
 | Job/Chore/worker-pool subsystem | Risk (highest) | No existing scheduler, job queue, or run-persistence infrastructure — this is the largest net-new subsystem and the one most likely to blow the estimate. |
 | Chat domain entity | Risk (low) | Largely covered by the existing `ConversationRepository` — extending it (auto-naming, retention, "Never" support) is materially lower-risk than building from scratch. |
 | Project/Job/Chore domain entities | Risk | No existing "Project", "Job", or "Chore" concept in the domain layer — these need new entities, repositories, and hidden-directory conventions built from scratch (can follow the `AtomicFileWriter` pattern above, but the domain model itself is net-new). |
@@ -165,7 +168,7 @@ NuimanBot's web admin today is scoped to operational management — bots, users,
 
 ## Open Questions
 
-- Which Settings items are per-user (e.g., individual retention preferences, personal gateway credentials) vs. system-wide/admin-only (e.g., worker pool size N, network access mode/allowlist)? This needs to be explicitly delineated during the spec phase, since it affects RBAC design.
+- **Resolved:** Settings scope is split by nature — system-wide/admin-only (worker pool size N, network access mode/allowlist, Gateway integrations, global Users management, Skills/Plugins enablement) vs. per-user (Chat/Project/History retention, notification preferences). See FR-001–FR-004.
+- **Resolved:** Near-real-time updates for run status, logs, and notification badges use WebSockets (`gorilla/websocket`, already a `go.mod` dependency currently used only by the Buzz/Nostr gateway) rather than polling. This is a new connection-lifecycle/auth surface for the web admin and should be scoped explicitly in the spec's architecture.md.
 - Default numeric values for Chat/Project/History retention and default worker pool size N are not pinned in this PRD; propose sensible defaults during spec/implementation planning.
 - No explicit storage/disk quota policy is defined for Chat/Job/Chore logs and Project files given "Never" retention is a valid choice; may warrant a follow-up PRD if usage grows unmanageable.
-- Exact near-real-time update mechanism (polling vs. WebSocket/SSE) for run status, logs, and notification badges is left as an implementation decision for the spec phase, consistent with the existing web admin's tech stack.
