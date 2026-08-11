@@ -29,8 +29,10 @@ Separately (lower severity, folded into this finding rather than filed separatel
 
 **Acceptance Criteria:**
 - [ ] `/memories browse` caps the number of cells rendered per invocation (e.g. matching `historyListDisplayLimit`'s pattern) and/or truncates each cell's `Content` field for display, with a "N more not shown, refine your query" trailer matching `/history list`'s existing convention.
-- [ ] A test seeding more cells than the chosen limit asserts the response is capped and includes the truncation notice.
-- [ ] (Optional, same fix) `browse()` sorts results most-recently-created-first before rendering, matching `internal/adapter/web/memories_handler.go`'s `sortCellsByCreatedAtDesc`.
+- [ ] Following this repo's mandatory Red-Green-Refactor cycle: write a failing test first that seeds more cells than the chosen limit and asserts the response is capped and includes the truncation notice; then implement; then refactor.
+
+**Optional / non-blocking follow-up (does not gate this finding's completion):**
+- `browse()` sorts results most-recently-created-first before rendering, matching `internal/adapter/web/memories_handler.go`'s `sortCellsByCreatedAtDesc`. Nice-to-have display-parity improvement, not required to close FR-1.
 
 ---
 
@@ -44,12 +46,13 @@ Verified against the actual code: `CreateJob` only performs an ownership-scoped 
 
 `ContextTypeChat` is worse: `CreateJob` performs **no ownership check of any kind** for `--chat <id>` — not even the best-effort one Project gets — so a chat ID belonging to another user is stored as `ContextID` unconditionally.
 
-No actual cross-user *data* is exposed here (`WorkingDirectory` for a non-owned project stays unresolved, so job execution can't read another user's files through this path) — this is a metadata/spec-conformance gap, not a file-access IDOR. It is filed as P1, not P0, on that basis. Because `internal/usecase/jobs/service.go` is reused as-is per this PRD's own Non-Goals/Dependencies section, the fix may belong in this usecase package (in scope for this feature's own stated acceptance criterion) or may need to be explicitly re-scoped as a follow-up — that decision should be made explicitly rather than left as a silent gap.
+No actual cross-user *data* is exposed here (`WorkingDirectory` for a non-owned project stays unresolved, so job execution can't read another user's files through this path) — this is a metadata/spec-conformance gap, not a file-access IDOR. It is filed as P1, not P0, on that basis. Confirmed directly in code: `writeJobSummary`/`writeJobDetail` (`job_commands.go:220-247`) echo back only the raw `ContextID` string the caller already supplied — never the referenced Project/Chat's title or content — and `CreateJob` succeeds identically whether `contextID` is a foreign-owned ID or one that doesn't exist at all, so there is no existence-oracle either. **This "no exposure" rationale is contingent on `StubExecutor` (`internal/infrastructure/scheduler/stub_executor.go`) being a placeholder that never reads Chat content and only checks Project *existence* (owner-scoped, so a foreign Project ID fails closed as "deleted," never returning its content) — when a real agent-invoking executor replaces the stub, an unowned `ContextTypeChat` reference becomes a live cross-user read path, and this finding must be re-rated at that time, not silently re-inherited as P1.** Because `internal/usecase/jobs/service.go` is reused as-is per this PRD's own Non-Goals/Dependencies section (spec.md line 141: "reused as-is per Non-Goals"), fixing this crosses that stated dependency boundary — see Dependencies section below — but the fix still belongs in this pass: spec.md's own line-157 acceptance criterion demands it and explicitly calls out that it "needs an explicit acceptance test," so re-scoping it away is not an option available to this PRD.
 
 **Acceptance Criteria:**
-- [ ] Either: `jobs.Service.CreateJob` rejects (returns a not-found/permission error) a `--project`/`--chat` `contextID` that does not resolve to a Project/Chat owned by `ownerUserID`, distinguishing "not owned" from the already-handled "stale/deleted, owned" case — OR — this PRD explicitly re-scopes the fix as an out-of-branch follow-up with a tracked FR, rather than leaving spec.md's line-157 criterion silently unmet.
-- [ ] A new test (mirroring `TestGetJob_CrossOwnerIsolation`'s pattern already used elsewhere in this file) asserts `/job create --project <id>` and `/job create --chat <id>` with an `<id>` owned by a different user is rejected, not silently created with an unresolved context.
+- [ ] `jobs.Service.CreateJob` rejects (returns a not-found/permission error) a `--project`/`--chat` `contextID` that does not resolve to a Project/Chat owned by `ownerUserID`, distinguishing "not owned" from the already-handled "stale/deleted, owned" case. (Fix in usecase layer; do not re-scope as a follow-up — see justification above.)
+- [ ] Following this repo's mandatory Red-Green-Refactor cycle (AGENTS.md): write the failing test first — mirroring `TestGetJob_CrossOwnerIsolation`'s pattern already used elsewhere in this file — asserting `/job create --project <id>` and `/job create --chat <id>` with an `<id>` owned by a different user is rejected, not silently created with an unresolved context; then implement; then refactor.
 - [ ] `ContextTypeChat` gets the same ownership-scoping treatment as `ContextTypeProject` currently attempts (extending, not just fixing, the existing best-effort check).
+- [ ] Add a code comment (or update the doc comment in `internal/infrastructure/scheduler/stub_executor.go`) flagging that `StubExecutor`'s replacement with a real executor must re-verify Chat-context ownership before reading Chat content, since this fix closes the CreateJob-time gap but a future executor could reopen an equivalent one at run time if it reads Chat data via `ContextID` without its own ownership check.
 
 ---
 
@@ -61,7 +64,7 @@ All four deferred FRs (FR-020, FR-026, FR-031, FR-036) fall through to each hand
 
 **Acceptance Criteria:**
 - [ ] Each of the four deferred `chat` subcommands returns a message that names it specifically (e.g. `"'/project chat' is not yet implemented — see spec.md FR-020. Use '/project help' for available commands."`), matching the Settings deferred-command convention, instead of falling through to the generic "Unknown command" branch.
-- [ ] A test per handler asserts the specific message text, not just that *some* non-crashing response is returned.
+- [ ] Following this repo's mandatory Red-Green-Refactor cycle: write a failing test per handler first, asserting the specific message text (not just that *some* non-crashing response is returned); then implement; then refactor.
 
 ---
 
@@ -73,7 +76,9 @@ The actual RBAC landmine this feature was built to close — `internal/usecase/c
 
 **Acceptance Criteria:**
 - [ ] Document (in `architecture.md` or a code comment on `defaultRoleForPlatform`) that its `PlatformCLI → RoleAdmin` branch is dead-in-practice-but-not-dead-in-code, and that any new CLI entry point (a new command source, a background job, a future socket-server mode per the Non-Goals list) must go through `AuthCommandHandler.EnsureAuthenticated`/`reconcileIdentity` first or this shortcut re-arms.
-- [ ] Consider (follow-up, not blocking): either have `Gateway.Start` refuse to run at all when `authHandler == nil` outside of test builds, or change `defaultRoleForPlatform(PlatformCLI)` to a non-admin default now that a real reconciliation path exists — either would remove the landmine structurally instead of only procedurally.
+
+**Optional / non-blocking follow-up (does not gate this finding's completion):**
+- Either have `Gateway.Start` refuse to run at all when `authHandler == nil` outside of test builds, or change `defaultRoleForPlatform(PlatformCLI)` to a non-admin default now that a real reconciliation path exists — either would remove the landmine structurally instead of only procedurally. Track as a separate FR if picked up; not required to close FR-4.
 
 ---
 
@@ -84,7 +89,8 @@ The actual RBAC landmine this feature was built to close — `internal/usecase/c
 spec.md's Observability NFR states: "Failed login attempts are logged/audited, consistent with the web admin's existing login rate-limiter and audit logging." Verified: `internal/adapter/gateway/cli/auth_commands.go` has no `slog` import and no logging of any kind on a failed `ValidateCredentials` call — only a per-process-invocation retry cap (`maxLoginAttempts = 3`), which resets on every re-run of the binary and is therefore not a meaningful rate limit. The web side does have a real per-IP rate limiter (`loginRateLimiterStore`, 5 attempts/minute), but on inspection it also does **not** call into `internal/infrastructure/audit` (the `AuditLogger` type exists in the codebase but is unused by `internal/adapter/web/auth.go`) — so the NFR's premise of "existing... audit logging" to be consistent with does not actually exist yet on the web side either. This is a pre-existing gap, not one this feature introduced, and the CLI is strictly better than the pre-feature state (previously: no password was required at all). Filed as P2 because it's a real, stated NFR miss, not because this feature made anything worse.
 
 **Acceptance Criteria:**
-- [ ] Either: file a separate tracked FR for adding failed-login audit logging to both `web/auth.go` and `cli/auth_commands.go` via the existing `internal/infrastructure/audit` package — OR — update spec.md's NFR text to accurately reflect that "consistent with the web admin's existing... audit logging" currently means "consistent with the web admin's existing lack of failed-login audit logging," so the gap is tracked honestly rather than implied-resolved.
+- [ ] Update spec.md's Observability NFR text now (cheap, honest) to accurately reflect that "consistent with the web admin's existing... audit logging" currently means "consistent with the web admin's existing lack of failed-login audit logging," so the gap is tracked honestly rather than implied-resolved.
+- [ ] File a separate tracked FR for adding failed-login audit logging to both `web/auth.go` and `cli/auth_commands.go` via the existing `internal/infrastructure/audit` package. Both checkboxes are required to close this finding — correcting the spec text alone leaves the underlying observability gap untracked as real follow-up work, and adding the FR alone leaves spec.md's NFR text overstating what already exists.
 
 ---
 
@@ -95,7 +101,10 @@ spec.md's Observability NFR states: "Failed login attempts are logged/audited, c
 `readSessionFile` calls `os.Stat` to check permission bits, then makes a separate `os.ReadFile` call. Between the two, a local actor with write access to the session file's directory could in principle swap the file (e.g. via a symlink) after the permission check passes but before the content is read. The code's own doc comment on `RestoreSession` (`internal/usecase/auth/session.go:127-130`) explicitly scopes this out: *"not a defense against a malicious local user forging their own session file — that threat is explicitly out of scope per AD-2's decided threat model (the trust boundary is OS file permissions on the session file itself)."* Given that framing, a local actor with write access to that directory already has equivalent access to the running process's own user, so this is not a practical escalation. Filed as P2/informational to close out the review checklist's explicit TOCTOU question, not because it represents an unaddressed risk under the stated threat model.
 
 **Acceptance Criteria:**
-- [ ] No code change required. If desired, `readSessionFile` could open the file once (`os.Open` + `Fstat` on the resulting handle) rather than `Stat` + separate `ReadFile`, closing the theoretical window at negligible cost — optional hardening, not a correctness requirement under the documented threat model.
+- [ ] None. This finding is informational and does not require a code change to close — it exists to close out the review checklist's explicit TOCTOU question against the documented threat model.
+
+**Optional / non-blocking follow-up (does not gate this finding's completion):**
+- `readSessionFile` could open the file once (`os.Open` + `Fstat` on the resulting handle) rather than `Stat` + separate `ReadFile`, closing the theoretical window at negligible cost — optional hardening, not a correctness requirement under the documented threat model.
 
 ---
 
@@ -107,6 +116,46 @@ spec.md's Observability NFR states: "Failed login attempts are logged/audited, c
 
 **Acceptance Criteria:**
 - [ ] Add a test that pre-seeds a `domain.User` for `(PlatformCLI, "alice")` with a stale role, writes a valid session file whose `Role` differs, and asserts `EnsureAuthenticated`'s **restore** path (not `reconcileIdentity` called directly) returns the corrected role.
+
+---
+
+## Fix Process Guidance
+
+This section governs how the fix pass driven by this PRD must be carried out. It is binding, not advisory — a fix that skips any of these steps is not complete, regardless of whether its acceptance criteria checkboxes are ticked.
+
+**TDD (Red-Green-Refactor, mandatory per AGENTS.md):** For every finding above with a code change, follow the full cycle, not just "add a test":
+1. **Red** — write the failing test named in the finding's acceptance criteria first; confirm it fails for the right reason.
+2. **Green** — write the minimal code change to pass it.
+3. **Refactor (mandatory, not optional)** — clean up the change (naming, duplication, structure) with tests kept green throughout. Do not skip this phase; AGENTS.md is explicit that moving on without it is not permitted.
+
+**Code review per fix, not one review at the end:** Run `dev-flow:review-code` against each finding's fix individually before moving to the next finding, rather than batching all seven fixes and reviewing once at the end. This keeps a bad fix from compounding into the next one and keeps each review's diff small enough to actually verify.
+
+**Quality gates (must pass after every individual fix, not just once at the end of the pass):**
+```
+go fmt ./... && go mod tidy && go vet ./... && golangci-lint run && go test ./... && go build -o bin/nuimanbot ./cmd/nuimanbot && ./bin/nuimanbot --help
+```
+All must succeed with zero errors before a finding is marked resolved.
+
+**Agent teammates and git worktrees for parallel workstreams:** These seven findings partition into independent workstreams that can run in parallel, each in its own git worktree:
+- **Workstream A (FR-2, P1):** `internal/usecase/jobs/service.go` + its tests. The largest and highest-risk fix — give it its own worktree and, if using agent teammates, its own dedicated teammate. Touches the usecase layer, which the base spec's Non-Goals/Dependencies section (spec.md line 141) says is reused as-is — flag this crossing explicitly in that teammate's commit/PR description.
+- **Workstream B (FR-1, FR-3, FR-7, all P2 + one P1):** All live in `internal/adapter/gateway/cli/`, but touch distinct files (`memories_commands.go`; `project_commands.go`/`job_commands.go`/`chore_commands.go`/`history_commands.go`; `auth_commands_test.go`) — safe to parallelize across teammates or run sequentially in one worktree if headcount is limited.
+- **Workstream C (FR-4, FR-5, doc/spec-text only, both P2):** No production code change required for either — `architecture.md`/code-comment documentation (FR-4) and spec.md NFR text plus a new tracked FR (FR-5). Group as one workstream; low risk of touching the same lines as A or B.
+- **FR-6 (P2, informational):** No fix required (see its Acceptance Criteria); does not need a workstream. Only pick up if the optional hardening follow-up is chosen.
+
+Per AGENTS.md, do not specify a non-default model when spawning teammates for these workstreams unless the user explicitly requests one.
+
+## Dependencies
+
+- **`internal/usecase/jobs` (FR-2):** spec.md line 141 states this package is "reused as-is per Non-Goals." FR-2's fix requires a real code change inside it (see FR-2's Acceptance Criteria), which crosses that stated boundary. This is a deliberate, necessary exception — spec.md's own line-157 acceptance criterion requires the behavior this fix delivers — but it should be called out in the fix's PR description so it isn't mistaken for scope creep.
+- **`internal/infrastructure/audit`:** FR-5's tracked follow-up FR depends on this existing package; no new infrastructure is required, only wiring it into `web/auth.go` and `cli/auth_commands.go`.
+- **spec.md:** FR-5 and FR-2 both require edits to `specs/260811-cli-parity-for-nuimanbot-features/spec.md` (NFR text correction for FR-5; the line-157 acceptance criterion is satisfied, not changed, by FR-2). Coordinate these edits with whichever workstream touches spec.md last to avoid a merge conflict on the same file.
+
+## Open Questions
+
+- **FR-4's optional follow-up** (refuse-to-run-without-authHandler vs. changing `defaultRoleForPlatform`'s default): which structural fix is preferred, if either is picked up, is not decided by this PRD — left to whoever picks up that follow-up FR.
+- **FR-5's tracked follow-up FR:** should CLI and web failed-login audit logging ship as one combined FR or two independent ones (they touch different files and have no shared code path apart from the `audit` package)? Not decided here.
+- **FR-2's Chat-context ownership check:** should it reuse the same best-effort "swallow lookup error, leave field unresolved" pattern `ContextTypeProject` uses today, or should Chat get a harder rejection (return an error to the CLI immediately) since, unlike Project, there is currently no "stale/deleted" tolerance test establishing a soft-fail precedent for Chat? Left to the implementing workstream to decide and document, since spec.md's line-157 criterion only requires rejection, not a specific failure mode.
+- **StubExecutor's eventual replacement:** FR-2's justification notes that a real executor reading Chat content via `ContextID` would need its own ownership re-check. No FR in this PRD tracks that follow-up work explicitly (it doesn't exist yet); flagged here so it isn't lost when the stub is eventually replaced.
 
 ---
 
@@ -129,3 +178,7 @@ spec.md's Observability NFR states: "Failed login attempts are logged/audited, c
 | P0 | 0 | — |
 | P1 | 2 | FR-1 (`/memories browse` unbounded output), FR-2 (job-create unowned project/chat context) |
 | P2 | 5 | FR-3 (deferred-chat messaging), FR-4 (AD-6 mitigation-not-fix documentation), FR-5 (failed-login audit logging), FR-6 (TOCTOU note), FR-7 (test-completeness nit) |
+
+**P0/P1 sanity check (re-verified this pass):** FR-2 was independently re-checked against `internal/usecase/jobs/service.go`, `internal/infrastructure/scheduler/stub_executor.go`, and `internal/adapter/gateway/cli/job_commands.go` before accepting the P1 call. Confirmed: (1) `writeJobSummary`/`writeJobDetail` echo back only the raw `ContextID` the caller already supplied, never the referenced Project/Chat's actual title or content; (2) `CreateJob` succeeds identically for a nonexistent ID and a foreign-owned one, so there is no existence-oracle; (3) the one place a Project reference is actually dereferenced at runtime (`StubExecutor.checkProjectExists`) is itself owner-scoped, so a foreign Project ID fails closed as "deleted" rather than returning its content. No true file- or content-level IDOR exists today — **P1, not P0, is correct**, but is explicitly contingent on `StubExecutor` remaining a non-content-reading stub (see FR-2's justification and the Open Questions/Dependencies sections above for what changes that). No findings were found to be under-prioritized; 0 P0 is accurate for the code as it exists on this branch today.
+
+**Non-blocking follow-ups called out separately (not part of the P0/P1/P2 counts above, and do not gate any finding's completion):** FR-1's optional sort-order match, FR-4's optional structural-fix follow-up, and FR-6's optional TOCTOU hardening — see each finding's "Optional / non-blocking follow-up" subsection.
