@@ -1,6 +1,6 @@
 # CLI Environments Guide
 
-**Version:** 1.0
+**Version:** 1.1
 **Last Updated:** 2026-08-11
 **Target Audience:** NuimanBot Users
 
@@ -46,6 +46,8 @@ Welcome back, admin.
 
 **If you have scripts or automation that pipe input into `./bin/nuimanbot` non-interactively:** they now need to supply a username and password as the first two lines of input, or the CLI will exit with an authentication error rather than proceeding. Password entry is unmasked in this piped/non-interactive mode (there's no terminal to mask input against) — keep this in mind for anything that might log the input stream.
 
+**Exit-code change for empty/closed stdin, including `./bin/nuimanbot --help`:** `--help` has never been parsed as a real flag by this CLI — running `./bin/nuimanbot --help` (or `./bin/nuimanbot < /dev/null`, or any invocation with immediately-closed stdin) has always just started the app, ignoring the argument entirely. In earlier versions, the old no-login REPL treated an immediate end-of-input gracefully and exited with status `0`. Now that login gates all input by design, empty or closed stdin fails at the username prompt (it can't read a username) and the process exits with status `1` instead. This is an intentional consequence of adding real login, not a regression — but if you have automation that runs `./bin/nuimanbot --help` (or similar) and checks for exit code `0`, it will now see `1` and needs updating to supply real credentials via stdin, per the piped-input note above.
+
 ---
 
 ## Chats
@@ -87,10 +89,10 @@ A Chat created via the CLI shows up in the web admin UI's Chats page, and vice v
 ## Chores
 
 - `/chore list` — list your chores
-- `/chore create <title> <description> <working-directory> --schedule <expr>` — create a chore (schedule starts unconfirmed)
+- `/chore create <title> <description> [--dir <path>] --schedule <preset-or-cron-expr>` — create a chore (schedule starts unconfirmed; `--dir` is optional)
 - `/chore confirm-schedule <id>` — confirm the schedule before it becomes active
 - `/chore show <id>` — show a chore's details
-- `/chore delete <id>` — delete a chore (blocked while a run is active, same as the web UI)
+- `/chore delete <id>` — delete a chore; if a run is currently active, it's soft-deleted (marked pending) and removed automatically once that run finishes, same as the web UI
 
 **Not available:** `/chore chat` — same reasoning as Projects above.
 
