@@ -135,7 +135,7 @@ export NUIMANBOT_LLM_OLLAMA_BASEURL="http://localhost:11434"
 - [Web Workspace Guide](support_docs/web-workspace-guide.md) - Using Chats, Projects, Jobs, Chores, History, and Memories from the web UI
 - [CLI Environments Guide](support_docs/cli-environments-guide.md) - The same six environments plus Settings, from the CLI's slash-commands; also covers the CLI's login requirement
 - [Agent Skills](support_docs/skills-guide.md) - Creating and using reusable prompt templates
-- [Persona Customization](support_docs/user-onboarding.md#persona-customization) - Per-user AI personality files
+- [Persona Customization](support_docs/user-guide-persona.md) - Per-user AI personality files
 - [Self-Organizing Memory](support_docs/self-organizing-memory-guide.md) - Long-term memory system
 - [Buzz Gateway](support_docs/buzz-guide.md) - Joining Buzz (Nostr-based multi-agent chat) channels
 - [Security Hardening Guide](support_docs/security-hardening-guide.md) - Action confirmations, tool-output scanning, SSRF protection, and RBAC config
@@ -228,7 +228,7 @@ See [AGENTS.md](AGENTS.md) for detailed development guidelines.
 We welcome contributions! Please follow these guidelines:
 
 **1. Development Standards**
-- Follow [Clean Architecture](AGENTS.md#clean-architecture) principles
+- Follow [Clean Architecture](AGENTS.md#architecture-clean-architecture) principles
 - Write tests first (TDD)
 - Ensure all quality gates pass
 - Maintain or improve test coverage (currently 72%+)

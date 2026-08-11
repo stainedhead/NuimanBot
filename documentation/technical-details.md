@@ -1770,6 +1770,8 @@ Because Jobs/Chores/History share the worker pool and notifying-decorator-wrappe
 
 Four per-item "chat with the agent" sub-commands (`/project chat`, `/job chat`, `/chore chat`, `/history chat`) and two Settings sub-capabilities (`/settings set retention`, `/settings set network-mode`) are not implemented — none had backing capability anywhere in the system (web or usecase layer) to mirror, and building any of them would have meant inventing new product surface, not CLI-specific work. See `documentation/product-details.md`'s FR-032 acceptance criteria for the itemized reasoning per command.
 
+**Messaging (CLI-parity auto-review fix pass, FR-003):** the four `chat` sub-commands originally fell through to each handler's generic "Unknown command" response when invoked, indistinguishable from a genuine typo. Each of `project_commands.go`/`job_commands.go`/`chore_commands.go`/`history_commands.go` now has a dedicated `chat` case returning a specific `"'/X chat' is not yet implemented (deferred, see spec.md FR-0NN)"` message instead, matching the naming convention Settings already established for its own two deferred sub-capabilities (`retentionSetNotImplementedMessage`, `networkModeNotImplementedMessage`). A genuine typo (e.g. `/job chta`) still falls through to the ordinary unknown-command response — only the exact deferred sub-command name is special-cased.
+
 ---
 
 ## Configuration

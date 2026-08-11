@@ -140,4 +140,6 @@ Both unavailable commands, if you try them, tell you clearly that they're not im
 - Per-user retention overrides (`/settings set retention`) — no such capability exists anywhere in the system yet, web or CLI.
 - CLI-side network-mode control (`/settings set network-mode`) — blocked on a pre-existing web UI limitation.
 
+If you try `/project chat`, `/job chat`, `/chore chat`, or `/history chat`, the CLI returns a specific "'/X chat' is not yet implemented" message naming that exact command, not a generic unrecognized-command error — so it's always clear the command was understood but is deliberately deferred, not mistyped. A genuine typo (e.g. `/job chta`) still gets the ordinary "Unknown command" response. `/settings set retention` and `/settings set network-mode` similarly return a clear deferred-capability message rather than a generic error or silent no-op (see the Settings section above) — `/settings set network-mode` additionally requires an admin role, so a non-admin sees a permission error there instead of the deferral message.
+
 See the [Web Workspace Guide](web-workspace-guide.md) for the equivalent web UI experience, which the CLI commands above are designed to match exactly — data created in one is visible in the other.
