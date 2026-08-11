@@ -20,7 +20,7 @@ NuimanBot's six new agent-workspace environments (Chats, Projects, Jobs, Chores,
 ## Non-Goals
 
 - Not building networked/concurrent multi-user CLI access (SSH multi-session, socket server) — this stays a single local terminal REPL per running process, just with real login instead of auto-admin. The current CLI has exactly one `Reader`/`Writer` per process; multiple concurrent authenticated sessions from one running instance is out of scope.
-- Not redesigning the web UI's auth system — CLI login reuses the existing user accounts/credential verification, it doesn't change how web auth works.
+- Not changing the web UI's auth *behavior*/UX — session length, login form, password rules stay the same. The underlying credential-verification code does move to a shared usecase-layer service as part of this PRD (see FR-044), which both adapters then depend on; that's an implementation-location change, not a redesign of how web auth works or feels to a user.
 - Not introducing new product surface — CLI parity mirrors the existing web FRs for the six environments; no new capabilities beyond what the web UI already has.
 - Not building a CLI equivalent of the WebSocket live-update/notification-badge mechanism — that's a web-UI-specific concept; the CLI equivalent of "seeing an update" is re-running the relevant list/show command.
 - Not adding account creation or password-reset flows to the CLI — it authenticates against accounts that already exist (created via the web UI's Users management), it doesn't manage account lifecycle.
@@ -37,6 +37,7 @@ NuimanBot's six new agent-workspace environments (Chats, Projects, Jobs, Chores,
 - **FR-005:** A `/logout` command clears the persisted session and ends the authenticated context.
 - **FR-006:** Admin-only commands (skill/profile/bot/config/memory admin, Settings' system-wide half) are gated by the logged-in user's real `Role`, replacing today's unconditional auto-admin grant.
 - **FR-007:** Chat messages sent through the REPL are attributed to the logged-in user's real identity, not the hardcoded `"cli_user"` placeholder.
+- **FR-044:** Credential-verification and session logic currently in `internal/adapter/web/auth.go`'s `AuthService` is extracted into a shared usecase-layer service (e.g. `internal/usecase/auth`); both the web adapter and the new CLI adapter are refactored to depend on that shared service instead of the CLI depending on the web adapter directly. The web UI's behavior/UX (session length, login form, password rules) is unchanged — only the implementation's location moves, per this repo's Clean Architecture dependency rule (adapters depend on usecase, not on each other).
 
 ### Command Surface Conventions
 
@@ -117,6 +118,8 @@ NuimanBot's six new agent-workspace environments (Chats, Projects, Jobs, Chores,
 - [ ] Two different logged-in users each see only their own Chats/Projects/Jobs/Chores/History via CLI commands — no cross-user visibility.
 - [ ] `/memories browse` and `/memory stats` (existing admin command) both work without prefix collision.
 - [ ] All existing pre-change CLI behavior (skill commands, admin bot/profile/config/memory commands minus the auto-admin grant) continues to work for a logged-in admin user.
+- [ ] `internal/adapter/cli` does not import `internal/adapter/web` anywhere — both adapters depend only on the new shared usecase-layer auth service (FR-044).
+- [ ] The web admin's login behavior (session length, login form, password rules) is unchanged after the `AuthService` extraction — verified by the existing web auth tests still passing unmodified.
 - [ ] `go build -o bin/nuimanbot ./cmd/nuimanbot` succeeds and the quality-gate chain from `AGENTS.md` passes.
 
 ## Dependencies and Risks
@@ -124,7 +127,7 @@ NuimanBot's six new agent-workspace environments (Chats, Projects, Jobs, Chores,
 | Item | Type | Notes |
 |---|---|---|
 | `internal/usecase/{chats,projects,jobs,chores,history,memories,settings}` | Dependency | Existing per-user-scoped business logic the new CLI handlers call directly — no duplicated logic. |
-| `internal/adapter/web/auth.go`'s `AuthService` | Risk | Currently adapter-local (web-only), not usecase-layer — reusing it as-is from a CLI adapter would violate this repo's Clean Architecture dependency rule (adapters depend on usecase, not on each other). This PRD requires extracting credential-verification/session logic into a shared usecase-layer service both adapters depend on — real, non-trivial refactoring, not a drop-in reuse. |
+| `internal/adapter/web/auth.go`'s `AuthService` | Risk | Currently adapter-local (web-only), not usecase-layer — reusing it as-is from a CLI adapter would violate this repo's Clean Architecture dependency rule (adapters depend on usecase, not on each other). FR-044 mandates the extraction into a shared usecase-layer service both adapters depend on — real, non-trivial refactoring, not a drop-in reuse. |
 | `IsMemoryCommand()` prefix routing in `cliGateway` | Dependency/Risk | New `/memories` commands must be dispatched distinctly from the existing `/memory` admin-command prefix; incorrect parsing could let one silently shadow the other. |
 | FR-R7 (identity-bridge gap, from the prior feature's code review) | Dependency | This PRD is effectively the fix for FR-R7 — Memories' `ownerUserID`→`ConversationID` scoping assumption becomes verifiable/real once CLI sessions carry a real logged-in identity. |
 | Removing the auto-admin grant | Risk | `main.go`'s `SetCurrentUser(&domain.User{Role: RoleAdmin})` is currently unconditional; anyone relying on today's zero-friction admin CLI access (local scripts, ops runbooks) breaks once login is required — needs a deprecation note in `support_docs/`. |
