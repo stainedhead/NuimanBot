@@ -9,158 +9,72 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/crypto/bcrypt"
+	"nuimanbot/internal/usecase/auth"
 )
 
 const (
-	sessionTimeout         = 24 * time.Hour
-	sessionCleanupInterval = 5 * time.Minute
-	sessionCookieName      = "session_id"
-	csrfTokenLength        = 32
-	sessionIDLength        = 32
-	bcryptCost             = 12
+	// sessionTimeout mirrors internal/usecase/auth.Service's default session
+	// lifetime. It is duplicated here (rather than exported from auth) solely
+	// so handleLogin can compute the session cookie's MaxAge without reaching
+	// into the usecase layer for an HTTP-transport concern.
+	sessionTimeout    = 24 * time.Hour
+	sessionCookieName = "session_id"
+	csrfTokenLength   = 32
 )
 
-// AuthService handles authentication and session management
+// Session and AuthUser are type aliases for internal/usecase/auth's exported
+// structs. A type alias is safe here — unlike AuthService below — because
+// every field of both structs is exported; nothing in this package or its
+// tests reaches into an unexported field or method of Session/AuthUser.
+type (
+	Session  = auth.Session
+	AuthUser = auth.AuthUser
+)
+
+// AuthService adapts internal/usecase/auth.Service for HTTP-transport
+// concerns (cookies, CSRF) that don't belong in the platform-agnostic
+// usecase layer. It embeds *auth.Service, so all credential/session methods
+// (ValidateCredentials, CreateSession, ValidateSession, GetSession,
+// DestroySession, UpdatePassword, ClearForcePasswordChange,
+// CreateSessionWithFlags, IsDefaultCredentials, GetUser, RestoreSession) are
+// promoted and callable directly on *AuthService.
+//
+// This is a wrapper struct, not a type alias — see
+// specs/260811-cli-parity-for-nuimanbot-features/architecture.md AD-1 for
+// why a type alias does not compile against this package's existing
+// white-box tests and production call sites.
 type AuthService struct {
-	users          map[string]*AuthUser
-	sessions       map[string]*Session
-	csrfTokens     map[string]bool
-	mu             sync.RWMutex
-	sessionTimeout time.Duration
-	secureCookies  bool // set to true when running under TLS
+	*auth.Service
+	csrfTokens    map[string]bool
+	secureCookies bool         // set to true when running under TLS
+	mu            sync.RWMutex // guards csrfTokens/secureCookies only; auth.Service has its own internal locking
 }
 
-// AuthUser represents an authenticated user
-type AuthUser struct {
-	Username     string
-	PasswordHash string
-	Role         string
-}
-
-// Session represents a user session
-type Session struct {
-	ID                  string
-	Username            string
-	Role                string
-	CreatedAt           time.Time
-	ExpiresAt           time.Time
-	ForcePasswordChange bool // set when user must change default credentials
-}
-
-// NewAuthService creates a new authentication service
+// NewAuthService creates a new authentication service backed by its own
+// private internal/usecase/auth.Service. Used when the web server owns
+// authentication state exclusively (e.g. most tests).
 func NewAuthService() *AuthService {
-	svc := &AuthService{
-		users:          make(map[string]*AuthUser),
-		sessions:       make(map[string]*Session),
-		csrfTokens:     make(map[string]bool),
-		sessionTimeout: sessionTimeout,
+	return &AuthService{
+		Service:    auth.NewService(),
+		csrfTokens: make(map[string]bool),
 	}
-	go svc.runCleanupLoop()
-	return svc
 }
 
-// AddUser adds a user to the authentication service (for testing and setup)
-func (a *AuthService) AddUser(username, password, role string) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	// Hash password
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
-	if err != nil {
-		return fmt.Errorf("failed to hash password: %w", err)
+// NewAuthServiceWith wraps an existing, shared internal/usecase/auth.Service
+// for HTTP-transport concerns. cmd/nuimanbot/main.go uses this so the web
+// admin UI and the CLI gateway authenticate against the exact same
+// account/session store, regardless of whether the web UI is enabled.
+func NewAuthServiceWith(shared *auth.Service) *AuthService {
+	return &AuthService{
+		Service:    shared,
+		csrfTokens: make(map[string]bool),
 	}
-
-	a.users[username] = &AuthUser{
-		Username:     username,
-		PasswordHash: string(hashedPassword),
-		Role:         role,
-	}
-
-	return nil
 }
 
-// ValidateCredentials checks if username and password are valid
-func (a *AuthService) ValidateCredentials(username, password string) bool {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-
-	user, exists := a.users[username]
-	if !exists {
-		return false
-	}
-
-	err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password))
-	return err == nil
-}
-
-// CreateSession creates a new session for the user
-func (a *AuthService) CreateSession(username, role string) string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	// Generate random session ID
-	sessionID := generateRandomString(sessionIDLength)
-
-	// Create session
-	session := &Session{
-		ID:        sessionID,
-		Username:  username,
-		Role:      role,
-		CreatedAt: time.Now(),
-		ExpiresAt: time.Now().Add(a.sessionTimeout),
-	}
-
-	a.sessions[sessionID] = session
-
-	return sessionID
-}
-
-// ValidateSession checks if a session ID is valid
-func (a *AuthService) ValidateSession(sessionID string) bool {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-
-	session, exists := a.sessions[sessionID]
-	if !exists {
-		return false
-	}
-
-	// Check if session has expired
-	if time.Now().After(session.ExpiresAt) {
-		return false
-	}
-
-	return true
-}
-
-// GetSession retrieves session information
-func (a *AuthService) GetSession(sessionID string) *Session {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-
-	session, exists := a.sessions[sessionID]
-	if !exists {
-		return nil
-	}
-
-	// Check if session has expired
-	if time.Now().After(session.ExpiresAt) {
-		return nil
-	}
-
-	return session
-}
-
-// DestroySession removes a session
-func (a *AuthService) DestroySession(sessionID string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	delete(a.sessions, sessionID)
-}
-
-// GenerateCSRFToken generates a new CSRF token
+// GenerateCSRFToken generates a new CSRF token. CSRF protects browser form
+// submissions against cross-site forgery; it is meaningless for the CLI's
+// terminal REPL (no browser/cookie surface), so it stays entirely in this
+// package rather than moving to internal/usecase/auth.
 func (a *AuthService) GenerateCSRFToken() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -171,7 +85,7 @@ func (a *AuthService) GenerateCSRFToken() string {
 	return token
 }
 
-// ValidateCSRFToken validates and consumes a CSRF token
+// ValidateCSRFToken validates and consumes a CSRF token.
 func (a *AuthService) ValidateCSRFToken(token string) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -187,33 +101,13 @@ func (a *AuthService) ValidateCSRFToken(token string) bool {
 	return true
 }
 
-// runCleanupLoop runs a single background goroutine that periodically removes
-// expired sessions on a fixed interval. Using a timer-based loop (rather than
-// spawning a goroutine on every CreateSession call) prevents goroutine
-// accumulation under load: regardless of how many sessions are created, exactly
-// one cleanup goroutine exists for the lifetime of the AuthService.
-func (a *AuthService) runCleanupLoop() {
-	ticker := time.NewTicker(sessionCleanupInterval)
-	defer ticker.Stop()
-	for range ticker.C {
-		a.cleanupExpiredSessions()
-	}
-}
-
-// cleanupExpiredSessions removes expired sessions
-func (a *AuthService) cleanupExpiredSessions() {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	now := time.Now()
-	for sessionID, session := range a.sessions {
-		if now.After(session.ExpiresAt) {
-			delete(a.sessions, sessionID)
-		}
-	}
-}
-
-// generateRandomString generates a random base64 encoded string
+// generateRandomString generates a random base64 encoded string.
+//
+// Duplicated (unexported, identical implementation) from
+// internal/usecase/auth rather than imported: GenerateCSRFToken needs it and
+// CSRF stays in this package per AD-1's classification. Keeping two small
+// copies also lets TestGenerateRandomString (auth_coverage_test.go) keep
+// compiling unmodified, holding AD-1's "exactly two relocated tests" count.
 func generateRandomString(length int) string {
 	bytes := make([]byte, length)
 	if _, err := rand.Read(bytes); err != nil {
@@ -329,7 +223,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Get user role
-		user, exists := s.auth.users[username]
+		user, exists := s.auth.GetUser(username)
 		if !exists {
 			http.Error(w, "User not found", http.StatusInternalServerError)
 			return
@@ -469,82 +363,6 @@ func (s *Server) getCurrentUser(r *http.Request) *User {
 	}
 }
 
-// UpdatePassword updates the stored password hash for a user.
-func (a *AuthService) UpdatePassword(username, newPassword string) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	user, exists := a.users[username]
-	if !exists {
-		return fmt.Errorf("web: update password: user %q not found", username)
-	}
-
-	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcryptCost)
-	if err != nil {
-		return fmt.Errorf("web: update password: hash: %w", err)
-	}
-
-	user.PasswordHash = string(hash)
-	return nil
-}
-
-// ClearForcePasswordChange removes the ForcePasswordChange flag from the session.
-func (a *AuthService) ClearForcePasswordChange(sessionID string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	if session, ok := a.sessions[sessionID]; ok {
-		session.ForcePasswordChange = false
-	}
-}
-
-// createSessionWithFlags creates a new session, optionally setting the
-// ForcePasswordChange flag for accounts using default credentials.
-func (a *AuthService) createSessionWithFlags(username, role string, forcePasswordChange bool) string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	sessionID := generateRandomString(sessionIDLength)
-
-	session := &Session{
-		ID:                  sessionID,
-		Username:            username,
-		Role:                role,
-		CreatedAt:           time.Now(),
-		ExpiresAt:           time.Now().Add(a.sessionTimeout),
-		ForcePasswordChange: forcePasswordChange,
-	}
-
-	a.sessions[sessionID] = session
-
-	go a.cleanupExpiredSessions()
-
-	return sessionID
-}
-
-// isDefaultCredentials reports whether the supplied plaintext password matches
-// the default "admin" password for the "admin" user.
-// Detection uses bcrypt.CompareHashAndPassword for constant-time comparison,
-// preventing timing-based enumeration of whether a password matches "admin".
-func (a *AuthService) isDefaultCredentials(username, password string) bool {
-	if username != defaultAdminUsername {
-		return false
-	}
-	// Use bcrypt to verify against the known default password hash.
-	// This is constant-time by design.
-	return bcrypt.CompareHashAndPassword([]byte(defaultAdminPasswordHash), []byte(password)) == nil
-}
-
-const (
-	// defaultAdminUsername is the well-known default administrator account name.
-	defaultAdminUsername = "admin"
-
-	// defaultAdminPasswordHash is the bcrypt hash of the literal string "admin".
-	// Cost 10 keeps the hash stable for detection purposes only (not for authentication).
-	// Authentication always uses the stored hash from AddUser.
-	defaultAdminPasswordHash = "$2a$10$Y6HD25IiXnjpqGnkUrK02uZBvmdpzv6vB3eGFCcEeIn1jSZlsrd2e"
-)
-
 // setSecureCookies enables or disables the Secure flag on session cookies.
 // It should be called with true when the server is running under TLS.
 func (a *AuthService) setSecureCookies(secure bool) {
@@ -558,4 +376,18 @@ func (a *AuthService) isSecureCookies() bool {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.secureCookies
+}
+
+// createSessionWithFlags is a thin shim over the embedded auth.Service's
+// exported CreateSessionWithFlags, declared here (lowercase, in package web)
+// so existing white-box tests that call the pre-extraction unexported method
+// name keep compiling unmodified.
+func (a *AuthService) createSessionWithFlags(username, role string, forcePasswordChange bool) string {
+	return a.CreateSessionWithFlags(username, role, forcePasswordChange)
+}
+
+// isDefaultCredentials is a thin shim over the embedded auth.Service's
+// exported IsDefaultCredentials — see createSessionWithFlags's doc comment.
+func (a *AuthService) isDefaultCredentials(username, password string) bool {
+	return a.IsDefaultCredentials(username, password)
 }

@@ -191,27 +191,9 @@ func TestSessionValidation(t *testing.T) {
 	}
 }
 
-// TestSessionExpiry tests that sessions expire after timeout
-func TestSessionExpiry(t *testing.T) {
-	auth := NewAuthService()
-	auth.sessionTimeout = 100 * time.Millisecond // Short timeout for testing
-
-	// Create session
-	sessionID := auth.CreateSession("admin", "admin")
-
-	// Session should be valid initially
-	if !auth.ValidateSession(sessionID) {
-		t.Error("session should be valid initially")
-	}
-
-	// Wait for expiry
-	time.Sleep(150 * time.Millisecond)
-
-	// Session should be expired
-	if auth.ValidateSession(sessionID) {
-		t.Error("session should be expired")
-	}
-}
+// TestSessionExpiry relocated verbatim to internal/usecase/auth/session_test.go
+// (architecture.md AD-1's documented two-function exception: it writes the
+// unexported sessionTimeout field directly, which now lives on auth.Service).
 
 // TestSessionCleanupGoroutineCount verifies that creating multiple sessions does not
 // spawn a new goroutine per session. The cleanup loop must be a single background
