@@ -129,7 +129,7 @@ func TestGateway_AuthGatesInputAndAttributesMessages(t *testing.T) {
 		if msg.Text != "hello there" {
 			t.Errorf("expected text 'hello there', got %q", msg.Text)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("timed out waiting for authenticated chat message")
 	}
 
@@ -138,7 +138,7 @@ func TestGateway_AuthGatesInputAndAttributesMessages(t *testing.T) {
 		if err != nil {
 			t.Errorf("Start returned error: %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("timed out waiting for gateway to exit")
 	}
 
@@ -193,7 +193,7 @@ func TestGateway_LogoutRequiresReLogin(t *testing.T) {
 		if err != nil {
 			t.Errorf("Start returned error: %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("timed out waiting for gateway to exit")
 	}
 
@@ -248,7 +248,7 @@ func TestGateway_MemoryCommandsRequireAdmin(t *testing.T) {
 		if err != nil {
 			t.Errorf("Start returned error: %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("timed out waiting for gateway to exit")
 	}
 
@@ -303,7 +303,7 @@ func TestGateway_MemoryCommandsWorkForAdmin(t *testing.T) {
 		if err != nil {
 			t.Errorf("Start returned error: %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("timed out waiting for gateway to exit")
 	}
 

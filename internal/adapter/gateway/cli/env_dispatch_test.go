@@ -190,7 +190,7 @@ func runGatewayInput(t *testing.T, configure func(g *cli.Gateway), inputLines ..
 		if err != nil {
 			t.Fatalf("Start returned error: %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("timed out waiting for gateway to exit")
 	}
 

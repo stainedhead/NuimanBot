@@ -297,7 +297,7 @@ func readSessionFile(path string) (*auth.Session, error) {
 		return nil, fmt.Errorf("cli auth: session file %s has overly permissive mode %v, refusing to trust it", path, info.Mode().Perm())
 	}
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- path traces to app.Config.Gateways.CLI.HistoryFile, an operator-controlled config value, not runtime/attacker input
 	if err != nil {
 		return nil, fmt.Errorf("cli auth: read session file: %w", err)
 	}

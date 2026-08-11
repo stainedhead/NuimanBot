@@ -124,7 +124,7 @@ const (
 	// defaultAdminPasswordHash is the bcrypt hash of the literal string "admin".
 	// Cost 10 keeps the hash stable for detection purposes only (not for authentication).
 	// Authentication always uses the stored hash from AddUser.
-	defaultAdminPasswordHash = "$2a$10$Y6HD25IiXnjpqGnkUrK02uZBvmdpzv6vB3eGFCcEeIn1jSZlsrd2e"
+	defaultAdminPasswordHash = "$2a$10$Y6HD25IiXnjpqGnkUrK02uZBvmdpzv6vB3eGFCcEeIn1jSZlsrd2e" // #nosec G101 -- a bcrypt hash used only to detect the well-known default password, not a real credential
 )
 
 // IsDefaultCredentials reports whether the supplied plaintext password
