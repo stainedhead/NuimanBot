@@ -17,8 +17,8 @@
 | 3  | Implement Product                | ✅ Complete (13 commits: AD-1-6 done, 2 FRs deferred per coordinator decision, self-caught 6 gaps via post-hoc advisor pass) | 2026-08-11T17:23:37Z | 2026-08-11T18:32:24Z | 69 |
 | 4  | Documentation and User Docs      | ✅ Complete (ADR-015-020 added, 2 doc inaccuracies fixed, commit 55f46bc) | 2026-08-11T18:32:24Z | 2026-08-11T18:42:50Z | 10 |
 | 5  | Code and Design Review           | ✅ Complete (0 P0, 2 P1, 5 P2, commit 66b8435) | 2026-08-11T18:42:50Z | 2026-08-11T19:10:45Z | 28 |
-| 6  | Prepare Review PRD               | 🔄 In Progress | 2026-08-11T19:10:45Z | — | — |
-| 7  | Archive Original Spec            | ⬜ Pending | — | — | — |
+| 6  | Prepare Review PRD               | ✅ Complete (P1 sanity-checked for FR-2, vague ACs tightened, commit ce7fcfc) | 2026-08-11T19:10:45Z | 2026-08-11T19:15:40Z | 5 |
+| 7  | Archive Original Spec            | 🔄 In Progress | 2026-08-11T19:15:40Z | — | — |
 | 8  | Spec Review Fixes                | ⬜ Pending | — | — | — |
 | 9  | Implement Review Fixes           | ⬜ Pending | — | — | — |
 | 10 | Archive Fixes Spec               | ⬜ Pending | — | — | — |
