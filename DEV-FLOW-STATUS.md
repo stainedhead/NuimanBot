@@ -19,8 +19,8 @@
 | 5  | Code and Design Review           | ✅ Complete (0 P0, 2 P1, 5 P2, commit 66b8435) | 2026-08-11T18:42:50Z | 2026-08-11T19:10:45Z | 28 |
 | 6  | Prepare Review PRD               | ✅ Complete (P1 sanity-checked for FR-2, vague ACs tightened, commit ce7fcfc) | 2026-08-11T19:10:45Z | 2026-08-11T19:15:40Z | 5 |
 | 7  | Archive Original Spec            | ✅ Complete (specs/archive/260811-cli-parity-for-nuimanbot-features/, commit aad286b) | 2026-08-11T19:15:40Z | 2026-08-11T19:16:59Z | 1 |
-| 8  | Spec Review Fixes                | 🔄 In Progress | 2026-08-11T19:16:59Z | — | — |
-| 9  | Implement Review Fixes           | ⬜ Pending | — | — | — |
+| 8  | Spec Review Fixes                | ✅ Complete (specs/260811-cli-parity-for-nuimanbot-features-auto-review/, 7 tasks across 3 workstreams, commit 0a63228) | 2026-08-11T19:16:59Z | 2026-08-11T19:26:32Z | 10 |
+| 9  | Implement Review Fixes           | 🔄 In Progress | 2026-08-11T19:26:32Z | — | — |
 | 10 | Archive Fixes Spec               | ⬜ Pending | — | — | — |
 | 11 | Final Quality Pass               | ⬜ Pending | — | — | — |
 | 12 | Process Analysis Report          | ⬜ Pending | — | — | — |
