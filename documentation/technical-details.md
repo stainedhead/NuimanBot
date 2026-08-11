@@ -247,7 +247,7 @@ Discovered during Buzz gateway spec review (research.md Q6) and fixed as part of
 
 | Platform | Default role for a new user | Why |
 |---|---|---|
-| CLI | `RoleAdmin` | Inherently local/trusted — whoever can run the binary already has full machine access, so gating behind RBAC adds friction without adding real security. Preserves the CLI's pre-existing de facto unrestricted access. **As of CLI Parity (see "CLI Parity Architecture" below, AD-6), this default is pre-empted for every real, logged-in CLI session** — the CLI's post-login identity-reconciliation step ensures `resolveUser`'s lookup always hits an existing `domain.User` record with the session's actual authenticated role first, so this table entry now only describes what happens for an unauthenticated placeholder identity, a case CLI Parity's login requirement otherwise removes. |
+| CLI | `RoleAdmin` | Inherently local/trusted — whoever can run the binary already has full machine access, so gating behind RBAC adds friction without adding real security. Preserves the CLI's pre-existing de facto unrestricted access. **As of CLI Parity (see "CLI Parity Architecture" below, AD-6), this default is pre-empted for every real, logged-in CLI session** — the CLI's post-login identity-reconciliation step ensures `resolveUser`'s lookup always hits an existing `domain.User` record with the session's actual authenticated role first, so this table entry now only describes what happens for an unauthenticated placeholder identity, a case CLI Parity's login requirement otherwise removes. **This pre-emption is conditional, not structural (CLI-parity auto-review fix pass, FR-004): the `RoleAdmin` default itself is unchanged in code and re-arms for any CLI-originated message path that reaches `resolveUser` without first going through `AuthCommandHandler.EnsureAuthenticated`/`reconcileIdentity` — see the "Identity Reconciliation (AD-6)" section's landmine warning below.** |
 | Telegram, Slack, Buzz | `RoleGuest` | The sender is a remote, unauthenticated-by-default party; least-privilege default until an admin promotes them. |
 
 **Why fixed for all platforms, not scoped to Buzz:** the shared `ChatService` tool-invocation path does not branch by platform, so it was not possible to enforce RBAC for Buzz-originated tool calls without also enforcing it for Telegram/Slack/CLI — and leaving them unchecked while Buzz was checked would have been an inconsistent, hard-to-reason-about security posture. This is a deliberate behavior change: existing Telegram/Slack/CLI users whose role lacks permission for a tool they could previously call unchecked will see that tool become unavailable. Regression coverage (`internal/usecase/chat/rbac_test.go`) verifies RBAC/rate-limiting is enforced for tool calls originating from each platform, not just Buzz.
@@ -1670,8 +1670,25 @@ All `/admin/...` routes are wrapped in the existing `userHandler`/`requireRole`/
 1. POST /admin/jobs (Title, Description, ContextType=project, ContextID=<projectID>)
    │
    ├─> JobsService.CreateJob
-   │     ├─ Resolves the Project's OutputDirectory via ProjectDirectoryLookup
-   │     │   (projectDirectoryLookupAdapter -> domain.ProjectRepository.GetProject)
+   │     ├─ Verifies context ownership (verifyContextOwnership, FR-002 fix —
+   │     │   CLI-parity auto-review): a non-empty ContextID must resolve to a
+   │     │   Project/Chat owned by the caller-supplied OwnerUserID, or
+   │     │   CreateJob rejects with domain.ErrNotFound BEFORE anything is
+   │     │   persisted. Project resolves (and, for ContextTypeProject,
+   │     │   returns WorkingDirectory) via ProjectDirectoryLookup
+   │     │   (projectDirectoryLookupAdapter -> domain.ProjectRepository.GetProject,
+   │     │   itself OwnerUserID-scoped); Chat verifies via ChatOwnershipCheck
+   │     │   (chatOwnershipCheckAdapter -> domain.ConversationRepository.GetConversation
+   │     │   + an owner comparison, mirroring chats.Service.GetChat). A
+   │     │   foreign-owned and a genuinely nonexistent/deleted ContextID are
+   │     │   rejected identically — the repositories deliberately cannot
+   │     │   distinguish the two (anti-IDOR design, see
+   │     │   FileProjectRepository's doc comment) — so CreateJob doesn't try.
+   │     │   This superseded the feature's original creation-time "stale
+   │     │   Project reference" tolerance (spec.md's Edge Case #2); that edge
+   │     │   case's actual run-time protection (a Project deleted AFTER Job
+   │     │   creation) is unaffected — it's still enforced at execution time
+   │     │   by StubExecutor.checkProjectExists, below.
    │     ├─ Persists Job record (FileJobRepository, AtomicFileWriter)
    │     ├─ Writes JOB-DESCRIPTION.md into the Job's HiddenDirectory (fsguard-confined)
    │     ├─ Creates a Run{Status: Queued} (FileRunRepository, via NotifyingRunRepository
@@ -1738,6 +1755,8 @@ The web adapter's sessions are an in-memory map — fine for a single long-runni
 A second, independent "CLI is trusted" shortcut exists in `internal/usecase/chat/service.go`, untouched by the login-flow replacement above: `defaultRoleForPlatform(PlatformCLI)` returns `RoleAdmin` when `resolveUser` auto-provisions a `domain.User` for a never-before-seen `(platform, platformUID)` pair. Once the CLI's plain-chat path uses the real logged-in username as `platformUID` (replacing the old hardcoded `"cli_user"` placeholder), every distinct username becomes "never-before-seen" on its first message — which would silently grant every CLI user admin RBAC privileges regardless of their real `auth.Service` role, defeating the whole point of real login.
 
 `AuthCommandHandler.reconcileIdentity` closes this: immediately after a successful login or session restore, before the REPL accepts any input, it looks up `domain.User` for `(PlatformCLI, session.Username)` via `internal/usecase/user.Service`. If found with a stale `Role`, it's corrected to match the just-authenticated session's real role (`UpdateUserRole`); if not found, it's created directly with the correct role. Either way, `resolveUser`'s auto-create/`defaultRoleForPlatform` branch is never exercised for an authenticated CLI identity.
+
+**Landmine warning (CLI-parity auto-review fix pass, FR-004):** the above is a wiring-order mitigation, not a structural fix. `defaultRoleForPlatform(PlatformCLI)` itself is untouched — it still returns `RoleAdmin` and is dead-in-practice-but-not-dead-in-code: it still runs, unchanged, for any CLI-originated message that reaches `resolveUser`'s auto-create path without first going through `EnsureAuthenticated`/`reconcileIdentity`. The security property currently lives entirely in `main.go`'s `if app.DomainUserService == nil { os.Exit(1) }` guard and in `Gateway.authHandler` being non-nil at `Gateway.Start` time — it is not enforced by `internal/usecase/chat` itself. **Any future CLI-originated message path — a new command source, a background job, a future socket-server mode (see this feature's Non-Goals list) — must go through `AuthCommandHandler.EnsureAuthenticated`/`reconcileIdentity` before reaching `ProcessMessage`/`resolveUser`, or this shortcut re-arms and silently grants that caller `RoleAdmin` on first contact.** See the doc comment directly on `defaultRoleForPlatform` (`internal/usecase/chat/service.go`) and ADR-020 (`documentation/architectural-decision-record.md`) for the same warning in the other two places a future implementer might land. Two possible structural fixes exist (refuse to run without `authHandler`; change `defaultRoleForPlatform(PlatformCLI)`'s default) but neither is decided or implemented by this fix pass — see ADR-020's "Landmine warning" note for the open question.
 
 ### Environment Command Dispatch
 

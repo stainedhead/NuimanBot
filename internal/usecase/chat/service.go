@@ -251,6 +251,32 @@ func (s *Service) resolveUser(ctx context.Context, platform domain.Platform, pla
 // preserves the CLI's pre-existing de facto unrestricted access. Every other
 // platform (Telegram, Slack, Buzz) defaults to RoleGuest, since the sender is
 // a remote, unauthenticated-by-default party.
+//
+// LANDMINE (documented explicitly by the CLI-parity auto-review fix pass,
+// FR-004): the "inherently local/trusted" justification above holds ONLY
+// for an unauthenticated placeholder identity — it does NOT hold for a
+// real, logged-in CLI user, where "whoever can run the binary" and "the
+// person this session is authenticated as" are no longer the same
+// guarantee. This PlatformCLI branch is dead-in-practice-but-NOT-dead-in-
+// code: it still runs, unchanged, for any CLI-originated message whose
+// (platform, platformUID) hasn't already been reconciled to a real
+// domain.User with the caller's actual auth.Service-verified role. Today
+// that's neutralized entirely at a different layer —
+// internal/adapter/gateway/cli.AuthCommandHandler.EnsureAuthenticated /
+// reconcileIdentity runs before Gateway.Start's REPL loop ever accepts
+// input, so resolveUser's auto-create path (which calls this function)
+// never actually fires for an authenticated CLI identity (see ADR-020 /
+// documentation/technical-details.md's "Identity Reconciliation (AD-6)"
+// section). That is a wiring-order mitigation, not a fix to this function.
+// ANY future CLI-originated message path — a new command source, a
+// background job, a future socket-server mode (see this feature's
+// Non-Goals) — that reaches ProcessMessage/resolveUser WITHOUT first going
+// through EnsureAuthenticated/reconcileIdentity will silently re-arm this
+// shortcut and grant that caller RoleAdmin on first contact. Route any new
+// CLI entry point through the auth gate first, or fix this function
+// structurally (see ADR-020's optional follow-up) — do not assume this
+// branch is safe by default just because it's currently unreachable in
+// practice.
 func defaultRoleForPlatform(platform domain.Platform) domain.Role {
 	if platform == domain.PlatformCLI {
 		return domain.RoleAdmin
