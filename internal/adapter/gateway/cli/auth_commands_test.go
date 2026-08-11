@@ -213,6 +213,73 @@ func TestEnsureAuthenticated_RestoreValidSession(t *testing.T) {
 	}
 }
 
+// TestEnsureAuthenticated_RestoreCorrectsStaleRole is FR-007's (auto-review
+// fix pass) mandatory end-to-end test: TestReconcileIdentity_UpdatesStaleRole
+// already proves reconcileIdentity corrects a stale role when called
+// directly, and TestEnsureAuthenticated_RestoreValidSession already proves
+// the restore path works when the pre-seeded role already matches — but no
+// existing test exercised EnsureAuthenticated's restore path specifically
+// with a MISMATCHED pre-seeded role, to confirm the correction happens
+// end-to-end through the public entry point (not just the internal method
+// in isolation). This pre-seeds a domain.User for (PlatformCLI, "alice")
+// with a stale RoleAdmin, writes a valid session file whose Role is "user"
+// (the account's real, current role), and asserts both:
+//  1. EnsureAuthenticated's returned user has the corrected RoleUser, and
+//  2. the correction is durably visible via GetUserByPlatformUID afterward
+//     — the same lookup internal/usecase/chat.Service's resolveUser would
+//     perform on the first chat message (mirroring
+//     TestReconcileIdentity_NonAdminChatDoesNotBecomeAdmin's pattern) —
+//     which is what makes this end-to-end rather than a restatement of
+//     TestReconcileIdentity_UpdatesStaleRole's direct-call assertion.
+func TestEnsureAuthenticated_RestoreCorrectsStaleRole(t *testing.T) {
+	handler, authSvc, userSvc, sessionPath := newTestAuthHandler(t)
+
+	// Seed a stale admin record for alice, though her real account role
+	// (as authSvc, the source of truth, has it) is "user".
+	if _, err := userSvc.CreateUser(context.Background(), domain.PlatformCLI, "alice", domain.RoleAdmin); err != nil {
+		t.Fatalf("seed stale domain user: %v", err)
+	}
+
+	sessionID := authSvc.CreateSession("alice", "user")
+	session := authSvc.GetSession(sessionID)
+	if session.Role != "user" {
+		t.Fatalf("test setup: expected session Role %q, got %q", "user", session.Role)
+	}
+	if err := writeSessionFile(sessionPath, session); err != nil {
+		t.Fatalf("writeSessionFile: %v", err)
+	}
+
+	scanner := bufio.NewScanner(strings.NewReader("")) // must not be read from — restore path only
+	var out bytes.Buffer
+
+	user, restoredSession, err := handler.EnsureAuthenticated(context.Background(), &out, scanner)
+	if err != nil {
+		t.Fatalf("EnsureAuthenticated: %v", err)
+	}
+	if restoredSession.ID != sessionID {
+		t.Fatalf("expected restored session ID %q, got %q", sessionID, restoredSession.ID)
+	}
+	if strings.Contains(out.String(), "Username:") {
+		t.Error("expected no login prompt when a valid session is restored")
+	}
+
+	// (1) EnsureAuthenticated's own return value must carry the corrected role.
+	if user.Role != domain.RoleUser {
+		t.Errorf("expected EnsureAuthenticated's restore path to correct the stale RoleAdmin to RoleUser, got %q", user.Role)
+	}
+
+	// (2) The correction must be durably visible via the same lookup
+	// internal/usecase/chat.Service.resolveUser performs — proving this is
+	// end-to-end, not just a return-value artifact.
+	found, err := userSvc.GetUserByPlatformUID(context.Background(), domain.PlatformCLI, "alice")
+	if err != nil {
+		t.Fatalf("GetUserByPlatformUID: %v", err)
+	}
+	if found.Role != domain.RoleUser {
+		t.Errorf("expected the stored domain.User's role to be corrected to RoleUser after restore, got %q", found.Role)
+	}
+}
+
 // TestEnsureAuthenticated_ExpiredSessionFallsBackToLogin verifies an expired
 // on-disk session falls back to the login prompt rather than erroring out
 // (FR-004, Reliability NFR).
