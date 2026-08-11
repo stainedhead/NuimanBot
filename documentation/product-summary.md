@@ -51,7 +51,7 @@ Beyond the core chat gateways, NuimanBot is growing into a **persistent, multi-u
 
 ### 2. Multi-Platform Support
 
-- **CLI Gateway**: Interactive REPL for development and admin tasks
+- **CLI Gateway**: Interactive REPL requiring real login (shared credentials with the web admin UI; session persists across restarts, `/logout` to end early), with slash-commands mirroring the web UI's Chats/Projects/Jobs/Chores/History/Memories/Settings environments in addition to development and admin tasks
 - **Telegram Gateway**: Long-polling and webhook support with user allowlists
 - **Slack Gateway**: Socket Mode (no public endpoint required)
 - **Buzz Gateway**: Nostr-based, relay-transported multi-agent channel participation — decentralized transport (no single API endpoint) and cryptographically-identified agent/human participants, distinct from the other three request/response-style gateways

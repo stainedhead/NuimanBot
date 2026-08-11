@@ -1,8 +1,8 @@
 # NuimanBot Technical Documentation
 
-**Version:** 1.3
-**Last Updated:** 2026-08-05
-**Completion Status:** Core Platform 100% Complete — Persistent Agent Workspace In Progress
+**Version:** 1.4
+**Last Updated:** 2026-08-11
+**Completion Status:** Core Platform 100% Complete — Persistent Agent Workspace In Progress; CLI Parity Complete
 **CI/CD Status:** ✅ All Pipelines Passing
 
 ---
@@ -24,10 +24,11 @@
 13. [Web Admin Security Architecture](#web-admin-security-architecture)
 14. [Ingatan Memory Backend Architecture](#ingatan-memory-backend-architecture)
 15. [Persistent Agent Workspace Architecture](#persistent-agent-workspace-architecture)
-16. [Configuration](#configuration)
-17. [Testing Strategy](#testing-strategy)
-18. [CI/CD Pipeline](#cicd-pipeline)
-19. [Deployment Architecture](#deployment-architecture)
+16. [CLI Parity Architecture](#cli-parity-architecture)
+17. [Configuration](#configuration)
+18. [Testing Strategy](#testing-strategy)
+19. [CI/CD Pipeline](#cicd-pipeline)
+20. [Deployment Architecture](#deployment-architecture)
 
 ---
 
@@ -1707,7 +1708,48 @@ Every `SaveRun`/`AppendLog`/`MarkNotified` call along this path also reaches the
 
 ### Known Limitations (Cross-Reference)
 
-This subsystem's pipeline (queueing, concurrency, cron evaluation, queued-work persistence, per-user WebSocket transport with a live browser-side consumer, path confinement with symlink-escape mitigation, IDOR-safe repository scoping, restart recovery, and an automated retention sweep) is implemented and tested end-to-end. What is **not** yet real: agent-invoking execution (`StubExecutor` is a placeholder), agent replies in the web Chats UI, and the per-Job/Chore/Run chat interfaces (Memories now has one — see the Memories section — as the FR-R4 reference implementation the other three are meant to follow). Also unresolved: the Memories `ownerUserID`→`ConversationID` mapping is a confirmed (not merely assumed) gap — no identity bridge exists in this codebase between the web-admin account system and the CLI/Telegram/Buzz gateway identity system, so Memories may under-show a user's stored knowledge; see `internal/usecase/memories/service.go`'s package doc comment and `conversation_id_mapping_test.go` for the traced evidence. See `documentation/product-summary.md`'s "Persistent Agent Workspace — In Progress" for the full, itemized list.
+This subsystem's pipeline (queueing, concurrency, cron evaluation, queued-work persistence, per-user WebSocket transport with a live browser-side consumer, path confinement with symlink-escape mitigation, IDOR-safe repository scoping, restart recovery, and an automated retention sweep) is implemented and tested end-to-end. What is **not** yet real: agent-invoking execution (`StubExecutor` is a placeholder), agent replies in the web Chats UI, and the per-Job/Chore/Run chat interfaces (Memories now has one — see the Memories section — as the FR-R4 reference implementation the other three are meant to follow). The Memories `ownerUserID`→`ConversationID` identity-bridge gap noted in earlier revisions of this document is resolved for the CLI gateway as of CLI Parity (see the section below) — the CLI now requires real login and uses the same `ownerUserID` (session username) convention the web UI uses. Telegram/Buzz still use their own separate platform-identity systems, unaffected by either feature. See `documentation/product-summary.md`'s "Persistent Agent Workspace — In Progress" for the full, itemized list.
+
+---
+
+## CLI Parity Architecture
+
+Delivered 2026-08-11 (`specs/260811-cli-parity-for-nuimanbot-features`). Two changes to `internal/adapter/gateway/cli`, the CLI gateway package: (1) real login/session identity, replacing the previous unconditional `cli_admin` auto-grant, and (2) slash-commands mirroring the Persistent Agent Workspace's six environments (above) plus Settings. See `documentation/product-details.md`'s FR-032 for full acceptance criteria.
+
+### Shared Credential/Session Layer
+
+`internal/adapter/web/auth.go`'s `AuthService` — credential verification (bcrypt), session lifecycle, and CSRF — predates this feature and was entirely private to the web adapter. Credential/session logic (not CSRF, which is HTTP-transport-only and meaningless for a terminal REPL) is extracted into a new `internal/usecase/auth` package:
+
+- `auth.Service` owns `AddUser`/`ValidateCredentials`/`GetUser`, `CreateSession[WithFlags]`/`ValidateSession`/`GetSession`/`DestroySession`/`RestoreSession` (new), and the background session-cleanup loop. No knowledge of HTTP or terminal I/O.
+- `web.AuthService` becomes a wrapper struct embedding `*auth.Service` — deliberately **not** a type alias (`type AuthService = auth.Service`), which was the original draft and does not compile: it cannot expose `auth.Service`'s unexported fields/methods that `internal/adapter/web/auth_coverage_test.go`'s white-box tests (and two production call sites) reach directly. The wrapper keeps `csrfTokens`/`secureCookies` (its own fields) and four unexported shim methods (`setSecureCookies`/`isSecureCookies`/`createSessionWithFlags`/`isDefaultCredentials`), declared in package `web`, so ~29 of 31 pre-existing tests keep compiling and passing completely unmodified. Two tests (`TestSessionExpiry`, `TestCleanupExpiredSessions`) that read unexported fields (`sessionTimeout`, `sessions`) directly are relocated verbatim into `internal/usecase/auth` — a documented, narrow exception.
+- `cmd/nuimanbot/main.go` constructs one `auth.Service` instance unconditionally (before the web-UI-enabled check) and seeds the default admin account into it directly, rather than the previous behavior of only seeding an admin user when the web UI's `AddUser` call ran — a CLI-only deployment (web UI disabled) now still has an account to log in against. `web.NewAuthServiceWith(shared *auth.Service)` wraps that same instance for the web server (`NewAuthService()`'s pre-existing zero-arg constructor is retained, unused in production wiring but still exercised by ~8 test call sites).
+
+### CLI Session Persistence (`internal/adapter/gateway/cli/auth_commands.go`)
+
+The web adapter's sessions are an in-memory map — fine for a single long-running server process, insufficient for a CLI that starts a fresh process on every invocation. `AuthCommandHandler` persists the **full session record** (not just an ID) to a local JSON file (`{session_id, username, role, created_at, expires_at}`, no `ForcePasswordChange` — the CLI doesn't implement the forced-default-credential-change UX), at `0600`, alongside the existing history-file path convention.
+
+- **Write:** any pre-existing file at the target path is removed before writing — `os.WriteFile`'s mode argument only applies at file *creation* and does not tighten an existing looser-permission file's mode, and this file's permissions are the entire trust boundary (see below).
+- **Read:** the file's on-disk mode is checked (`&0o077 != 0` rejects anything group/world-readable) before being trusted at all; a corrupted/unparseable file, a missing file, or an overly-permissive file all fall back to a fresh login prompt rather than erroring — the CLI must never crash on bad session state (Reliability NFR).
+- **Restore:** `auth.Service.RestoreSession(session)` independently re-validates `ExpiresAt` and that `Username` still exists in the live user store before re-hydrating the session into memory, failing closed on either check. This is defense-in-depth against a bug in the CLI's own pre-check (e.g. clock skew), not a defense against a malicious local user forging their own session file — the decided threat model is that this file's OS permissions (`0600`) are the trust boundary, consistent with the single-local-operator assumption; a user who can edit their own session file to claim a different identity already has everything that access implies (they could just log in as any account whose password they know).
+- **Password input:** masked via `golang.org/x/term.ReadPassword` when stdin is a real terminal; falls back to a plain line read from the same `bufio.Scanner` already reading the username when not (piped input, non-interactive shells) — deliberately *not* a second, independent `bufio.Reader` over `os.Stdin`, which was an early implementation bug caught via manual binary testing: two independent buffered readers over the same file descriptor can silently drop bytes the first one already buffered ahead, causing every piped-input login to fail.
+
+### Identity Reconciliation (AD-6)
+
+A second, independent "CLI is trusted" shortcut exists in `internal/usecase/chat/service.go`, untouched by the login-flow replacement above: `defaultRoleForPlatform(PlatformCLI)` returns `RoleAdmin` when `resolveUser` auto-provisions a `domain.User` for a never-before-seen `(platform, platformUID)` pair. Once the CLI's plain-chat path uses the real logged-in username as `platformUID` (replacing the old hardcoded `"cli_user"` placeholder), every distinct username becomes "never-before-seen" on its first message — which would silently grant every CLI user admin RBAC privileges regardless of their real `auth.Service` role, defeating the whole point of real login.
+
+`AuthCommandHandler.reconcileIdentity` closes this: immediately after a successful login or session restore, before the REPL accepts any input, it looks up `domain.User` for `(PlatformCLI, session.Username)` via `internal/usecase/user.Service`. If found with a stale `Role`, it's corrected to match the just-authenticated session's real role (`UpdateUserRole`); if not found, it's created directly with the correct role. Either way, `resolveUser`'s auto-create/`defaultRoleForPlatform` branch is never exercised for an authenticated CLI identity.
+
+### Environment Command Dispatch
+
+`gateway.go` gains a shared `EnvCommandHandler` interface (`Handle(ctx, currentUser, ownerUserID, input) (string, error)`), one `Gateway` field + `Set*Handler` method per environment (Chats/Projects/Jobs/Chores/History/Memories/Settings), and prefix-detection functions built on a common word-boundary matcher (`isEnvCommand`) — the same discipline the pre-existing `IsMemoryCommand` already used, which is what keeps the new plural `/memories` prefix from colliding with the existing singular `/memory ` admin-command prefix in either direction (verified: they diverge at their 7th character, well before either reaches a trailing space).
+
+Each environment gets its own file (`chat_commands.go`, `project_commands.go`, etc.) implementing that interface against the same `internal/usecase/{chats,projects,jobs,chores,history,memories,settings}.Service` instances `cmd/nuimanbot`'s existing web wiring (`wireExtendedContextEnvironments`, `wireSettingsEnvironment`) already constructs — both functions were extended to also *return* those instances (in addition to wiring them into the web server, unchanged) so the CLI shares the exact same instances rather than constructing a disconnected second set. `ownerUserID` is threaded through as an explicit parameter distinct from `currentUser`, rather than left for each handler to derive from `currentUser`'s fields — AD-5 requires it to always be the authenticated session's `Username`, never `currentUser.ID`, matching the convention every existing web handler already uses (verified by grep across all six).
+
+Because Jobs/Chores/History share the worker pool and notifying-decorator-wrapped `RunRepository` `wireExtendedContextEnvironments` constructs — both of which currently only exist when the web UI is enabled — those three CLI commands (along with Projects, Memories, and Settings) are unavailable when the web UI is disabled. This mirrors an existing architectural fact (today, that whole subsystem doesn't exist without the web UI enabled) rather than a new limitation this feature introduces. Chats has no such dependency and is wired unconditionally.
+
+### Deliberately Deferred
+
+Four per-item "chat with the agent" sub-commands (`/project chat`, `/job chat`, `/chore chat`, `/history chat`) and two Settings sub-capabilities (`/settings set retention`, `/settings set network-mode`) are not implemented — none had backing capability anywhere in the system (web or usecase layer) to mirror, and building any of them would have meant inventing new product surface, not CLI-specific work. See `documentation/product-details.md`'s FR-032 acceptance criteria for the itemized reasoning per command.
 
 ---
 

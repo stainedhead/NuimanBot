@@ -6,8 +6,19 @@ NuimanBot provides a set of administrative commands accessible through the CLI g
 
 **Requirements:**
 - CLI gateway must be running
+- You must be logged in (see [Breaking Change: Login Required](#breaking-change-login-required) below)
 - User must have `admin` role to execute admin commands
 - Commands are prefixed with `/admin`
+
+---
+
+## Breaking Change: Login Required
+
+**`./bin/nuimanbot` no longer grants immediate admin access on start.** Earlier versions logged every CLI session in automatically as a trusted local administrator with no prompt. This has been removed — the CLI now requires a real username/password login, using the same accounts the web admin UI uses, before it accepts any command or chat input.
+
+If you're upgrading and relied on the old zero-friction behavior (local scripts, ops runbooks, CI), see the [CLI Environments Guide's Login Required section](cli-environments-guide.md#login-required-breaking-change) for what changed and how to adapt. In short: log in with the `admin` account (default credentials `admin`/`admin` on a fresh install — you'll be prompted to change them), your session persists across restarts for 24 hours, and `/logout` ends it early.
+
+The seven new command families this same release adds — `/chat`, `/project`, `/job`, `/chore`, `/history`, `/memories`, `/settings` — are documented in the [CLI Environments Guide](cli-environments-guide.md), not this one; this guide covers only the pre-existing `/admin user ...` commands below.
 
 ---
 
@@ -446,9 +457,14 @@ Guest Role
 # Verify current user role
 > /admin user list
 
-# If you're locked out, you'll need database access to fix this
-# Option 1: Direct database update (requires SQLite access)
-# Option 2: Restart with default admin user
+# If you're locked out (your logged-in CLI account isn't an admin, and
+# there's no other admin account to log in as), you'll need file-system
+# access to fix this — there is no "restart with default admin" fallback
+# anymore (see Breaking Change: Login Required, above):
+# Option 1: Log in as the "admin" account instead, if you know its
+#           credentials (or its defaults haven't been changed yet)
+# Option 2: Edit the underlying user-storage file directly to restore an
+#           admin account (requires file-system access to the host)
 ```
 
 ### "Cannot delete last admin user"
@@ -564,6 +580,7 @@ Map the same logical user across multiple platforms:
 
 ### Documentation
 
+- **[CLI Environments Guide](cli-environments-guide.md)** - Login, and the /chat, /project, /job, /chore, /history, /memories, /settings commands
 - **[Agent Skills User Guide](skills-guide.md)** - Creating and using skills
 - **[Installation & Setup Guide](install-and-setup.md)** - System installation and configuration
 - **[User Onboarding Guide](user-onboarding.md)** - How to use NuimanBot
@@ -612,5 +629,5 @@ Map the same logical user across multiple platforms:
 
 ---
 
-**Last Updated:** 2026-02-07
-**Version:** 1.0
+**Last Updated:** 2026-08-11
+**Version:** 1.1

@@ -2,7 +2,7 @@
 
 **Version:** 1.6
 **Last Updated:** 2026-08-05
-**Status:** Production Ready (Core Platform, 100% Complete) — Persistent Agent Workspace In Progress (see FR-025–FR-031, Feature 9)
+**Status:** Production Ready (Core Platform, 100% Complete) — Persistent Agent Workspace In Progress (see FR-025–FR-031, Feature 9); CLI Parity Complete (see FR-032, Feature 10)
 
 ---
 
@@ -425,12 +425,12 @@
 
 #### FR-030: Persistent Agent Workspace — Memories
 - **Priority:** P1 (High)
-- **Status:** 🔶 Partial — read-only browse and per-item chat complete; `ownerUserID`→`ConversationID` mapping gap remains
+- **Status:** ✅ Complete — read-only browse and per-item chat complete; the `ownerUserID` identity-bridge gap noted below is resolved as of CLI Parity (FR-032)
 - **Description:** Read-only browse/search view over the existing self-organizing memory store, plus a minimal per-item "ask about this memory" chat
 - **Acceptance Criteria:**
   - ✅ Lists/searches memory cells (`internal/domain/memoryv2`) visible to the current user, with no create/edit/delete controls in the UI — the agent remains the sole writer
   - ✅ A per-item chat interface (spec FR-047, FR-R4) is built — Memories is the first of the four environments to get one, serving as the reference implementation the per-Job/Chore/Run chats are meant to follow. It is a minimal, grounded Q&A: one LLM call per question, scoped to that memory cell's own content, with no persisted chat history and no access to the full agent orchestration engine.
-  - ⚠️ Memories' `ownerUserID`→`ConversationID` mapping is a confirmed, documented gap: memory cells created via the CLI gateway are keyed to a single shared placeholder identity (`"cli:cli_user"`), not the web-admin session username Memories queries by, and no identity bridge exists yet between the two systems. The UI carries a visible notice that it may not show everything.
+  - ✅ **Resolved by FR-032 (CLI Parity):** the `ownerUserID`→`ConversationID` identity-bridge gap — CLI-originated memory cells previously keyed to a single shared placeholder identity (`"cli:cli_user"`), invisible to the web-admin session username Memories queries by — is fixed: the CLI now requires real login and uses the authenticated session's username as `ownerUserID` everywhere (including `/memories`), the same convention the web UI uses, so data is visible in both.
 
 #### FR-031: Persistent Agent Workspace — Settings & Network Access
 - **Priority:** P1 (High)
@@ -445,6 +445,21 @@
   - ✅ Absent vs. empty allowlist are distinct and intentional: an absent `allowlist` key means "allow all" once remote mode is set; an explicit `allowlist: []` means "deny all" (fail-closed) — documented in `config.yaml`'s comments and covered by a decode-path test against the real config loader
   - ❌ Allowlist entries and the remote bind address are **not** editable from the Settings UI — config-file-only (`network_access.allowlist`, `network_access.bind_address`)
   - ⚠️ Switching Settings' network mode to "remote" changes allowlist enforcement but does **not** rebind the running HTTP listener to a new address — the bind address is only read at process startup
+
+#### FR-032: CLI Parity — Real Login and Environment Command Mirroring
+- **Priority:** P1 (High)
+- **Status:** ✅ Complete — six FRs deliberately deferred, see below
+- **Description:** Real login/session identity for the CLI gateway's interactive REPL, replacing the previous unconditional `cli_admin` auto-grant, plus CLI slash-commands mirroring the web UI's six environments (Chats, Projects, Jobs, Chores, History, Memories) and Settings.
+- **Acceptance Criteria:**
+  - ✅ Credential/session logic extracted from `internal/adapter/web/auth.go` into a shared `internal/usecase/auth` package (a wrapper struct in `web`, not a type alias — a type alias does not compile against pre-existing white-box tests); both the web admin UI and the CLI authenticate against one shared `auth.Service` instance, constructed unconditionally so a web-UI-disabled deployment still has an account to log in against
+  - ✅ On REPL start, no valid persisted session prompts for username/password (masked via `golang.org/x/term` on a real terminal) before any command or chat input is accepted; successful login persists the session to disk at `0600`, restored on the next process start within its 24-hour expiry, independently re-validated (expiry + user-existence) rather than trusted blindly
+  - ✅ `/logout` destroys the session (in-memory and on disk) and immediately re-prompts for login
+  - ✅ **Identity-bridge fix:** `internal/usecase/chat/service.go`'s `defaultRoleForPlatform(PlatformCLI) = RoleAdmin` — a second, independent "CLI is trusted" shortcut, unrelated to the auto-grant removed above — is neutralized by reconciling the CLI's authenticated identity against `domain.User`'s RBAC record before the REPL accepts any input, so a non-admin CLI login's first chat message can never be silently auto-granted admin
+  - ✅ Admin-only CLI commands (skill/profile/bot/config/memory admin, Settings' system-wide half) are gated by the logged-in user's real role, not an implicit always-admin assumption
+  - ✅ `/chat`, `/project`, `/job`, `/chore`, `/history`, `/memories` mirror the web UI's environments, all scoped by the authenticated session's username (the same `ownerUserID` convention every web handler already uses) — data created via one is visible via the other, and users cannot see each other's data
+  - ✅ `/settings show` and `/settings set worker-pool-size` (admin-only) work as specified; `/settings show --system` displays worker pool size and skills, with a clear "not yet implemented" note for network mode
+  - ⏸️ **Deliberately deferred** (no backing capability existed anywhere to mirror; building any of these would have added new product surface beyond "CLI matches what the web UI already has," not CLI-specific work): `/project chat`, `/job chat`, `/chore chat` (Projects/Jobs/Chores have no chat/converse method — see FR-026/027/028 above), `/history chat` (History has no per-run chat interface — see FR-029), `/settings set retention` (no per-user retention override exists anywhere, web or CLI), `/settings set network-mode` (blocked on FR-031's own noted network-mode limitation — fixing it there first is a prerequisite, not independent CLI work)
+  - ✅ `internal/adapter/gateway/cli` does not import `internal/adapter/web` (verified via `go list -deps`) — Clean Architecture's dependency rule holds
 
 ### Non-Functional Requirements
 
@@ -1914,12 +1929,30 @@ retention_defaults:
 **Known Limitations (see FR-025–FR-031 for detail):**
 - No environment in this feature invokes the agent/LLM — Job/Chore execution uses `StubExecutor`, and the web Chats UI does not generate assistant replies
 - Per-Job/Chore/Run "chat with the agent" interfaces are not built (Memories now has one — see FR-030 — as the reference implementation the other three are meant to follow)
-- Memories' `ownerUserID`→`ConversationID` mapping is a confirmed gap: no identity bridge exists yet between the web-admin account system and the CLI/Telegram/Buzz gateway identity system
+- The web-admin account system and the CLI gateway identity system are now bridged (see Feature 10, CLI Parity) — the CLI requires real login and uses the same `ownerUserID` convention, so this is resolved for CLI; Telegram/Buzz still use their own separate platform-identity systems, unaffected by this feature
 
 **Testing:**
 - Domain coverage 97.9%; `usecase/chats` 91.7%, `usecase/chores` 93.2%, `usecase/jobs` 92.2%, `usecase/projects` 96.4%, `usecase/history` 100%, `usecase/memories` 100%, `usecase/settings` 100%
 - Adversarial path-traversal tests per file-based repository (crafted IDs, absolute paths, NUL bytes, sibling-directory prefix confusion) and per-environment cross-owner-IDOR tests (`TestHandle*_CrossOwnerReturns404`)
 - WebSocket hub tested under `-race` (handshake, per-user isolation, slow-client drop); the `Queue`'s own persist/reload round trip is tested explicitly for restart durability — this does not cover recovery of a run already dequeued to a worker at crash time (see `documentation/technical-details.md`'s Queue section)
+
+---
+
+### Feature 10: CLI Parity (Real Login, Six Environments, Settings)
+
+**Description:** Real login/session identity for the CLI gateway's interactive REPL, replacing the previous unconditional `cli_admin` auto-grant, plus CLI slash-commands mirroring the web UI's six Feature 9 environments and Settings. See FR-032 above for the full acceptance-criteria breakdown and `documentation/technical-details.md`'s "CLI Parity" section for architecture.
+
+**Functional Specification:**
+- **Shared credential/session layer:** `internal/usecase/auth.Service` (new), extracted from `internal/adapter/web/auth.go`. The web adapter keeps a thin wrapper (`web.AuthService`, embedding `*auth.Service`) for HTTP-transport concerns (cookies, CSRF) that don't apply to a terminal REPL; both adapters share one `auth.Service` instance, constructed unconditionally in `cmd/nuimanbot/main.go` so a web-UI-disabled CLI-only deployment still has an account to authenticate against.
+- **Session persistence:** the CLI persists the full session record (not just an ID) to a local file at `0600`, alongside the existing history-file path convention. `auth.Service.RestoreSession` independently re-validates expiry and username-existence at restore time (defense-in-depth, not a defense against a user forging their own session file — the trust boundary is the OS file permission, consistent with this being a single-local-operator tool).
+- **Identity reconciliation:** immediately after login/restore, the CLI syncs `domain.User`'s `Role` for `(PlatformCLI, session.Username)` via `internal/usecase/user.Service`, before the REPL accepts any input — closing a second, independent "CLI is trusted" shortcut in `internal/usecase/chat/service.go`'s `defaultRoleForPlatform` that the login-flow replacement alone would not have touched.
+- **Environment command handlers:** one new file per environment in `internal/adapter/gateway/cli` (`chat_commands.go`, `project_commands.go`, `job_commands.go`, `chore_commands.go`, `history_commands.go`, `memories_commands.go`, `settings_commands.go`), each implementing a shared `EnvCommandHandler` interface and calling the same `internal/usecase/{chats,projects,jobs,chores,history,memories,settings}` services the web adapter already uses — no new usecase-layer capability invented, per this feature's Non-Goal.
+- **Scope cuts:** four per-item "chat with the agent" sub-commands (Projects/Jobs/Chores/History) and two Settings sub-capabilities (per-user retention override, network-mode) are deferred — none had backing capability anywhere in the system to mirror; see FR-032's acceptance criteria for the full list and reasoning.
+
+**Testing:**
+- `internal/usecase/auth`: new package, its own unit test suite (session lifecycle, `RestoreSession`'s fail-closed paths) plus two tests relocated verbatim from `internal/adapter/web` (the two whose assertions reach unexported fields that moved)
+- `internal/adapter/web`: ~29 of 31 pre-existing auth tests pass unmodified against the new wrapper — a hard acceptance criterion, not just a nice-to-have, since this refactor touches code the web UI depends on today
+- `internal/adapter/gateway/cli`: per-environment handler tests (list/create/show/delete/etc., explicit `ownerUserID`-not-`currentUser.ID` assertions per handler, cross-user isolation, the `/job create --project <foreign-id>` not-found case), plus end-to-end REPL tests exercising the real login → chat-message → `/logout` → re-login flow through the built binary
 
 ---
 
