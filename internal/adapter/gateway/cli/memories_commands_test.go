@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -166,6 +167,40 @@ func TestHandleMemoriesCommand_BrowseWithQuery(t *testing.T) {
 	}
 	if strings.Contains(result, "work-notes") {
 		t.Errorf("did not expect non-matching cell in output, got: %s", result)
+	}
+}
+
+// TestHandleMemoriesCommand_BrowseCapsOutputAndShowsTrailer is FR-001's
+// mandatory Red-phase test: /memories browse must not dump unbounded
+// output to the terminal (Performance NFR), matching /history list's
+// historyListDisplayLimit + trailer convention rather than inventing a
+// different truncation scheme.
+func TestHandleMemoriesCommand_BrowseCapsOutputAndShowsTrailer(t *testing.T) {
+	repo := newFakeCellRepo()
+	const seeded = memoriesBrowseDisplayLimit + 5
+	for i := 0; i < seeded; i++ {
+		id := fmt.Sprintf("alice-%d", i)
+		repo.cells[id] = newTestMemoryCell(id, "alice", fmt.Sprintf("scene-%d", i), "content")
+	}
+	h := newTestMemoriesHandler(repo, nil)
+	user := &domain.User{ID: "u1", Role: domain.RoleUser}
+
+	result, err := h.HandleMemoriesCommand(context.Background(), user, "alice", "/memories browse")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, fmt.Sprintf("Found %d memory cell(s)", seeded)) {
+		t.Errorf("expected the total count to still be reported, got: %s", result)
+	}
+
+	shown := strings.Count(result, "Scene: ")
+	if shown != memoriesBrowseDisplayLimit {
+		t.Errorf("expected exactly %d cells rendered, got %d in: %s", memoriesBrowseDisplayLimit, shown, result)
+	}
+
+	remaining := seeded - memoriesBrowseDisplayLimit
+	if !strings.Contains(result, fmt.Sprintf("%d more result(s) not shown", remaining)) {
+		t.Errorf("expected a truncation trailer noting %d more result(s), got: %s", remaining, result)
 	}
 }
 

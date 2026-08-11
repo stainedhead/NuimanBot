@@ -111,7 +111,7 @@ Large result sets are truncated rather than dumped unbounded to the terminal —
 
 ## Memories
 
-- `/memories browse [query]` — read-only search/browse over your long-term memory
+- `/memories browse [query]` — read-only search/browse over your long-term memory (shows up to 20 cells at a time; refine your query if you don't see the entry you're looking for — large result sets are truncated rather than dumped unbounded to the terminal, same as `/history list`)
 - `/memories chat <cell-id> <message>` — ask the agent a question about a specific memory entry
 
 Note the trailing "s" — `/memories` (plural) is this environment; `/memory` (singular, no trailing "s") is the separate, pre-existing admin command for memory system stats/export/import/rebuild. The two don't collide, but it's easy to mistype one for the other.

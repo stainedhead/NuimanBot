@@ -11,6 +11,15 @@ import (
 	"nuimanbot/internal/usecase/memories"
 )
 
+// memoriesBrowseDisplayLimit caps how many memory cells /memories browse
+// prints in one response (FR-001, auto-review fix pass — Performance NFR:
+// list commands must not dump unbounded output to the terminal). Reuses
+// history_commands.go's historyListDisplayLimit value directly (rather
+// than an independently-chosen number) so this matches that command's
+// established convention exactly, per the review PRD's explicit
+// instruction not to invent a different threshold.
+const memoriesBrowseDisplayLimit = historyListDisplayLimit
+
 // MemoriesCommandHandler handles the Memories environment's CLI commands
 // (FR-037-FR-038). Unlike Projects/Jobs/Chores/History, Memories' per-item
 // "chat" sub-command IS in scope here: memories.Service.AskAboutCell is a
@@ -66,6 +75,19 @@ func (h *MemoriesCommandHandler) HandleMemoriesCommand(ctx context.Context, curr
 // Service.ListCells already enforces ownership (filter.ConversationID is
 // always overridden from ownerUserID), so this never risks leaking another
 // user's cells.
+//
+// Rendered output is capped to memoriesBrowseDisplayLimit cells, with a
+// trailer noting how many more matched but weren't shown (FR-001,
+// auto-review fix pass) — mirroring history_commands.go's listRuns exactly:
+// the full matching set is still fetched/filtered here (not limited via
+// memoryv2.MemoryCellFilter.Limit at the ListCells call), because the
+// display cap must apply *after* the client-side query filter — setting
+// Limit at the repository call would truncate before filterCellsByQuery
+// ever ran, producing both a wrong "Found N" count and a wrong "more not
+// shown" trailer for a narrowed query. /history list has the same
+// fetch-then-filter-then-cap shape for the same reason (its own
+// --job/--chore/--status/--since filters run at the repository layer, but
+// its historyListDisplayLimit cap is still applied client-side afterward).
 func (h *MemoriesCommandHandler) browse(ctx context.Context, ownerUserID string, args []string) (string, error) {
 	query := strings.Join(args, " ")
 
@@ -85,16 +107,26 @@ func (h *MemoriesCommandHandler) browse(ctx context.Context, ownerUserID string,
 		return "No memory cells found.", nil
 	}
 
+	shown := cells
+	truncated := 0
+	if len(shown) > memoriesBrowseDisplayLimit {
+		truncated = len(shown) - memoriesBrowseDisplayLimit
+		shown = shown[:memoriesBrowseDisplayLimit]
+	}
+
 	var result strings.Builder
 	result.WriteString(fmt.Sprintf("Found %d memory cell(s):\n\n", len(cells)))
-	for i, c := range cells {
+	for i, c := range shown {
 		result.WriteString(fmt.Sprintf("%d. Scene: %s (ID: %s)\n", i+1, c.Scene, c.ID))
 		result.WriteString(fmt.Sprintf("   Type: %s\n", c.CellType.String()))
 		result.WriteString(fmt.Sprintf("   Salience: %.2f\n", c.Salience))
 		result.WriteString(fmt.Sprintf("   Content: %s\n", c.Content))
 		result.WriteString(fmt.Sprintf("   Created: %s\n", c.CreatedAt.Format("2006-01-02 15:04:05")))
 	}
-	return result.String(), nil
+	if truncated > 0 {
+		result.WriteString(fmt.Sprintf("\n... %d more result(s) not shown. Refine your query to narrow the results.\n", truncated))
+	}
+	return strings.TrimRight(result.String(), "\n"), nil
 }
 
 // filterCellsByQuery returns cells whose Scene or Content contains query,
@@ -139,7 +171,8 @@ func (h *MemoriesCommandHandler) showHelp() string {
 	return `Memories Commands:
 
   /memories browse [query]
-    Search/browse your stored memory cells. Omit query to list all.
+    Search/browse your stored memory cells. Omit query to list all
+    (shows up to 20; refine your query to narrow a larger result set).
 
   /memories chat <cell-id> <message>
     Ask a question about a specific memory cell; the answer is grounded
