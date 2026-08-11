@@ -3,6 +3,8 @@ package cli_test
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -205,6 +207,33 @@ func TestHistoryCommand_Show_Found(t *testing.T) {
 	}
 	if !strings.Contains(got, "run-1") || !strings.Contains(got, "job-1") {
 		t.Errorf("expected run details in output, got:\n%s", got)
+	}
+}
+
+func TestHistoryCommand_Show_TruncatesOversizedLogAndResults(t *testing.T) {
+	h, repo := newTestHistoryHandler(t)
+
+	resultsPath := filepath.Join(t.TempDir(), "RESULTS.md")
+	longResults := strings.Repeat("R", 5000)
+	if err := os.WriteFile(resultsPath, []byte(longResults), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	mustSaveRun(t, repo, &domain.Run{ID: "run-1", OwnerUserID: "alice", Status: domain.RunStatusCompleted, ResultsPath: resultsPath})
+
+	longLog := strings.Repeat("L", 5000)
+	if err := repo.AppendLog(context.Background(), "alice", "run-1", longLog); err != nil {
+		t.Fatalf("AppendLog: %v", err)
+	}
+
+	got, err := h.HandleHistoryCommand(context.Background(), testUser(), "alice", "/history show run-1")
+	if err != nil {
+		t.Fatalf("HandleHistoryCommand: %v", err)
+	}
+	if strings.Count(got, "L") >= 5000 {
+		t.Errorf("expected log content truncated below 5000 chars, got %d L's", strings.Count(got, "L"))
+	}
+	if !strings.Contains(got, "truncated") {
+		t.Errorf("expected a truncation notice for the oversized log, got:\n%s", got)
 	}
 }
 

@@ -11,9 +11,11 @@ import (
 	"testing"
 	"time"
 
+	cliadapter "nuimanbot/internal/adapter/cli"
 	"nuimanbot/internal/adapter/gateway/cli"
 	"nuimanbot/internal/config"
 	"nuimanbot/internal/domain"
+	"nuimanbot/internal/infrastructure/storage"
 	"nuimanbot/internal/usecase/auth"
 
 	"github.com/google/uuid"
@@ -252,6 +254,64 @@ func TestGateway_MemoryCommandsRequireAdmin(t *testing.T) {
 
 	if !strings.Contains(output.String(), "insufficient permissions") {
 		t.Errorf("expected a permission error for non-admin /memory command, got:\n%s", output.String())
+	}
+}
+
+// TestGateway_MemoryCommandsWorkForAdmin verifies P2.6's second criterion:
+// existing admin memory commands still work end-to-end for a logged-in
+// admin user (mirrors TestGateway_MemoryCommandsRequireAdmin's non-admin
+// rejection case, using a real MemoryCommandHandler over file-backed repos
+// instead of a nil handler, so the admin path is actually exercised rather
+// than assumed from the role-check reordering alone).
+func TestGateway_MemoryCommandsWorkForAdmin(t *testing.T) {
+	authSvc := auth.NewService()
+	if err := authSvc.AddUser("carol", "pw123", "admin"); err != nil {
+		t.Fatalf("AddUser: %v", err)
+	}
+	userSvc := newIntegrationUserRoleService()
+	sessionPath := cli.SessionFilePath(t.TempDir() + "/.nuimanbot_history")
+	authHandler := cli.NewAuthCommandHandler(authSvc, userSvc, sessionPath, sequencePasswordReader("pw123"))
+
+	cellRepo := storage.NewFileMemoryCellRepository(t.TempDir())
+	sceneRepo := storage.NewFileMemorySceneRepository(t.TempDir())
+	output := new(bytes.Buffer)
+	memCmd := cliadapter.NewMemoryCommand(cellRepo, sceneRepo, output)
+	memHandler := cli.NewMemoryCommandHandler(memCmd)
+
+	cfg := &config.CLIConfig{}
+	g := cli.NewGateway(cfg)
+	g.Writer = output
+	g.SetAuthHandler(authHandler)
+	g.SetMemoryHandler(memHandler)
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	defer func() { _ = r.Close(); _ = w.Close() }()
+	g.Reader = r
+
+	if _, err := w.WriteString("carol\n/memory list\nexit\n"); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- g.Start(context.Background()) }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Start returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for gateway to exit")
+	}
+
+	if strings.Contains(output.String(), "insufficient permissions") {
+		t.Errorf("admin's /memory command was rejected as insufficient permissions, got:\n%s", output.String())
+	}
+	if !strings.Contains(output.String(), "No memory cells found") {
+		t.Errorf("expected /memory list to reach the real handler and report an empty result, got:\n%s", output.String())
 	}
 }
 

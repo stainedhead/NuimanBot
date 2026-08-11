@@ -309,3 +309,27 @@ func TestHandleMemoriesCommand_UnknownSubcommand(t *testing.T) {
 func TestMemoriesCommandHandler_Handle_SatisfiesEnvCommandHandler(t *testing.T) {
 	var _ EnvCommandHandler = NewMemoriesCommandHandler(memories.NewService(newFakeCellRepo()))
 }
+
+// TestMemoriesCommandHandler_Handle_DelegatesWithCorrectArgumentOrder exercises
+// the actual EnvCommandHandler.Handle path (not just a compile-time interface
+// assertion) end-to-end, with currentUser.ID and ownerUserID deliberately set
+// to different values. If Handle's delegation to HandleMemoriesCommand ever
+// swaps the ownerUserID/input or currentUser/ownerUserID positional
+// arguments, this catches it: a swap would either scope the browse by the
+// literal command string (finding nothing) or by currentUser.ID instead of
+// ownerUserID (also finding nothing, since the cell is owned by ownerUserID).
+func TestMemoriesCommandHandler_Handle_DelegatesWithCorrectArgumentOrder(t *testing.T) {
+	repo := newFakeCellRepo()
+	repo.cells["alice-1"] = newTestMemoryCell("alice-1", "alice", "trip-planning", "Alice likes window seats")
+	h := newTestMemoriesHandler(repo, nil)
+	user := &domain.User{ID: "some-other-internal-id", Role: domain.RoleUser}
+
+	var envHandler EnvCommandHandler = h
+	result, err := envHandler.Handle(context.Background(), user, "alice", "/memories browse")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "trip-planning") {
+		t.Errorf("Handle did not correctly delegate to HandleMemoriesCommand with ownerUserID=alice, got: %s", result)
+	}
+}

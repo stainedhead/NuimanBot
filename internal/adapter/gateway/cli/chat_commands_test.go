@@ -324,6 +324,55 @@ func TestChatCommandHandler_CrossUserIsolation(t *testing.T) {
 	}
 }
 
+// TestChatCommandHandler_CrossAdapterVisibility verifies the assumption
+// cmd/nuimanbot/main.go's wiring depends on: the web admin's Chats
+// environment and the CLI's /chat commands each construct their own
+// chats.Service instance, but both wrap the *same* app.ConversationRepo
+// (see main.go's "webServer.SetChatsService(chats.NewService(app.
+// ConversationRepo))" and "cliGateway.SetChatsHandler(cli.
+// NewChatCommandHandler(chats.NewService(app.ConversationRepo)))"). A chat
+// created through one instance must be visible through the other — this is
+// the hard "data created via CLI visible in web and vice versa" acceptance
+// criterion, exercised directly against two independently constructed
+// chats.Service values over one shared repository, rather than only
+// inferred from both call sites passing the same ownerUserID convention.
+func TestChatCommandHandler_CrossAdapterVisibility(t *testing.T) {
+	repo := storage.NewFileConversationRepository(t.TempDir())
+	cliHandler := cli.NewChatCommandHandler(chats.NewService(repo))
+	ctx := context.Background()
+
+	id := createChat(t, ctx, cliHandler, "alice", "created via CLI")
+
+	// A second, independently constructed chats.Service over the same repo
+	// stands in for the web admin's own instance (main.go constructs one
+	// for each adapter; this test can't import internal/adapter/web without
+	// violating the no-cross-adapter-import rule, so it exercises the
+	// shared-repo assumption directly instead).
+	webSideService := chats.NewService(repo)
+	summaries, err := webSideService.ListChats(ctx, "alice")
+	if err != nil {
+		t.Fatalf("ListChats via the web-side service instance: %v", err)
+	}
+	found := false
+	for _, s := range summaries {
+		if s.ID == id {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("chat %q created via the CLI handler is not visible through a separate chats.Service instance over the same repo; got summaries: %+v", id, summaries)
+	}
+
+	conv, err := webSideService.GetChat(ctx, "alice", id)
+	if err != nil {
+		t.Fatalf("GetChat via the web-side service instance: %v", err)
+	}
+	if len(conv.Messages) == 0 || conv.Messages[0].Content != "created via CLI" {
+		t.Errorf("expected the CLI-created first message to be visible via the web-side instance, got: %+v", conv.Messages)
+	}
+}
+
 // createChat is a test helper that creates a chat via the CLI handler and
 // returns its ID, extracted from the handler's confirmation output.
 func createChat(t *testing.T, ctx context.Context, h *cli.ChatCommandHandler, ownerUserID, message string) string {

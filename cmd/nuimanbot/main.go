@@ -1217,13 +1217,23 @@ func (app *application) Run(ctx context.Context) error {
 	// identity against app.DomainUserService's domain.User records (AD-6)
 	// before the REPL accepts any input. This replaces the previous
 	// unconditional cli_admin auto-grant.
-	if app.DomainUserService != nil {
-		sessionPath := cli.SessionFilePath(app.Config.Gateways.CLI.HistoryFile)
-		authHandler := cli.NewAuthCommandHandler(sharedAuth, app.DomainUserService, sessionPath, nil)
-		cliGateway.SetAuthHandler(authHandler)
-	} else {
-		slog.Warn("CLI login disabled: DomainUserService not available (AD-6 identity reconciliation requires it)")
+	//
+	// app.DomainUserService is constructed unconditionally at startup (see
+	// "5.5. Initialize domain.User resolution service" above) and is never
+	// nil in practice. This is deliberately fatal, not a soft warning: a
+	// missing auth handler leaves cliGateway.authHandler nil, and Gateway.
+	// Start skips authentication entirely whenever that's the case,
+	// starting an unauthenticated REPL under the "cli_unauthenticated"
+	// placeholder identity — the exact FR-001/AD-6 landmine this feature
+	// exists to close. If this ever fires, something upstream in wiring
+	// broke; failing loudly beats a silently unauthenticated REPL.
+	if app.DomainUserService == nil {
+		slog.Error("CLI login cannot be wired: DomainUserService is nil (AD-6 identity reconciliation requires it); refusing to start an unauthenticated REPL")
+		os.Exit(1)
 	}
+	sessionPath := cli.SessionFilePath(app.Config.Gateways.CLI.HistoryFile)
+	authHandler := cli.NewAuthCommandHandler(sharedAuth, app.DomainUserService, sessionPath, nil)
+	cliGateway.SetAuthHandler(authHandler)
 
 	app.connectGateway(cliGateway)
 
