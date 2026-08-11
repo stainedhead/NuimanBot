@@ -44,6 +44,7 @@ import (
 	"nuimanbot/internal/tools/notes"
 	"nuimanbot/internal/tools/weather"
 	"nuimanbot/internal/tools/websearch"
+	authusecase "nuimanbot/internal/usecase/auth"
 	"nuimanbot/internal/usecase/botmgmt"
 	"nuimanbot/internal/usecase/chat"
 	"nuimanbot/internal/usecase/chats"
@@ -989,6 +990,16 @@ func (app *application) Run(ctx context.Context) error {
 	botMgmtService := botmgmt.NewService(botConfigRepo)
 	slog.Info("Bot management initialized", "file", botsFilePath)
 
+	// Construct the shared credential/session service (FR-044, AD-1)
+	// unconditionally — not only when the web UI is enabled. Both the web
+	// admin login and the CLI's new login flow (FR-001) authenticate
+	// against this single instance, so a CLI-only deployment (web UI
+	// disabled) still has an account to log in as.
+	sharedAuth := authusecase.NewService()
+	if err := sharedAuth.AddUser("admin", "admin", "admin"); err != nil {
+		slog.Warn("Failed to add default admin user", "error", err)
+	}
+
 	// Start Web UI server if enabled
 	if app.Config.Gateways.WebUI.Enabled {
 		addr := app.Config.Gateways.WebUI.Addr
@@ -996,6 +1007,7 @@ func (app *application) Run(ctx context.Context) error {
 			addr = ":8081"
 		}
 		webServer := web.NewServer(addr)
+		webServer.SetAuthService(web.NewAuthServiceWith(sharedAuth))
 
 		// Wire services into Web UI
 		webServer.SetProfileService(profileService)
@@ -1028,11 +1040,6 @@ func (app *application) Run(ctx context.Context) error {
 				store: app.ConfirmationStore,
 				chat:  app.ChatService,
 			})
-		}
-
-		// Add default admin user for web login
-		if err := webServer.GetAuth().AddUser("admin", "admin", "admin"); err != nil {
-			slog.Warn("Failed to add default web admin user", "error", err)
 		}
 
 		app.WebServer = webServer
@@ -1152,12 +1159,19 @@ func (app *application) Run(ctx context.Context) error {
 		slog.Info("Memory CLI commands initialized")
 	}
 
-	// Set current user as admin for CLI (CLI users are trusted)
-	cliGateway.SetCurrentUser(&domain.User{
-		ID:       "cli_admin",
-		Username: "cli_administrator",
-		Role:     domain.RoleAdmin,
-	})
+	// CLI login (FR-001-FR-007, FR-044): the CLI authenticates against the
+	// same shared auth.Service the web admin UI uses (sharedAuth,
+	// constructed above unconditionally), and reconciles the resulting
+	// identity against app.DomainUserService's domain.User records (AD-6)
+	// before the REPL accepts any input. This replaces the previous
+	// unconditional cli_admin auto-grant.
+	if app.DomainUserService != nil {
+		sessionPath := cli.SessionFilePath(app.Config.Gateways.CLI.HistoryFile)
+		authHandler := cli.NewAuthCommandHandler(sharedAuth, app.DomainUserService, sessionPath, nil)
+		cliGateway.SetAuthHandler(authHandler)
+	} else {
+		slog.Warn("CLI login disabled: DomainUserService not available (AD-6 identity reconciliation requires it)")
+	}
 
 	app.connectGateway(cliGateway)
 
@@ -1170,7 +1184,11 @@ func (app *application) Run(ctx context.Context) error {
 		}
 		return cliGateway.Send(ctx, response)
 	}
-	skillHandler.SetMessageHandler(messageHandler, domain.PlatformCLI, "cli_user")
+	// The placeholder platformUID below is overwritten with the real
+	// logged-in identity once login/session-restore completes (AD-5/FR-007,
+	// see Gateway.authenticate → SkillHandler.SetPlatformUID) — login
+	// happens after this wiring step, inside cliGateway.Start().
+	skillHandler.SetMessageHandler(messageHandler, domain.PlatformCLI, "cli_unauthenticated")
 
 	gateways = append(gateways, cliGateway) //nolint:staticcheck // Reserved for future shutdown handling
 	_ = gateways                            // Prevent unused variable warning

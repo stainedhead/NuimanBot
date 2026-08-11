@@ -11,6 +11,7 @@ import (
 
 	"nuimanbot/internal/config"
 	"nuimanbot/internal/domain"
+	"nuimanbot/internal/usecase/auth"
 )
 
 // SkillCommandHandler defines the interface for handling skill commands.
@@ -19,6 +20,20 @@ type SkillCommandHandler interface {
 	List(ctx context.Context) error
 	Describe(ctx context.Context, skillName string) error
 }
+
+// PlatformUIDSetter is implemented by skill handlers that need to be told
+// the authenticated user's identity once login completes (skill-invoked
+// chat messages must be attributed to the same identity as plain-text chat
+// messages, AD-5/FR-007). *SkillHandler implements this.
+type PlatformUIDSetter interface {
+	SetPlatformUID(uid string)
+}
+
+// unauthenticatedPlatformUID is used only if a message is somehow processed
+// before EnsureAuthenticated completes (should not happen — Start returns
+// early on authentication failure). Kept distinct from any real username so
+// it's obviously a placeholder if it ever surfaces in logs/data.
+const unauthenticatedPlatformUID = "cli_unauthenticated"
 
 // Gateway implements domain.Gateway for the command-line interface.
 type Gateway struct {
@@ -30,7 +45,9 @@ type Gateway struct {
 	configHandler  *AdminConfigCommandHandler
 	memoryHandler  *MemoryCommandHandler
 	skillHandler   SkillCommandHandler
-	currentUser    *domain.User // Current CLI user for admin commands
+	authHandler    *AuthCommandHandler // login/logout flow (FR-001-FR-007); nil disables auth-gating entirely
+	currentUser    *domain.User        // Current CLI user for admin commands
+	currentSession *auth.Session       // Current authenticated session, set by EnsureAuthenticated
 	// stdin/stdout for testing purposes
 	Reader io.Reader
 	Writer io.Writer
@@ -55,6 +72,18 @@ func (g *Gateway) Platform() domain.Platform {
 func (g *Gateway) Start(ctx context.Context) error {
 	ctx, g.cancel = context.WithCancel(ctx)
 	scanner := bufio.NewScanner(g.Reader)
+
+	// Gate all input behind authentication before the REPL loop starts
+	// (FR-001): no command or chat text is processed until login succeeds
+	// or a persisted session is restored.
+	if g.authHandler != nil {
+		if err := g.authenticate(ctx, scanner); err != nil {
+			if _, writeErr := fmt.Fprintf(g.Writer, "Authentication failed: %v\n", err); writeErr != nil {
+				fmt.Fprintf(os.Stderr, "Error writing to CLI output: %v\n", writeErr)
+			}
+			return fmt.Errorf("cli gateway: authentication failed: %w", err)
+		}
+	}
 
 	if g.Cfg.DebugMode {
 		if _, err := fmt.Fprintln(g.Writer, "CLI Gateway started in debug mode. Type 'exit' or 'quit' to stop."); err != nil {
@@ -100,8 +129,50 @@ func (g *Gateway) Start(ctx context.Context) error {
 				return nil
 			}
 
+			// Check if this is a logout command (FR-005). After logout, the
+			// next command requires login again — re-run the same
+			// authentication gate used at REPL start.
+			if IsLogoutCommand(input) {
+				if g.authHandler == nil || g.currentSession == nil {
+					if _, err := fmt.Fprintln(g.Writer, "Not logged in."); err != nil {
+						fmt.Fprintf(os.Stderr, "Error writing to CLI output: %v\n", err)
+					}
+					continue
+				}
+				if err := g.authHandler.Logout(g.currentSession.ID); err != nil {
+					if _, writeErr := fmt.Fprintf(g.Writer, "Error during logout: %v\n", err); writeErr != nil {
+						fmt.Fprintf(os.Stderr, "Error writing to CLI output: %v\n", writeErr)
+					}
+				}
+				g.currentUser = nil
+				g.currentSession = nil
+				if _, err := fmt.Fprintln(g.Writer, "Logged out."); err != nil {
+					fmt.Fprintf(os.Stderr, "Error writing to CLI output: %v\n", err)
+				}
+				if err := g.authenticate(ctx, scanner); err != nil {
+					if _, writeErr := fmt.Fprintf(g.Writer, "Authentication failed: %v\n", err); writeErr != nil {
+						fmt.Fprintf(os.Stderr, "Error writing to CLI output: %v\n", writeErr)
+					}
+					return fmt.Errorf("cli gateway: re-authentication failed after logout: %w", err)
+				}
+				continue
+			}
+
 			// Check if this is a memory command
 			if IsMemoryCommand(input) {
+				// Memory admin commands are gated by the logged-in user's
+				// real Role (FR-006/P2.6), matching the profile/bot/config
+				// admin handlers' existing pattern — previously ungated,
+				// relying on the now-removed always-admin auto-grant.
+				// Checked before handler-availability so the permission
+				// decision never depends on whether the feature happens to
+				// be wired.
+				if !g.hasAdminRole() {
+					if _, err := fmt.Fprintln(g.Writer, "Error: insufficient permissions (admin required)."); err != nil {
+						fmt.Fprintf(os.Stderr, "Error writing to CLI output: %v\n", err)
+					}
+					continue
+				}
 				if g.memoryHandler == nil {
 					if _, err := fmt.Fprintln(g.Writer, "Error: Memory commands not available."); err != nil {
 						fmt.Fprintf(os.Stderr, "Error writing to CLI output: %v\n", err)
@@ -287,7 +358,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 			incomingMsg := domain.IncomingMessage{
 				ID:          "cli-" + fmt.Sprintf("%d", time.Now().UnixNano()), // Unique ID
 				Platform:    domain.PlatformCLI,
-				PlatformUID: "cli_user", // Placeholder for CLI user ID
+				PlatformUID: g.platformUID(), // AD-5: the authenticated session's Username, never a placeholder
 				Text:        input,
 				Timestamp:   time.Now(),
 				Metadata:    nil,
@@ -362,6 +433,53 @@ func (g *Gateway) SetConfigHandler(handler *AdminConfigCommandHandler) {
 // SetSkillHandler sets the skill command handler for the gateway.
 func (g *Gateway) SetSkillHandler(handler SkillCommandHandler) {
 	g.skillHandler = handler
+}
+
+// SetAuthHandler sets the login/logout command handler for the gateway
+// (FR-001-FR-005). When set, Start gates all REPL input behind
+// authentication (P2.1/P2.2); when nil, the gateway behaves as before this
+// feature (no auth gating) — used by tests that don't exercise auth.
+func (g *Gateway) SetAuthHandler(handler *AuthCommandHandler) {
+	g.authHandler = handler
+}
+
+// authenticate runs the login-or-restore flow and, on success, updates
+// currentUser/currentSession and propagates the authenticated identity to
+// the skill handler (if it supports PlatformUIDSetter) so skill-invoked
+// chat messages are attributed to the same identity as plain-text chat
+// (AD-5/FR-007).
+func (g *Gateway) authenticate(ctx context.Context, scanner *bufio.Scanner) error {
+	user, session, err := g.authHandler.EnsureAuthenticated(ctx, g.Writer, scanner)
+	if err != nil {
+		return err
+	}
+	g.currentUser = user
+	g.currentSession = session
+	if setter, ok := g.skillHandler.(PlatformUIDSetter); ok {
+		setter.SetPlatformUID(session.Username)
+	}
+	return nil
+}
+
+// platformUID returns the identifier used as domain.IncomingMessage's
+// PlatformUID and, via internal/usecase/chat.Service.resolveUser, as the key
+// for domain.User lookup — always the authenticated session's Username
+// (AD-5's ownerUserID convention), never a hardcoded placeholder. Falls back
+// to a distinct placeholder only when no auth flow is wired at all (e.g.
+// tests that construct a Gateway directly without SetAuthHandler).
+func (g *Gateway) platformUID() string {
+	if g.currentSession != nil {
+		return g.currentSession.Username
+	}
+	return unauthenticatedPlatformUID
+}
+
+// hasAdminRole reports whether the current CLI user (if any) has admin
+// privileges. Used for command families (e.g. memory admin, P2.6) that
+// don't already perform their own internal role check the way
+// profile/bot/config handlers do.
+func (g *Gateway) hasAdminRole() bool {
+	return g.currentUser != nil && g.currentUser.Role == domain.RoleAdmin
 }
 
 // parseCommand checks if input is a command and parses it.
