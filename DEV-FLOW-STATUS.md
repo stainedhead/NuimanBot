@@ -21,8 +21,8 @@
 | 7  | Archive Original Spec            | ✅ Complete (specs/archive/260811-cli-parity-for-nuimanbot-features/, commit aad286b) | 2026-08-11T19:15:40Z | 2026-08-11T19:16:59Z | 1 |
 | 8  | Spec Review Fixes                | ✅ Complete (specs/260811-cli-parity-for-nuimanbot-features-auto-review/, 7 tasks across 3 workstreams, commit 0a63228) | 2026-08-11T19:16:59Z | 2026-08-11T19:26:32Z | 10 |
 | 9  | Implement Review Fixes           | ✅ Complete (all 7 findings closed, filed GH issue #9 for audit-logging follow-up, 0 lint issues) | 2026-08-11T19:26:32Z | 2026-08-11T20:01:15Z | 35 |
-| 10 | Archive Fixes Spec               | 🔄 In Progress | 2026-08-11T20:01:15Z | — | — |
-| 11 | Final Quality Pass               | ⬜ Pending | — | — | — |
+| 10 | Archive Fixes Spec               | ✅ Complete (specs/archive/260811-cli-parity-for-nuimanbot-features-auto-review/, commit 0128f25) | 2026-08-11T20:01:15Z | 2026-08-11T20:02:50Z | 2 |
+| 11 | Final Quality Pass               | 🔄 In Progress | 2026-08-11T20:02:50Z | — | — |
 | 12 | Process Analysis Report          | ⬜ Pending | — | — | — |
 | 13 | Archive Spec                     | ⬜ Pending | — | — | — |
 | 14 | Open Pull Request                | ⬜ Pending | — | — | — |
