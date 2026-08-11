@@ -53,21 +53,57 @@ func (r *errRunRepo) SaveRun(ctx context.Context, run *domain.Run) error {
 	return r.RunRepository.SaveRun(ctx, run)
 }
 
-// fakeProjectLookup is a test double for ProjectDirectoryLookup.
+// fakeProjectLookup is a test double for ProjectDirectoryLookup, scoped by
+// ownerUserID exactly like the real adapter
+// (cmd/nuimanbot/extended_context.go's projectDirectoryLookupAdapter, backed
+// by domain.ProjectRepository.GetProject): a project ID only resolves for
+// the owner it is registered under — a caller-supplied ownerUserID that
+// doesn't match (or an unregistered projectID) returns domain.ErrNotFound,
+// exactly as FileProjectRepository.GetProject does for both a foreign-owned
+// and a genuinely nonexistent project (see that type's doc comment: cross-
+// owner access is deliberately indistinguishable from "never existed" — an
+// anti-IDOR design choice, not an oversight). This owner-scoping (added for
+// FR-002) is required to actually exercise the cross-owner-rejection tests
+// below; the previous single-level map couldn't represent "exists, but for
+// a different owner" at all.
 type fakeProjectLookup struct {
-	dirs map[string]string // projectID -> outputDirectory
+	dirs map[string]map[string]string // ownerUserID -> projectID -> outputDirectory
 	err  error
 }
 
-func (f *fakeProjectLookup) OutputDirectoryFor(_ context.Context, _, projectID string) (string, error) {
+func (f *fakeProjectLookup) OutputDirectoryFor(_ context.Context, ownerUserID, projectID string) (string, error) {
 	if f.err != nil {
 		return "", f.err
 	}
-	dir, ok := f.dirs[projectID]
+	byOwner, ok := f.dirs[ownerUserID]
+	if !ok {
+		return "", domain.ErrNotFound
+	}
+	dir, ok := byOwner[projectID]
 	if !ok {
 		return "", domain.ErrNotFound
 	}
 	return dir, nil
+}
+
+// fakeChatOwnership is a test double for ChatOwnershipCheck (FR-002), scoped
+// by ownerUserID exactly like the real adapter
+// (cmd/nuimanbot/extended_context.go's chatOwnershipCheckAdapter, backed by
+// domain.ConversationRepository.GetConversation plus an owner comparison,
+// mirroring chats.Service.GetChat's own ownership check).
+type fakeChatOwnership struct {
+	owned map[string]map[string]bool // ownerUserID -> chatID -> owned
+	err   error
+}
+
+func (f *fakeChatOwnership) VerifyChatOwnership(_ context.Context, ownerUserID, chatID string) error {
+	if f.err != nil {
+		return f.err
+	}
+	if byOwner, ok := f.owned[ownerUserID]; ok && byOwner[chatID] {
+		return nil
+	}
+	return domain.ErrNotFound
 }
 
 func newTestService(t *testing.T) (*Service, *fakeEnqueuer) {
@@ -76,7 +112,7 @@ func newTestService(t *testing.T) (*Service, *fakeEnqueuer) {
 	jobRepo := storage.NewFileJobRepository(tmp)
 	runRepo := storage.NewFileRunRepository(tmp)
 	enqueuer := &fakeEnqueuer{}
-	svc := NewService(jobRepo, runRepo, enqueuer, nil, storage.NewFileConfinedFileStore(), tmp)
+	svc := NewService(jobRepo, runRepo, enqueuer, nil, nil, storage.NewFileConfinedFileStore(), tmp)
 	return svc, enqueuer
 }
 
@@ -156,8 +192,8 @@ func TestCreateJob_ProjectContextResolvesWorkingDirectory(t *testing.T) {
 	jobRepo := storage.NewFileJobRepository(tmp)
 	runRepo := storage.NewFileRunRepository(tmp)
 	enqueuer := &fakeEnqueuer{}
-	lookup := &fakeProjectLookup{dirs: map[string]string{"proj-1": "/output/proj-1"}}
-	svc := NewService(jobRepo, runRepo, enqueuer, lookup, storage.NewFileConfinedFileStore(), tmp)
+	lookup := &fakeProjectLookup{dirs: map[string]map[string]string{"user-a": {"proj-1": "/output/proj-1"}}}
+	svc := NewService(jobRepo, runRepo, enqueuer, lookup, nil, storage.NewFileConfinedFileStore(), tmp)
 
 	job, err := svc.CreateJob(context.Background(), "user-a", "Refactor", "Refactor the widget module.", domain.ContextTypeProject, "proj-1")
 	if err != nil {
@@ -171,34 +207,81 @@ func TestCreateJob_ProjectContextResolvesWorkingDirectory(t *testing.T) {
 	}
 }
 
-func TestCreateJob_StaleProjectReferenceStillCreatesJob(t *testing.T) {
-	// Edge Case #2: Job creation succeeds even if ProjectDirectoryLookup
-	// fails to resolve the referenced Project (e.g. it was deleted). The
-	// Job's WorkingDirectory is simply left unresolved; the *run* is what
-	// fails later, not creation.
+// TestCreateJob_UnresolvedProjectReferenceIsRejected supersedes the former
+// "TestCreateJob_StaleProjectReferenceStillCreatesJob" (spec.md's original
+// Edge Case #2). FR-002 (auto-review fix pass) established that a
+// non-nil ProjectDirectoryLookup returning an error is *indistinguishable*
+// from a foreign-owned project ID: FileProjectRepository.GetProject folds
+// both cases into the same domain.ErrNotFound by design (see its doc
+// comment — an anti-IDOR/existence-oracle defense, not an oversight), so
+// CreateJob cannot tell "stale, formerly mine" from "belongs to someone
+// else" and must not try. It now rejects both alike.
+//
+// This does not regress Edge Case #2's actual promise: that promise was
+// about a Project deleted *after* a Job referencing it was created, which
+// CreateJob-time validation cannot observe anyway (the deletion happens
+// later). That case remains handled at run time by
+// internal/infrastructure/scheduler/stub_executor.go's checkProjectExists
+// (errProjectDeleted) — unaffected by this change. Only creation-time
+// tolerance for an already-unresolvable reference is removed, and that
+// tolerance was never actually distinguishable from the cross-owner bug
+// FR-002 closes.
+func TestCreateJob_UnresolvedProjectReferenceIsRejected(t *testing.T) {
 	tmp := t.TempDir()
 	jobRepo := storage.NewFileJobRepository(tmp)
 	runRepo := storage.NewFileRunRepository(tmp)
 	enqueuer := &fakeEnqueuer{}
-	lookup := &fakeProjectLookup{dirs: map[string]string{}} // proj-1 not found
-	svc := NewService(jobRepo, runRepo, enqueuer, lookup, storage.NewFileConfinedFileStore(), tmp)
+	lookup := &fakeProjectLookup{dirs: map[string]map[string]string{}} // proj-1 not registered for anyone
+	svc := NewService(jobRepo, runRepo, enqueuer, lookup, nil, storage.NewFileConfinedFileStore(), tmp)
 
-	job, err := svc.CreateJob(context.Background(), "user-a", "Refactor", "Refactor the widget module.", domain.ContextTypeProject, "proj-1")
+	if _, err := svc.CreateJob(context.Background(), "user-a", "Refactor", "Refactor the widget module.", domain.ContextTypeProject, "proj-1"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound rejecting an unresolvable project reference, got: %v", err)
+	}
+
+	list, err := svc.ListJobs(context.Background(), "user-a")
 	if err != nil {
-		t.Fatalf("expected CreateJob to succeed despite stale project reference, got err: %v", err)
+		t.Fatalf("ListJobs: %v", err)
 	}
-	if job.WorkingDirectory != "" {
-		t.Fatalf("expected empty WorkingDirectory for unresolved project, got %q", job.WorkingDirectory)
+	if len(list) != 0 {
+		t.Fatalf("expected no Job to be persisted for a rejected create, got %d", len(list))
 	}
-	if job.Status != domain.JobStatusQueued {
-		t.Fatalf("expected job still queued, got %v", job.Status)
+}
+
+// TestCreateJob_ForeignProjectContextRejected is FR-002's mandatory explicit
+// acceptance test (spec.md line 157), mirroring TestGetJob_CrossOwnerIsolation's
+// pattern: a --project <id> belonging to a *different* user must be
+// rejected, never silently attached to the caller's new Job.
+func TestCreateJob_ForeignProjectContextRejected(t *testing.T) {
+	tmp := t.TempDir()
+	jobRepo := storage.NewFileJobRepository(tmp)
+	runRepo := storage.NewFileRunRepository(tmp)
+	enqueuer := &fakeEnqueuer{}
+	// proj-1 exists, but only under "user-b", not "user-a".
+	lookup := &fakeProjectLookup{dirs: map[string]map[string]string{"user-b": {"proj-1": "/output/proj-1"}}}
+	svc := NewService(jobRepo, runRepo, enqueuer, lookup, nil, storage.NewFileConfinedFileStore(), tmp)
+
+	if _, err := svc.CreateJob(context.Background(), "user-a", "Refactor", "desc", domain.ContextTypeProject, "proj-1"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for a foreign-owned project context, got: %v", err)
+	}
+
+	list, err := svc.ListJobs(context.Background(), "user-a")
+	if err != nil {
+		t.Fatalf("ListJobs: %v", err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("expected no Job to be persisted for a rejected create, got %d", len(list))
 	}
 }
 
 func TestCreateJob_NilProjectLookupStillCreatesJob(t *testing.T) {
 	// No ProjectDirectoryLookup configured at all (e.g. wiring omitted it):
 	// Project-context Jobs must still be creatable, just without a resolved
-	// WorkingDirectory.
+	// WorkingDirectory. Production always wires a non-nil lookup (see
+	// cmd/nuimanbot/extended_context.go) — this nil-tolerance is a
+	// deliberate test-only convenience, unlike ChatOwnershipCheck's nil
+	// behavior (see TestCreateJob_NilChatOwnershipRejectsNonEmptyChatContext),
+	// which was defined fresh for FR-002 with no such pre-existing contract
+	// to preserve.
 	svc, _ := newTestService(t) // constructed with a nil ProjectDirectoryLookup
 	job, err := svc.CreateJob(context.Background(), "user-a", "Refactor", "desc", domain.ContextTypeProject, "proj-1")
 	if err != nil {
@@ -209,11 +292,77 @@ func TestCreateJob_NilProjectLookupStillCreatesJob(t *testing.T) {
 	}
 }
 
+// TestCreateJob_ChatContextOwnedSucceeds verifies the happy path for
+// FR-002's new ContextTypeChat ownership check: a --chat <id> the caller
+// does own resolves normally (no WorkingDirectory — Chat has none).
+func TestCreateJob_ChatContextOwnedSucceeds(t *testing.T) {
+	tmp := t.TempDir()
+	jobRepo := storage.NewFileJobRepository(tmp)
+	runRepo := storage.NewFileRunRepository(tmp)
+	enqueuer := &fakeEnqueuer{}
+	chatOwnership := &fakeChatOwnership{owned: map[string]map[string]bool{"user-a": {"chat-1": true}}}
+	svc := NewService(jobRepo, runRepo, enqueuer, nil, chatOwnership, storage.NewFileConfinedFileStore(), tmp)
+
+	job, err := svc.CreateJob(context.Background(), "user-a", "Summarize", "desc", domain.ContextTypeChat, "chat-1")
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if job.ContextType != domain.ContextTypeChat || job.ContextID != "chat-1" {
+		t.Fatalf("expected context preserved, got %v/%v", job.ContextType, job.ContextID)
+	}
+	if job.WorkingDirectory != "" {
+		t.Fatalf("expected empty WorkingDirectory for a Chat context, got %q", job.WorkingDirectory)
+	}
+}
+
+// TestCreateJob_ForeignChatContextRejected is FR-002's mandatory explicit
+// acceptance test for --chat, mirroring TestCreateJob_ForeignProjectContextRejected:
+// previously ContextTypeChat had NO ownership check at all (worse than
+// Project's best-effort one) — this proves it now gets the same rejection
+// treatment.
+func TestCreateJob_ForeignChatContextRejected(t *testing.T) {
+	tmp := t.TempDir()
+	jobRepo := storage.NewFileJobRepository(tmp)
+	runRepo := storage.NewFileRunRepository(tmp)
+	enqueuer := &fakeEnqueuer{}
+	// chat-1 exists, but only under "user-b", not "user-a".
+	chatOwnership := &fakeChatOwnership{owned: map[string]map[string]bool{"user-b": {"chat-1": true}}}
+	svc := NewService(jobRepo, runRepo, enqueuer, nil, chatOwnership, storage.NewFileConfinedFileStore(), tmp)
+
+	if _, err := svc.CreateJob(context.Background(), "user-a", "Summarize", "desc", domain.ContextTypeChat, "chat-1"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for a foreign-owned chat context, got: %v", err)
+	}
+
+	list, err := svc.ListJobs(context.Background(), "user-a")
+	if err != nil {
+		t.Fatalf("ListJobs: %v", err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("expected no Job to be persisted for a rejected create, got %d", len(list))
+	}
+}
+
+// TestCreateJob_NilChatOwnershipRejectsNonEmptyChatContext documents a
+// deliberate asymmetry with ProjectDirectoryLookup's nil-tolerance
+// (Research Question 1, see implementation-notes.md task A.1): unlike
+// Project, ChatOwnershipCheck has no pre-existing "nil is fine" contract or
+// test to preserve — it is introduced fresh by FR-002. A nil checker with a
+// non-empty --chat contextID therefore fails closed (rejects) rather than
+// silently skipping verification, so a future caller who forgets to wire a
+// ChatOwnershipCheck cannot silently reopen the exact hole this fix closes.
+// Production always wires one (see cmd/nuimanbot/extended_context.go).
+func TestCreateJob_NilChatOwnershipRejectsNonEmptyChatContext(t *testing.T) {
+	svc, _ := newTestService(t) // constructed with a nil ChatOwnershipCheck
+	if _, err := svc.CreateJob(context.Background(), "user-a", "Summarize", "desc", domain.ContextTypeChat, "chat-1"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound when no ChatOwnershipCheck is wired and a chat context is requested, got: %v", err)
+	}
+}
+
 func TestCreateJob_SaveJobErrorPropagates(t *testing.T) {
 	tmp := t.TempDir()
 	jobRepo := &errJobRepo{JobRepository: storage.NewFileJobRepository(tmp), saveErr: errors.New("disk full")}
 	runRepo := storage.NewFileRunRepository(tmp)
-	svc := NewService(jobRepo, runRepo, &fakeEnqueuer{}, nil, storage.NewFileConfinedFileStore(), tmp)
+	svc := NewService(jobRepo, runRepo, &fakeEnqueuer{}, nil, nil, storage.NewFileConfinedFileStore(), tmp)
 
 	if _, err := svc.CreateJob(context.Background(), "user-a", "Title", "desc", domain.ContextTypeChat, ""); err == nil {
 		t.Fatal("expected CreateJob to propagate the SaveJob error")
@@ -224,7 +373,7 @@ func TestCreateJob_SaveRunErrorPropagates(t *testing.T) {
 	tmp := t.TempDir()
 	jobRepo := storage.NewFileJobRepository(tmp)
 	runRepo := &errRunRepo{RunRepository: storage.NewFileRunRepository(tmp), saveErr: errors.New("disk full")}
-	svc := NewService(jobRepo, runRepo, &fakeEnqueuer{}, nil, storage.NewFileConfinedFileStore(), tmp)
+	svc := NewService(jobRepo, runRepo, &fakeEnqueuer{}, nil, nil, storage.NewFileConfinedFileStore(), tmp)
 
 	if _, err := svc.CreateJob(context.Background(), "user-a", "Title", "desc", domain.ContextTypeChat, ""); err == nil {
 		t.Fatal("expected CreateJob to propagate the SaveRun error")
@@ -389,7 +538,7 @@ func TestDeleteJob_SoftDeleteSaveErrorPropagates(t *testing.T) {
 	realJobRepo := storage.NewFileJobRepository(tmp)
 	runRepo := storage.NewFileRunRepository(tmp)
 	enqueuer := &fakeEnqueuer{}
-	svc := NewService(realJobRepo, runRepo, enqueuer, nil, storage.NewFileConfinedFileStore(), tmp)
+	svc := NewService(realJobRepo, runRepo, enqueuer, nil, nil, storage.NewFileConfinedFileStore(), tmp)
 
 	job, err := svc.CreateJob(context.Background(), "user-a", "job", "desc", domain.ContextTypeChat, "")
 	if err != nil {

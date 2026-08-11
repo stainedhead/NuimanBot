@@ -87,6 +87,28 @@ func (a *projectDirectoryLookupAdapter) OutputDirectoryFor(ctx context.Context, 
 	return p.OutputDirectory, nil
 }
 
+// chatOwnershipCheckAdapter adapts domain.ConversationRepository to
+// jobs.ChatOwnershipCheck (FR-002, auto-review fix pass), verifying a
+// --chat contextID belongs to ownerUserID without jobs.Service depending on
+// internal/usecase/chats directly. Mirrors chats.Service.GetChat's own
+// ownership check (fetch by ID, then compare UserID) rather than importing
+// that usecase package, per the same Clean Architecture rationale as
+// projectDirectoryLookupAdapter above.
+type chatOwnershipCheckAdapter struct {
+	repo domain.ConversationRepository
+}
+
+func (a *chatOwnershipCheckAdapter) VerifyChatOwnership(ctx context.Context, ownerUserID, chatID string) error {
+	conv, err := a.repo.GetConversation(ctx, chatID)
+	if err != nil {
+		return err
+	}
+	if conv.UserID != ownerUserID {
+		return domain.ErrNotFound
+	}
+	return nil
+}
+
 // scheduleEvaluatorAdapter adapts internal/infrastructure/scheduler's free
 // functions to chores.ScheduleEvaluator (Clean Architecture: chores.Service
 // depends on this small interface, not the scheduler package directly).
@@ -186,6 +208,7 @@ func wireExtendedContextEnvironments(ctx context.Context, app *application, webS
 		runRepo,
 		&jobRunEnqueuerAdapter{pool: pool},
 		&projectDirectoryLookupAdapter{repo: app.ProjectRepo},
+		&chatOwnershipCheckAdapter{repo: app.ConversationRepo},
 		confinedFiles,
 		filepath.Join(app.StoragePath, "jobs-hidden"),
 	)

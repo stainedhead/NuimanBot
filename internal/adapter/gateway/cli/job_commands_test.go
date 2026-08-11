@@ -38,11 +38,37 @@ func (s *stubProjectLookup) OutputDirectoryFor(_ context.Context, ownerUserID, p
 	return dir, nil
 }
 
+// stubChatOwnership is a test double for jobs.ChatOwnershipCheck, scoped by
+// ownerUserID exactly like stubProjectLookup: a chat ID only verifies as
+// owned for the owner it was registered under.
+type stubChatOwnership struct {
+	// owned maps ownerUserID -> chatID -> owned.
+	owned map[string]map[string]bool
+}
+
+func (s *stubChatOwnership) VerifyChatOwnership(_ context.Context, ownerUserID, chatID string) error {
+	if byOwner, ok := s.owned[ownerUserID]; ok && byOwner[chatID] {
+		return nil
+	}
+	return domain.ErrNotFound
+}
+
 // newTestJobHandler builds a *cli.JobCommandHandler backed by a real
 // jobs.Service (using the same in-memory-friendly file-backed test doubles
 // internal/usecase/jobs/service_test.go uses), optionally with a
-// project lookup registered for cross-owner isolation tests.
+// project lookup registered for cross-owner isolation tests. No
+// ChatOwnershipCheck is wired (see newTestJobHandlerFull for tests that
+// need one) — every call site below only exercises --chat contexts with
+// either no contextID or via newTestJobHandlerFull directly.
 func newTestJobHandler(t *testing.T, lookup jobs.ProjectDirectoryLookup) *cli.JobCommandHandler {
+	t.Helper()
+	return newTestJobHandlerFull(t, lookup, nil)
+}
+
+// newTestJobHandlerFull is newTestJobHandler with an explicit
+// ChatOwnershipCheck, for tests exercising /job create --chat <id>'s
+// ownership check (FR-002, auto-review fix pass).
+func newTestJobHandlerFull(t *testing.T, lookup jobs.ProjectDirectoryLookup, chatOwnership jobs.ChatOwnershipCheck) *cli.JobCommandHandler {
 	t.Helper()
 	tmp := t.TempDir()
 	svc := jobs.NewService(
@@ -50,6 +76,7 @@ func newTestJobHandler(t *testing.T, lookup jobs.ProjectDirectoryLookup) *cli.Jo
 		storage.NewFileRunRepository(tmp),
 		stubRunEnqueuer{},
 		lookup,
+		chatOwnership,
 		storage.NewFileConfinedFileStore(),
 		tmp,
 	)
@@ -125,7 +152,10 @@ func TestJobCommand_ListEmpty(t *testing.T) {
 }
 
 func TestJobCommand_CreateWithChatContext(t *testing.T) {
-	h := newTestJobHandler(t, nil)
+	chatOwnership := &stubChatOwnership{owned: map[string]map[string]bool{
+		"alice": {"chat-1": true},
+	}}
+	h := newTestJobHandlerFull(t, nil, chatOwnership)
 	ctx := context.Background()
 	user := &domain.User{ID: "u1"}
 
@@ -148,6 +178,37 @@ func TestJobCommand_CreateWithChatContext(t *testing.T) {
 	}
 	if strings.Contains(out, "Title") {
 		t.Fatalf("expected job to be filtered OUT by unrelated --project context, got: %q", out)
+	}
+}
+
+// TestJobCommand_CreateWithForeignChat_FailsNotFound is FR-002's mandatory
+// explicit acceptance test for --chat, mirroring
+// TestJobCommand_CreateWithForeignProject_FailsNotFound: a chat ID owned by
+// a DIFFERENT user must be rejected outright, not silently attached.
+// Previously ContextTypeChat had no ownership check at all.
+func TestJobCommand_CreateWithForeignChat_FailsNotFound(t *testing.T) {
+	chatOwnership := &stubChatOwnership{owned: map[string]map[string]bool{
+		// chat-1 exists only under "bob", not "alice".
+		"bob": {"chat-1": true},
+	}}
+	h := newTestJobHandlerFull(t, nil, chatOwnership)
+	ctx := context.Background()
+	user := &domain.User{ID: "u1"}
+
+	out, err := h.HandleJobCommand(ctx, user, "alice", `/job create Title Description --chat chat-1`)
+	if err == nil {
+		t.Fatalf("expected an error rejecting a foreign-owned chat context, got output: %q", out)
+	}
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got: %v", err)
+	}
+
+	jobsList, listErr := h.HandleJobCommand(ctx, user, "alice", "/job list")
+	if listErr != nil {
+		t.Fatalf("unexpected error: %v", listErr)
+	}
+	if strings.Contains(jobsList, "Title") {
+		t.Fatalf("expected no job to have been created for a rejected foreign chat context, got: %q", jobsList)
 	}
 }
 
@@ -177,14 +238,17 @@ func TestJobCommand_CreateWithProjectContext(t *testing.T) {
 }
 
 // TestJobCommand_CreateWithForeignProject_FailsNotFound is the mandatory
-// explicit test for the traced edge case from implementation-notes.md: a
+// explicit test for FR-002 (auto-review fix pass, spec.md line 157): a
 // /job create --project <id> where <id> belongs to a DIFFERENT owner must
 // resolve as a not-found/permission error, never silently attach the new
-// Job to another user's Project. This is safe by construction because
-// ProjectDirectoryLookup.OutputDirectoryFor is always called with the
-// caller-supplied ownerUserID (never a target-project-derived owner) — but
-// per the explicit acceptance criterion, that must be proven with a test,
-// not merely relied upon.
+// Job to another user's Project.
+//
+// This test previously asserted the pre-fix behavior — CreateJob did NOT
+// hard-fail on an unresolved project lookup, it just left WorkingDirectory
+// empty, so Job creation "succeeded" with a still-dangling foreign
+// ContextID (visible via /job show and /job list --project). That was
+// exactly the bug this finding describes; the test's own name already
+// promised "FailsNotFound," it just didn't check for it yet. It now does.
 func TestJobCommand_CreateWithForeignProject_FailsNotFound(t *testing.T) {
 	lookup := &stubProjectLookup{dirs: map[string]map[string]string{
 		// proj-1 exists only under "bob", not "alice".
@@ -195,23 +259,19 @@ func TestJobCommand_CreateWithForeignProject_FailsNotFound(t *testing.T) {
 	user := &domain.User{ID: "u1"}
 
 	out, err := h.HandleJobCommand(ctx, user, "alice", `/job create Title Description --project proj-1`)
-	// CreateJob itself does not hard-fail on an unresolved project lookup
-	// (Edge Case #2: WorkingDirectory is simply left unresolved), so the Job
-	// creation succeeds — but it must NOT have attached bob's project
-	// directory. Verify no cross-owner directory leaked into the output/job.
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil {
+		t.Fatalf("expected an error rejecting a foreign-owned project context, got output: %q", out)
 	}
-	if strings.Contains(out, "/output/proj-1") {
-		t.Fatalf("expected bob's project directory to NOT be resolved for alice's job, got: %q", out)
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got: %v", err)
 	}
 
 	jobsList, listErr := h.HandleJobCommand(ctx, user, "alice", "/job list")
 	if listErr != nil {
 		t.Fatalf("unexpected error: %v", listErr)
 	}
-	if strings.Contains(jobsList, "/output/proj-1") {
-		t.Fatalf("expected alice's job to never carry bob's project working directory, got: %q", jobsList)
+	if strings.Contains(jobsList, "Title") {
+		t.Fatalf("expected no job to have been created for a rejected foreign project context, got: %q", jobsList)
 	}
 }
 
