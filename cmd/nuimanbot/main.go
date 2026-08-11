@@ -94,6 +94,8 @@ type application struct {
 	RunRepo              domain.RunRepository           // Backs the web admin's History environment and the Job/Chore worker pool
 	StoragePath          string                         // Base data directory, reused for the worker pool's queue/scheduler persistence and Job/Chore hidden directories
 	WorkerPool           *scheduler.WorkerPool          // Set once wireExtendedContextEnvironments runs inside Run(); read later by the Settings environment's wiring
+	ExtendedContext      extendedContextServices        // Set once wireExtendedContextEnvironments runs; zero value (all nil fields) if the web UI is disabled — read later by the CLI gateway's Projects/Jobs/Chores/History/Memories wiring (specs/260811-cli-parity-for-nuimanbot-features)
+	SettingsService      *settings.Service              // Set once wireSettingsEnvironment runs; nil if the web UI (or worker pool) is disabled — read later by the CLI gateway's Settings wiring
 }
 
 func main() {
@@ -1026,11 +1028,12 @@ func (app *application) Run(ctx context.Context) error {
 		// subsystem (specs/260805-nuimanbot-extend-context-and-ui). Settings
 		// (FR-001-004) is wired later, once the skill registry exists (see
 		// below) — it shares this same pool for its worker-pool-size control.
-		pool, err := wireExtendedContextEnvironments(ctx, app, webServer, profileRepo)
+		pool, extCtxServices, err := wireExtendedContextEnvironments(ctx, app, webServer, profileRepo)
 		if err != nil {
 			slog.Error("Failed to wire extended-context environments", "error", err)
 		} else {
 			app.WorkerPool = pool
+			app.ExtendedContext = extCtxServices
 		}
 
 		// Wire Part C's confirmation admin UI (P5.8): lists pending
@@ -1116,7 +1119,7 @@ func (app *application) Run(ctx context.Context) error {
 	// called (Settings is a web-admin-only environment; nothing needs it
 	// when app.WebServer is nil).
 	if app.WebServer != nil && app.WorkerPool != nil {
-		wireSettingsEnvironment(app.WebServer, app.WorkerPool, skillRegistry, settings.RetentionDefaults{
+		app.SettingsService = wireSettingsEnvironment(app.WebServer, app.WorkerPool, skillRegistry, settings.RetentionDefaults{
 			ChatDays:    app.Config.RetentionDefaults.ChatDays,
 			ProjectDays: app.Config.RetentionDefaults.ProjectDays,
 			HistoryDays: app.Config.RetentionDefaults.HistoryDays,
@@ -1157,6 +1160,55 @@ func (app *application) Run(ctx context.Context) error {
 		memoryHandler := cli.NewMemoryCommandHandler(memoryCmd)
 		cliGateway.SetMemoryHandler(memoryHandler)
 		slog.Info("Memory CLI commands initialized")
+	}
+
+	// Wire the six environment command families + Settings
+	// (specs/260811-cli-parity-for-nuimanbot-features, Phase C/D):
+	// /chat, /project, /job, /chore, /history, /memories, /settings.
+	//
+	// Chats has no dependency on the web UI/worker pool — wired
+	// unconditionally, mirroring the same "a second stateless
+	// chats.Service wrapper over the same app.ConversationRepo" pattern
+	// wireExtendedContextEnvironments's retention sweeper already uses.
+	cliGateway.SetChatsHandler(cli.NewChatCommandHandler(chats.NewService(app.ConversationRepo)))
+	slog.Info("Chats CLI commands initialized")
+
+	// Projects/Jobs/Chores/History/Memories, unlike Chats, are only
+	// constructed inside wireExtendedContextEnvironments — which requires
+	// the worker pool (Jobs/Chores/History share its notifying-decorator-
+	// wrapped RunRepository), itself only started when the web UI is
+	// enabled. app.ExtendedContext is the zero value (all nil fields) when
+	// that never ran; these five CLI commands are then simply unavailable,
+	// matching today's existing behavior (the whole subsystem doesn't exist
+	// without the web UI enabled) rather than a new limitation this feature
+	// introduces.
+	if app.ExtendedContext.Projects != nil {
+		cliGateway.SetProjectsHandler(cli.NewProjectCommandHandler(app.ExtendedContext.Projects))
+		slog.Info("Projects CLI commands initialized")
+	}
+	if app.ExtendedContext.Jobs != nil {
+		cliGateway.SetJobsHandler(cli.NewJobCommandHandler(app.ExtendedContext.Jobs))
+		slog.Info("Jobs CLI commands initialized")
+	}
+	if app.ExtendedContext.Chores != nil {
+		cliGateway.SetChoresHandler(cli.NewChoreCommandHandler(app.ExtendedContext.Chores))
+		slog.Info("Chores CLI commands initialized")
+	}
+	if app.ExtendedContext.History != nil {
+		cliGateway.SetHistoryHandler(cli.NewHistoryCommandHandler(app.ExtendedContext.History))
+		slog.Info("History CLI commands initialized")
+	}
+	if app.ExtendedContext.Memories != nil {
+		cliGateway.SetMemoriesHandler(cli.NewMemoriesCommandHandler(app.ExtendedContext.Memories))
+		slog.Info("Memories CLI commands initialized")
+	}
+
+	// Settings, similarly, only exists once app.WorkerPool + the skill
+	// registry are both available (see wireSettingsEnvironment's call
+	// site) — nil app.SettingsService means the web UI is disabled.
+	if app.SettingsService != nil {
+		cliGateway.SetSettingsHandler(cli.NewSettingsCommandHandler(app.SettingsService))
+		slog.Info("Settings CLI commands initialized")
 	}
 
 	// CLI login (FR-001-FR-007, FR-044): the CLI authenticates against the

@@ -19,6 +19,29 @@ import (
 	"nuimanbot/internal/usecase/settings"
 )
 
+// extendedContextServices carries the per-user environment usecase services
+// wireExtendedContextEnvironments constructs, in addition to wiring them
+// into webServer, so the CLI gateway's environment-command wiring
+// (specs/260811-cli-parity-for-nuimanbot-features, Phase C) can share the
+// exact same instances rather than constructing a second, disconnected set
+// (which would still work — these are stateless wrappers over shared
+// repositories — but Jobs/Chores/History all share the notifying-decorator-
+// wrapped RunRepository and the worker pool constructed here, so
+// reconstructing them independently would mean CLI-side Jobs/Chores don't
+// push WebSocket notifications and don't share the one live worker pool).
+// All fields are nil if wireExtendedContextEnvironments was never called
+// (web UI disabled) — the CLI gateway wiring must treat that as "these five
+// environments aren't available this run," not attempt a fallback
+// construction, since Jobs/Chores/History have no meaning without the
+// worker pool this function also constructs.
+type extendedContextServices struct {
+	Projects *projects.Service
+	Jobs     *jobs.Service
+	Chores   *chores.Service
+	History  *history.Service
+	Memories *memories.Service
+}
+
 // defaultRetentionSweepInterval is how often RetentionSweeper (FR-R3)
 // checks every user's Chats/Projects/History for expired data. Deliberately
 // coarser than defaultChoreSchedulerInterval — retention is a slow-moving,
@@ -111,7 +134,7 @@ func (a skillNamesAdapter) SkillNames() []string {
 // Projects/History are swept, not just one). Returns the constructed
 // WorkerPool so a later call (once the skill registry exists) can wire
 // Settings' worker-pool-size control against the same live instance.
-func wireExtendedContextEnvironments(ctx context.Context, app *application, webServer *web.Server, userProfileRepo domain.UserProfileRepository) (*scheduler.WorkerPool, error) {
+func wireExtendedContextEnvironments(ctx context.Context, app *application, webServer *web.Server, userProfileRepo domain.UserProfileRepository) (*scheduler.WorkerPool, extendedContextServices, error) {
 	// Shared confined filesystem I/O (FR-R5): the sole implementation
 	// Projects/Jobs/Chores depend on via domain.ConfinedFileStore, keeping
 	// "os"/internal/infrastructure/fsguard out of the usecase layer.
@@ -135,7 +158,7 @@ func wireExtendedContextEnvironments(ctx context.Context, app *application, webS
 	queuePath := filepath.Join(app.StoragePath, "scheduler", "queue.json")
 	queue := scheduler.NewQueue(queuePath)
 	if err := queue.Load(); err != nil {
-		return nil, err
+		return nil, extendedContextServices{}, err
 	}
 
 	// Restart-recovery (FR-R2, Reliability NFR): must run after queue.Load
@@ -187,7 +210,7 @@ func wireExtendedContextEnvironments(ctx context.Context, app *application, webS
 	// why this is a single-turn grounded call, not the full chat
 	// orchestration engine). LLM defaults mirror chat.LLMDefaults's config
 	// source (cfg.LLM.DefaultModel) so both share the same configured model.
-	webServer.SetMemoriesService(memories.NewService(
+	memoriesService := memories.NewService(
 		app.MemoryCellRepo,
 		memories.WithLLM(app.LLMService),
 		memories.WithLLMDefaults(memories.LLMDefaults{
@@ -195,7 +218,8 @@ func wireExtendedContextEnvironments(ctx context.Context, app *application, webS
 			MaxTokens:   app.Config.LLM.DefaultModel.MaxTokens,
 			Temperature: app.Config.LLM.DefaultModel.Temperature,
 		}),
-	))
+	)
+	webServer.SetMemoriesService(memoriesService)
 
 	// Retention sweep (FR-R3): three FRs (FR-014/FR-023/FR-043) promise
 	// "Chats/Projects/runs older than a configured, non-Never period are
@@ -222,7 +246,13 @@ func wireExtendedContextEnvironments(ctx context.Context, app *application, webS
 	)
 	go retentionSweeper.Run(ctx)
 
-	return pool, nil
+	return pool, extendedContextServices{
+		Projects: projectsService,
+		Jobs:     jobsService,
+		Chores:   choresService,
+		History:  historyService,
+		Memories: memoriesService,
+	}, nil
 }
 
 // wireSettingsEnvironment wires Settings (FR-001-004). Split from
@@ -230,10 +260,16 @@ func wireExtendedContextEnvironments(ctx context.Context, app *application, webS
 // read isn't constructed until later in Run() (see main.go) — pool is the
 // *scheduler.WorkerPool returned by wireExtendedContextEnvironments.
 // retention is plan.md Phase 4's pinned default retention windows, in days.
-func wireSettingsEnvironment(webServer *web.Server, pool *scheduler.WorkerPool, skillRegistry skillLister, retention settings.RetentionDefaults) {
-	webServer.SetSettingsService(settings.NewService(
+// Returns the constructed *settings.Service so the CLI gateway's Settings
+// command handler (specs/260811-cli-parity-for-nuimanbot-features P4.1-P4.2)
+// can share the exact same instance rather than constructing a second one
+// against a different PoolController.
+func wireSettingsEnvironment(webServer *web.Server, pool *scheduler.WorkerPool, skillRegistry skillLister, retention settings.RetentionDefaults) *settings.Service {
+	svc := settings.NewService(
 		pool,
 		skillNamesAdapter{registry: skillRegistry},
 		retention,
-	))
+	)
+	webServer.SetSettingsService(svc)
+	return svc
 }
