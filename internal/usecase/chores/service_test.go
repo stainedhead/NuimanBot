@@ -1,0 +1,634 @@
+package chores
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"nuimanbot/internal/domain"
+	"nuimanbot/internal/infrastructure/storage"
+)
+
+// fakeEvaluator is a table-driven test double for ScheduleEvaluator,
+// avoiding a dependency on internal/infrastructure/scheduler per
+// AGENTS.md's Clean Architecture layering (usecase must not import
+// infrastructure concretes).
+type fakeEvaluator struct {
+	invalidExprs   map[string]bool
+	nextFireErrors map[string]bool
+	fixedNext      time.Time
+}
+
+func newFakeEvaluator() *fakeEvaluator {
+	return &fakeEvaluator{
+		invalidExprs:   map[string]bool{"bogus cron": true},
+		nextFireErrors: map[string]bool{"unschedulable cron": true},
+		fixedNext:      time.Date(2026, 8, 6, 0, 0, 0, 0, time.UTC),
+	}
+}
+
+func (f *fakeEvaluator) Validate(cronExpr string) error {
+	if f.invalidExprs[cronExpr] {
+		return errors.New("invalid cron expression")
+	}
+	return nil
+}
+
+func (f *fakeEvaluator) NextFireTime(cronExpr string, _ time.Time) (time.Time, error) {
+	if f.nextFireErrors[cronExpr] {
+		return time.Time{}, errors.New("cannot compute next fire time")
+	}
+	return f.fixedNext, nil
+}
+
+func newTestService(t *testing.T) (*Service, *fakeEvaluator, domain.ChoreRepository, string) {
+	t.Helper()
+	svc, eval, repo, _, hiddenRoot := newTestServiceWithRuns(t)
+	return svc, eval, repo, hiddenRoot
+}
+
+// newTestServiceWithRuns is like newTestService but also exposes the
+// domain.RunRepository backing DeleteChore's active-run check (FR-R8), for
+// tests that need to seed a Run against a Chore.
+func newTestServiceWithRuns(t *testing.T) (*Service, *fakeEvaluator, domain.ChoreRepository, domain.RunRepository, string) {
+	t.Helper()
+	repo := newInMemoryChoreRepository()
+	eval := newFakeEvaluator()
+	hiddenRoot := t.TempDir()
+	runRepo := storage.NewFileRunRepository(t.TempDir())
+	svc := NewService(repo, eval, runRepo, storage.NewFileConfinedFileStore(), hiddenRoot)
+	return svc, eval, repo, runRepo, hiddenRoot
+}
+
+func dailySchedule(t *testing.T) domain.Schedule {
+	t.Helper()
+	s, err := domain.NewScheduleFromPreset(domain.SchedulePresetDaily)
+	if err != nil {
+		t.Fatalf("unexpected error building schedule: %v", err)
+	}
+	return s
+}
+
+func TestCreateChore_UserConfirmedSetsNextFireTime(t *testing.T) {
+	svc, eval, _, _ := newTestService(t)
+	c, err := svc.CreateChore(context.Background(), "alice", "Nightly backup", "run the backup script", "", dailySchedule(t), true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !c.ScheduleConfirmed {
+		t.Fatal("expected ScheduleConfirmed to be true for a user-set schedule")
+	}
+	if !c.NextFireTime.Equal(eval.fixedNext) {
+		t.Fatalf("expected NextFireTime %v, got %v", eval.fixedNext, c.NextFireTime)
+	}
+	if c.OwnerUserID != "alice" {
+		t.Fatalf("expected OwnerUserID alice, got %s", c.OwnerUserID)
+	}
+}
+
+func TestCreateChore_AgentProposedLeavesUnconfirmedAndNoNextFireTime(t *testing.T) {
+	svc, _, _, _ := newTestService(t)
+	c, err := svc.CreateChore(context.Background(), "alice", "Weekly digest", "summarize the week", "", dailySchedule(t), false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if c.ScheduleConfirmed {
+		t.Fatal("expected ScheduleConfirmed to be false for an agent-proposed schedule")
+	}
+	if !c.NextFireTime.IsZero() {
+		t.Fatalf("expected zero NextFireTime for an unconfirmed schedule, got %v", c.NextFireTime)
+	}
+	if c.IsDue(time.Now().Add(365 * 24 * time.Hour)) {
+		t.Fatal("expected an unconfirmed chore to never be due, regardless of elapsed time")
+	}
+}
+
+func TestCreateChore_InvalidCronRejected(t *testing.T) {
+	svc, _, _, _ := newTestService(t)
+	sched, err := domain.NewScheduleFromCron("bogus cron")
+	if err != nil {
+		t.Fatalf("unexpected error building schedule: %v", err)
+	}
+	_, err = svc.CreateChore(context.Background(), "alice", "Bad chore", "desc", "", sched, true)
+	if err == nil {
+		t.Fatal("expected an error for an invalid cron expression")
+	}
+	if !errors.Is(err, domain.ErrInvalidInput) {
+		t.Fatalf("expected domain.ErrInvalidInput, got %v", err)
+	}
+}
+
+func TestCreateChore_NextFireTimeComputationErrorPropagates(t *testing.T) {
+	svc, _, _, _ := newTestService(t)
+	sched, err := domain.NewScheduleFromCron("unschedulable cron")
+	if err != nil {
+		t.Fatalf("unexpected error building schedule: %v", err)
+	}
+	_, err = svc.CreateChore(context.Background(), "alice", "Bad chore", "desc", "", sched, true)
+	if err == nil {
+		t.Fatal("expected an error when NextFireTime computation fails")
+	}
+	if !errors.Is(err, domain.ErrInvalidInput) {
+		t.Fatalf("expected domain.ErrInvalidInput, got %v", err)
+	}
+}
+
+func TestCreateChore_RequiresOwnerAndTitle(t *testing.T) {
+	svc, _, _, _ := newTestService(t)
+	sched := dailySchedule(t)
+
+	if _, err := svc.CreateChore(context.Background(), "", "Title", "desc", "", sched, true); !errors.Is(err, domain.ErrInvalidInput) {
+		t.Fatalf("expected ErrInvalidInput for missing ownerUserID, got %v", err)
+	}
+	if _, err := svc.CreateChore(context.Background(), "alice", "", "desc", "", sched, true); !errors.Is(err, domain.ErrInvalidInput) {
+		t.Fatalf("expected ErrInvalidInput for missing title, got %v", err)
+	}
+}
+
+func TestCreateChore_WritesDescriptionFileInHiddenDirectory(t *testing.T) {
+	svc, _, _, _ := newTestService(t)
+	c, err := svc.CreateChore(context.Background(), "alice", "Nightly backup", "run the backup script", "", dailySchedule(t), true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if c.HiddenDirectory == "" {
+		t.Fatal("expected a non-empty HiddenDirectory")
+	}
+	data, err := os.ReadFile(filepath.Join(c.HiddenDirectory, "JOB-DESCRIPTION.md"))
+	if err != nil {
+		t.Fatalf("expected JOB-DESCRIPTION.md to exist: %v", err)
+	}
+	if string(data) != "run the backup script" {
+		t.Fatalf("expected description file to contain the description, got %q", string(data))
+	}
+}
+
+func TestCreateChore_HiddenDirectoryCreationErrorPropagates(t *testing.T) {
+	dir := t.TempDir()
+	blockingFile := filepath.Join(dir, "users")
+	if err := os.WriteFile(blockingFile, []byte("not a directory"), 0644); err != nil {
+		t.Fatalf("failed to set up test fixture: %v", err)
+	}
+	repo := newInMemoryChoreRepository()
+	eval := newFakeEvaluator()
+	svc := NewService(repo, eval, storage.NewFileRunRepository(t.TempDir()), storage.NewFileConfinedFileStore(), dir)
+
+	_, err := svc.CreateChore(context.Background(), "alice", "Title", "desc", "", dailySchedule(t), true)
+	if err == nil {
+		t.Fatal("expected an error when the hidden directory cannot be created")
+	}
+}
+
+func TestListChores_OwnerScoped(t *testing.T) {
+	svc, _, _, _ := newTestService(t)
+	ctx := context.Background()
+	if _, err := svc.CreateChore(ctx, "alice", "A1", "d", "", dailySchedule(t), true); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := svc.CreateChore(ctx, "bob", "B1", "d", "", dailySchedule(t), true); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	list, err := svc.ListChores(ctx, "alice")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(list) != 1 || list[0].Title != "A1" {
+		t.Fatalf("expected alice to see only her own chore, got %+v", list)
+	}
+}
+
+func TestGetChore_CrossOwnerReturnsNotFound(t *testing.T) {
+	svc, _, _, _ := newTestService(t)
+	ctx := context.Background()
+	c, err := svc.CreateChore(ctx, "alice", "A1", "d", "", dailySchedule(t), true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, err := svc.GetChore(ctx, "bob", c.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected domain.ErrNotFound for cross-owner access, got %v", err)
+	}
+	got, err := svc.GetChore(ctx, "alice", c.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.ID != c.ID {
+		t.Fatalf("expected to retrieve the same chore, got %+v", got)
+	}
+}
+
+func TestDeleteChore_CrossOwnerReturnsNotFoundAndDoesNotDelete(t *testing.T) {
+	svc, _, repo, _ := newTestService(t)
+	ctx := context.Background()
+	c, err := svc.CreateChore(ctx, "alice", "A1", "d", "", dailySchedule(t), true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := svc.DeleteChore(ctx, "bob", c.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected domain.ErrNotFound for cross-owner delete, got %v", err)
+	}
+	if _, err := repo.GetChore(ctx, "alice", c.ID); err != nil {
+		t.Fatalf("expected alice's chore to remain undeleted, got %v", err)
+	}
+}
+
+func TestDeleteChore_OwnerSuccess(t *testing.T) {
+	svc, _, repo, _ := newTestService(t)
+	ctx := context.Background()
+	c, err := svc.CreateChore(ctx, "alice", "A1", "d", "", dailySchedule(t), true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := svc.DeleteChore(ctx, "alice", c.ID); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := repo.GetChore(ctx, "alice", c.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected chore to be gone, got %v", err)
+	}
+}
+
+func TestDeleteChore_SoftDeletesWhenRunActive(t *testing.T) {
+	// FR-R8 / spec.md Edge Case #3 (Chore parity with Job): deleting a
+	// Chore with a Queued or Running run soft-marks it PendingDeletion
+	// instead of removing the record, mirroring jobs.Service.DeleteJob.
+	svc, _, repo, runRepo, _ := newTestServiceWithRuns(t)
+	ctx := context.Background()
+
+	c, err := svc.CreateChore(ctx, "alice", "A1", "d", "", dailySchedule(t), true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	run := &domain.Run{
+		ID:          "run-1",
+		OwnerUserID: "alice",
+		SourceType:  domain.SourceTypeChore,
+		SourceID:    c.ID,
+		Status:      domain.RunStatusRunning,
+		CreatedAt:   time.Now(),
+	}
+	if err := runRepo.SaveRun(ctx, run); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+
+	if err := svc.DeleteChore(ctx, "alice", c.ID); err != nil {
+		t.Fatalf("DeleteChore: %v", err)
+	}
+
+	got, err := repo.GetChore(ctx, "alice", c.ID)
+	if err != nil {
+		t.Fatalf("expected chore record to still exist after soft delete, got err: %v", err)
+	}
+	if !got.PendingDeletion {
+		t.Fatal("expected PendingDeletion to be set")
+	}
+
+	// Also verify the Queued case.
+	run.Status = domain.RunStatusQueued
+	if err := runRepo.SaveRun(ctx, run); err != nil {
+		t.Fatalf("SaveRun (queued): %v", err)
+	}
+	if err := svc.DeleteChore(ctx, "alice", c.ID); err != nil {
+		t.Fatalf("DeleteChore (queued): %v", err)
+	}
+	got, err = repo.GetChore(ctx, "alice", c.ID)
+	if err != nil {
+		t.Fatalf("expected chore record to still exist while queued, got err: %v", err)
+	}
+	if !got.PendingDeletion {
+		t.Fatal("expected PendingDeletion to remain set while queued")
+	}
+}
+
+func TestDeleteChore_HardDeletesWhenNoActiveRun(t *testing.T) {
+	// A Chore whose only run has reached a terminal state is hard-deleted
+	// immediately, same as an idle Job.
+	svc, _, repo, runRepo, _ := newTestServiceWithRuns(t)
+	ctx := context.Background()
+
+	c, err := svc.CreateChore(ctx, "alice", "A1", "d", "", dailySchedule(t), true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	run := &domain.Run{
+		ID:          "run-1",
+		OwnerUserID: "alice",
+		SourceType:  domain.SourceTypeChore,
+		SourceID:    c.ID,
+		Status:      domain.RunStatusCompleted,
+		CreatedAt:   time.Now(),
+	}
+	if err := runRepo.SaveRun(ctx, run); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+
+	if err := svc.DeleteChore(ctx, "alice", c.ID); err != nil {
+		t.Fatalf("DeleteChore: %v", err)
+	}
+	if _, err := repo.GetChore(ctx, "alice", c.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected chore to be gone, got %v", err)
+	}
+}
+
+func TestDeleteChore_ActiveRunCheckErrorPropagates(t *testing.T) {
+	svc, _, _, _, _ := newTestServiceWithRuns(t)
+	ctx := context.Background()
+	c, err := svc.CreateChore(ctx, "alice", "A1", "d", "", dailySchedule(t), true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	svc.runs = &errListRunRepo{RunRepository: svc.runs, listErr: errors.New("disk error")}
+	if err := svc.DeleteChore(ctx, "alice", c.ID); err == nil {
+		t.Fatal("expected DeleteChore to propagate the active-run lookup error")
+	}
+}
+
+func TestDeleteChore_SoftDeleteSaveErrorPropagates(t *testing.T) {
+	tmp := t.TempDir()
+	realChoreRepo := &errSaveChoreRepo{ChoreRepository: newInMemoryChoreRepository()}
+	runRepo := storage.NewFileRunRepository(tmp)
+	svc := NewService(realChoreRepo, newFakeEvaluator(), runRepo, storage.NewFileConfinedFileStore(), tmp)
+
+	c, err := svc.CreateChore(context.Background(), "alice", "A1", "d", "", dailySchedule(t), true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := runRepo.SaveRun(context.Background(), &domain.Run{
+		ID: "run-1", OwnerUserID: "alice", SourceType: domain.SourceTypeChore,
+		SourceID: c.ID, Status: domain.RunStatusRunning, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+
+	realChoreRepo.saveErr = errors.New("disk full")
+	if err := svc.DeleteChore(context.Background(), "alice", c.ID); err == nil {
+		t.Fatal("expected DeleteChore to propagate the soft-delete SaveChore error")
+	}
+}
+
+// errListRunRepo wraps a real domain.RunRepository, optionally forcing
+// ListRuns to fail — used to exercise DeleteChore's active-run-check
+// error-propagation path.
+type errListRunRepo struct {
+	domain.RunRepository
+	listErr error
+}
+
+func (r *errListRunRepo) ListRuns(ctx context.Context, ownerUserID string, filter domain.RunFilter) ([]*domain.Run, error) {
+	if r.listErr != nil {
+		return nil, r.listErr
+	}
+	return r.RunRepository.ListRuns(ctx, ownerUserID, filter)
+}
+
+// errSaveChoreRepo wraps a real domain.ChoreRepository, optionally forcing
+// SaveChore to fail — used to exercise DeleteChore's soft-delete
+// error-propagation path (SaveChore is also used by CreateChore, so saveErr
+// must be set only after the chore under test has already been created).
+type errSaveChoreRepo struct {
+	domain.ChoreRepository
+	saveErr error
+}
+
+func (r *errSaveChoreRepo) SaveChore(ctx context.Context, c *domain.Chore) error {
+	if r.saveErr != nil {
+		return r.saveErr
+	}
+	return r.ChoreRepository.SaveChore(ctx, c)
+}
+
+func TestCleanupPendingDeletion_HardDeletesOnceRunIsTerminal(t *testing.T) {
+	// FR-R9: a PendingDeletion Chore whose Run has reached a terminal state
+	// is hard-deleted by the sweep; one whose Run is still active is left
+	// alone until a later sweep pass finds it eligible.
+	svc, _, repo, runRepo, _ := newTestServiceWithRuns(t)
+	ctx := context.Background()
+
+	stillActive, err := svc.CreateChore(ctx, "alice", "still running", "d", "", dailySchedule(t), true)
+	if err != nil {
+		t.Fatalf("CreateChore: %v", err)
+	}
+	if err := runRepo.SaveRun(ctx, &domain.Run{
+		ID: "run-active", OwnerUserID: "alice", SourceType: domain.SourceTypeChore,
+		SourceID: stillActive.ID, Status: domain.RunStatusRunning, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+	if err := svc.DeleteChore(ctx, "alice", stillActive.ID); err != nil {
+		t.Fatalf("DeleteChore (soft): %v", err)
+	}
+
+	doneRunning, err := svc.CreateChore(ctx, "alice", "finished", "d", "", dailySchedule(t), true)
+	if err != nil {
+		t.Fatalf("CreateChore: %v", err)
+	}
+	if err := runRepo.SaveRun(ctx, &domain.Run{
+		ID: "run-done", OwnerUserID: "alice", SourceType: domain.SourceTypeChore,
+		SourceID: doneRunning.ID, Status: domain.RunStatusRunning, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+	if err := svc.DeleteChore(ctx, "alice", doneRunning.ID); err != nil {
+		t.Fatalf("DeleteChore (soft): %v", err)
+	}
+	// Advance doneRunning's run to a terminal state.
+	sourceType := domain.SourceTypeChore
+	runs, err := runRepo.ListRuns(ctx, "alice", domain.RunFilter{SourceType: &sourceType, SourceID: &doneRunning.ID})
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("expected exactly 1 run for doneRunning, got %v (err %v)", runs, err)
+	}
+	runs[0].Status = domain.RunStatusCompleted
+	if err := runRepo.SaveRun(ctx, runs[0]); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+
+	n, err := svc.CleanupPendingDeletion(ctx, "alice")
+	if err != nil {
+		t.Fatalf("CleanupPendingDeletion: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected exactly 1 chore cleaned up, got %d", n)
+	}
+
+	if _, err := repo.GetChore(ctx, "alice", doneRunning.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected doneRunning chore to be hard-deleted, got %v", err)
+	}
+	if _, err := repo.GetChore(ctx, "alice", stillActive.ID); err != nil {
+		t.Fatalf("expected stillActive chore to remain (its run is still active), got %v", err)
+	}
+}
+
+func TestCleanupPendingDeletion_IgnoresNonPendingChores(t *testing.T) {
+	svc, _, _, _, _ := newTestServiceWithRuns(t)
+	ctx := context.Background()
+
+	if _, err := svc.CreateChore(ctx, "alice", "idle", "d", "", dailySchedule(t), true); err != nil {
+		t.Fatalf("CreateChore: %v", err)
+	}
+
+	n, err := svc.CleanupPendingDeletion(ctx, "alice")
+	if err != nil {
+		t.Fatalf("CleanupPendingDeletion: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("expected 0 cleaned up (chore is not PendingDeletion), got %d", n)
+	}
+}
+
+func TestCleanupPendingDeletion_ListChoresErrorPropagates(t *testing.T) {
+	svc, _, _, _, _ := newTestServiceWithRuns(t)
+	svc.chores = &errListChoresRepo{ChoreRepository: svc.chores, listErr: errors.New("disk error")}
+
+	if _, err := svc.CleanupPendingDeletion(context.Background(), "alice"); err == nil {
+		t.Fatal("expected CleanupPendingDeletion to propagate the ListChores error")
+	}
+}
+
+// errListChoresRepo wraps a real domain.ChoreRepository, optionally forcing
+// ListChores to fail.
+type errListChoresRepo struct {
+	domain.ChoreRepository
+	listErr error
+}
+
+func (r *errListChoresRepo) ListChores(ctx context.Context, ownerUserID string) ([]*domain.Chore, error) {
+	if r.listErr != nil {
+		return nil, r.listErr
+	}
+	return r.ChoreRepository.ListChores(ctx, ownerUserID)
+}
+
+func TestConfirmSchedule_SetsConfirmedAndComputesNextFireTime(t *testing.T) {
+	svc, eval, _, _ := newTestService(t)
+	ctx := context.Background()
+	c, err := svc.CreateChore(ctx, "alice", "Agent proposal", "d", "", dailySchedule(t), false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if c.ScheduleConfirmed {
+		t.Fatal("precondition: expected unconfirmed chore")
+	}
+
+	if err := svc.ConfirmSchedule(ctx, "alice", c.ID); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, err := svc.GetChore(ctx, "alice", c.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !got.ScheduleConfirmed {
+		t.Fatal("expected ScheduleConfirmed to be true after confirmation")
+	}
+	if !got.NextFireTime.Equal(eval.fixedNext) {
+		t.Fatalf("expected NextFireTime %v, got %v", eval.fixedNext, got.NextFireTime)
+	}
+}
+
+func TestConfirmSchedule_NextFireTimeComputationErrorPropagates(t *testing.T) {
+	svc, _, _, _ := newTestService(t)
+	ctx := context.Background()
+	sched, err := domain.NewScheduleFromCron("unschedulable cron")
+	if err != nil {
+		t.Fatalf("unexpected error building schedule: %v", err)
+	}
+	c, err := svc.CreateChore(ctx, "alice", "Agent proposal", "d", "", sched, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := svc.ConfirmSchedule(ctx, "alice", c.ID); !errors.Is(err, domain.ErrInvalidInput) {
+		t.Fatalf("expected domain.ErrInvalidInput, got %v", err)
+	}
+}
+
+func TestConfirmSchedule_CrossOwnerReturnsNotFound(t *testing.T) {
+	svc, _, _, _ := newTestService(t)
+	ctx := context.Background()
+	c, err := svc.CreateChore(ctx, "alice", "A1", "d", "", dailySchedule(t), false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := svc.ConfirmSchedule(ctx, "bob", c.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected domain.ErrNotFound for cross-owner confirm, got %v", err)
+	}
+}
+
+// inMemoryChoreRepository is a minimal domain.ChoreRepository test double,
+// avoiding a dependency on internal/infrastructure/storage from this
+// usecase package's tests.
+type inMemoryChoreRepository struct {
+	byOwner map[string]map[string]*domain.Chore
+}
+
+func newInMemoryChoreRepository() *inMemoryChoreRepository {
+	return &inMemoryChoreRepository{byOwner: make(map[string]map[string]*domain.Chore)}
+}
+
+func (r *inMemoryChoreRepository) SaveChore(_ context.Context, c *domain.Chore) error {
+	if r.byOwner[c.OwnerUserID] == nil {
+		r.byOwner[c.OwnerUserID] = make(map[string]*domain.Chore)
+	}
+	cp := *c
+	r.byOwner[c.OwnerUserID][c.ID] = &cp
+	return nil
+}
+
+func (r *inMemoryChoreRepository) GetChore(_ context.Context, ownerUserID, choreID string) (*domain.Chore, error) {
+	c, ok := r.byOwner[ownerUserID][choreID]
+	if !ok {
+		return nil, domain.ErrNotFound
+	}
+	cp := *c
+	return &cp, nil
+}
+
+func (r *inMemoryChoreRepository) ListChores(_ context.Context, ownerUserID string) ([]*domain.Chore, error) {
+	out := make([]*domain.Chore, 0)
+	for _, c := range r.byOwner[ownerUserID] {
+		cp := *c
+		out = append(out, &cp)
+	}
+	return out, nil
+}
+
+func (r *inMemoryChoreRepository) DeleteChore(_ context.Context, ownerUserID, choreID string) error {
+	if _, ok := r.byOwner[ownerUserID][choreID]; !ok {
+		return domain.ErrNotFound
+	}
+	delete(r.byOwner[ownerUserID], choreID)
+	return nil
+}
+
+func (r *inMemoryChoreRepository) UpdateNextFireTime(_ context.Context, ownerUserID, choreID string, next time.Time) error {
+	c, ok := r.byOwner[ownerUserID][choreID]
+	if !ok {
+		return domain.ErrNotFound
+	}
+	c.NextFireTime = next
+	c.UpdatedAt = next
+	return nil
+}
+
+func (r *inMemoryChoreRepository) ListAllDue(_ context.Context, now time.Time) ([]*domain.Chore, error) {
+	out := make([]*domain.Chore, 0)
+	for _, chores := range r.byOwner {
+		for _, c := range chores {
+			if c.IsDue(now) {
+				cp := *c
+				out = append(out, &cp)
+			}
+		}
+	}
+	return out, nil
+}
+
+var _ domain.ChoreRepository = (*inMemoryChoreRepository)(nil)

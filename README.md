@@ -54,6 +54,13 @@ NuimanBot is a production-ready AI agent framework that prioritizes **security**
 - CI/CD automation with security scanning
 - 72%+ test coverage (unit + integration)
 
+**🗂️ Persistent Agent Workspace (Web UI, New — In Progress)**
+- Six new web environments: Chats, Projects, Jobs, Chores, History, Memories, plus Settings
+- Durable, directory-scoped Projects with an agent-steerable `AGENTS.md`; one-time Jobs and cron-scheduled Chores run through a shared, configurable FIFO worker pool; full run history with per-user notification badges
+- Configurable network exposure: localhost-only (default) or remote with an optional IP/hostname allowlist, enforced pre-authentication
+- Strict per-user isolation on every resource (cross-user access by ID returns 404, never 403 — including for admins)
+- **Known limitation:** Job/Chore execution and the web Chats environment do not yet invoke the agent — see [Known Limitations](#known-limitations) and the [Web Workspace Guide](support_docs/web-workspace-guide.md)
+
 ---
 
 ## Quick Start
@@ -125,12 +132,13 @@ export NUIMANBOT_LLM_OLLAMA_BASEURL="http://localhost:11434"
 - [CLI Administration](support_docs/cli-admin-guide.md) - User and permission management
 
 **Feature Guides**
+- [Web Workspace Guide](support_docs/web-workspace-guide.md) - Using Chats, Projects, Jobs, Chores, History, and Memories from the web UI
 - [Agent Skills](support_docs/skills-guide.md) - Creating and using reusable prompt templates
 - [Persona Customization](support_docs/user-onboarding.md#persona-customization) - Per-user AI personality files
 - [Self-Organizing Memory](support_docs/self-organizing-memory-guide.md) - Long-term memory system
 - [Buzz Gateway](support_docs/buzz-guide.md) - Joining Buzz (Nostr-based multi-agent chat) channels
 - [Security Hardening Guide](support_docs/security-hardening-guide.md) - Action confirmations, tool-output scanning, SSRF protection, and RBAC config
-- [Advanced Skills](support_docs/README.md) - Subagents, preprocessing, plugins, versioning
+- [Advanced Skills: Subagents](support_docs/subagents-guide.md), [Preprocessing](support_docs/preprocessing-guide.md), [Plugins](support_docs/plugins-guide.md), [Versioning](support_docs/versioning-guide.md)
 
 **Administration**
 - [Admin Guide](support_docs/admin-guide.md) - REST API, user/bot management, operations
@@ -365,11 +373,26 @@ See [User Onboarding Guide](support_docs/user-onboarding.md) for usage examples.
 
 ---
 
+## Known Limitations
+
+**Persistent Agent Workspace (Chats, Projects, Jobs, Chores, History, Memories, Settings) — new, 2026-08-05, hardened by a review-fix pass the same day, functional but partial:**
+- Job/Chore execution runs through a real queueing/scheduling/persistence pipeline but does not yet invoke the agent — it uses a placeholder `StubExecutor` that produces no real work product
+- The web Chats environment persists messages but does not yet generate agent replies (the CLI/Telegram/Slack/Buzz gateways are unaffected)
+- Per-Job/Chore/Run "chat with the agent" interfaces are not built yet; Memories now has one (a minimal per-item Q&A), as the reference implementation the other three are meant to follow
+- Configured retention windows (Chats/Projects/History) are now automatically enforced by a 15-minute sweep, and a soft-deleted Job or Chore is automatically cleaned up once its run finishes
+- The WebSocket push transport for live run status/log/notification updates now has a browser-side consumer (`run-events.js`) — Job/Chore/Run detail pages update live without a manual refresh
+- A run already dispatched to a worker at the moment of a server crash is now reconciled on restart (marked `Failed` rather than left silently stuck)
+
+See [Product Summary](documentation/product-summary.md#persistent-agent-workspace-chats-projects-jobs-chores-history-memories--in-progress) for the complete, itemized status and the [Web Workspace Guide](support_docs/web-workspace-guide.md) for what to expect when using it today.
+
+---
+
 ## Status
 
 ✅ **Production Ready** - 100% Complete
 
 **Recently Completed**
+- 🔶 Persistent Agent Workspace (web UI): Chats, Projects, Jobs, Chores, History, Memories, Settings, configurable network access — real queueing/scheduling/persistence pipeline with a scheduled retention sweep, restart recovery, and live browser-side WebSocket updates; agent-invoking execution still pending (2026-08-05, hardened same day by a review-fix pass; see [Known Limitations](#known-limitations))
 - ✅ Buzz Gateway (Nostr-based multi-agent chat: relay client, RBAC, tool integration; cross-platform RBAC enforcement fix) (2026-08-02)
 - ✅ Security Hardening — Parts A-G: tool-output injection filtering (`OutputValidator`), prompt-boundary guardrails, side-effecting action confirmation flow, RBAC correction with CI guard, SSRF hardening (IP-resolution + redirect revalidation), MCP trust classification, documentation parity (2026-08-02)
 - ✅ FR-001/FR-002 — RBAC bypass in live chat fixed (P0), reconciled with the Buzz gateway's independent cross-platform RBAC fix onto one unified model: `chat.Service` resolves each user's persisted `domain.User` via `UserService` (`GetUserByPlatformUID`/`CreateUser`, defaulting new non-CLI identities to `RoleGuest`) and calls `ExecuteWithUser` — with `conversationID` threaded through for Part C's confirmation gate — for both the main tool-calling loop and the confirmation-approval re-invocation path; `ListTools` filters by caller role, including the action-aware `github` split and MCP trust classification; confirmation-reply detection is keyed on the resolved user's persisted ID, not raw platform UID (2026-08-04)

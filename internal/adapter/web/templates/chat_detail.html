@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Chat.Name}} - NuimanBot Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.5/dist/cdn.min.js"></script>
+    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="icon" href="/static/img/NuimanProfile.jpg">
+</head>
+<body class="bg-gray-100 min-h-screen">
+    {{template "nav" .}}
+    <div class="container mx-auto px-4 py-8">
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <div class="flex justify-between items-center mb-6">
+                <div>
+                    <a href="/admin/chats" class="text-sm text-teal-700 hover:underline">&larr; All Chats</a>
+                    <h1 class="text-2xl font-bold text-gray-900 mt-1">{{.Chat.Name}}</h1>
+                </div>
+                <div class="flex gap-3 items-center">
+                    <a href="/admin/chats/{{.Chat.ID}}/export?format=json" class="text-gray-500 hover:text-gray-700 text-sm">Download JSON</a>
+                    <a href="/admin/chats/{{.Chat.ID}}/export?format=markdown" class="text-gray-500 hover:text-gray-700 text-sm">Download Markdown</a>
+                    <form method="POST" action="/admin/chats/{{.Chat.ID}}/delete" onsubmit="return confirm('Delete this chat? This cannot be undone.');">
+                        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                        <button type="submit" class="text-red-600 hover:text-red-800 text-sm">Delete</button>
+                    </form>
+                </div>
+            </div>
+
+            <div class="space-y-4 mb-6">
+                {{if .Chat.Messages}}
+                    {{range .Chat.Messages}}
+                    <div class="p-3 rounded-lg {{if eq .Role "user"}}bg-teal-50 ml-8{{else}}bg-gray-50 mr-8{{end}}">
+                        <div class="text-xs font-semibold text-gray-500 uppercase mb-1">{{.Role}}</div>
+                        <div class="text-gray-800 whitespace-pre-wrap">{{.Content}}</div>
+                    </div>
+                    {{end}}
+                {{else}}
+                <p class="text-gray-500">No messages yet.</p>
+                {{end}}
+            </div>
+
+            <p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 mb-3">
+                Automatic replies are not yet available for Chats — your message is saved, but the agent will not respond here yet.
+            </p>
+            <form method="POST" action="/admin/chats/{{.Chat.ID}}/message" class="border-t pt-4">
+                <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                <div class="flex gap-2">
+                    <textarea name="content" rows="2" placeholder="Type a message..."
+                              class="flex-1 rounded-md border-gray-300 shadow-sm focus:border-teal-500 focus:ring-teal-500"></textarea>
+                    <button type="submit" class="btn-primary self-start">Send</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</body>
+</html>

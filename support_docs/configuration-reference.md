@@ -1,7 +1,7 @@
 # NuimanBot Configuration Reference
 
-**Version:** 1.1
-**Last Updated:** 2026-08-03
+**Version:** 1.2
+**Last Updated:** 2026-08-05
 **Configuration Format:** YAML
 
 ---
@@ -13,13 +13,14 @@
 3. [Server Configuration](#server-configuration)
 4. [Security Configuration](#security-configuration)
 5. [Storage Configuration](#storage-configuration)
-6. [LLM Configuration](#llm-configuration)
-7. [Gateway Configuration](#gateway-configuration)
-8. [Tools Configuration](#tools-configuration)
-9. [Skills Configuration](#skills-configuration)
-10. [MCP Configuration](#mcp-configuration)
-11. [Environment Variables](#environment-variables)
-12. [Examples](#examples)
+6. [Network Access & Workspace Configuration](#network-access--workspace-configuration)
+7. [LLM Configuration](#llm-configuration)
+8. [Gateway Configuration](#gateway-configuration)
+9. [Tools Configuration](#tools-configuration)
+10. [Skills Configuration](#skills-configuration)
+11. [MCP Configuration](#mcp-configuration)
+12. [Environment Variables](#environment-variables)
+13. [Examples](#examples)
 
 ---
 
@@ -332,6 +333,103 @@ storage:
   type: file
   dsn: "/var/lib/nuimanbot"
 ```
+
+---
+
+## Network Access & Workspace Configuration
+
+Configures the web workspace's network exposure (localhost-only vs. remote), the shared Job/Chore worker pool size, and default retention windows for Chats/Projects/History. See the [Web Workspace Guide](web-workspace-guide.md) for what these settings control from a user's perspective, and the [Admin Guide](admin-guide.md) for operational guidance.
+
+**Note:** as of this writing, `worker_pool.max_concurrent_workers` and `network_access.mode` can also be changed live from the Settings page in the web UI; `network_access.allowlist` and `network_access.bind_address` are config-file-only — there is no UI control for either yet, and changing `mode` from the UI does not rebind the running server to a new address (the bind address is only read once, at startup).
+
+### network_access Section
+
+Controls whether the web admin server accepts connections from other machines, and if so, from which sources.
+
+```yaml
+network_access:
+  mode: localhost_only        # localhost_only | remote
+  # bind_address: "0.0.0.0:8443"   # only used when mode: remote
+  # allowlist:
+  #   - "203.0.113.9"
+  #   - "trusted.example.com"
+```
+
+### Fields
+
+#### `network_access.mode`
+
+**Type:** string
+**Default:** `localhost_only`
+**Options:** `localhost_only` (binds `127.0.0.1` only), `remote` (binds `bind_address`)
+**Description:** Controls whether the web admin server is reachable from other machines. Omitting this whole section is equivalent to explicitly setting `localhost_only` with no allowlist — existing single-machine deployments are unaffected by upgrading to a version that includes this feature. An unrecognized or malformed value is treated as `localhost_only`, never `remote` — a config typo must never silently open remote access.
+
+**Environment Variable:** none yet — this section is `config.yaml`-only for now; unlike most sections in this reference, it has no per-field environment variable override wired up.
+
+#### `network_access.bind_address`
+
+**Type:** string
+**Default:** (unset)
+**Description:** The interface/port the server binds when `mode: remote` (e.g. `"0.0.0.0:8443"`). Ignored in `localhost_only` mode. Takes effect only at process startup — changing it requires a restart, and it cannot currently be changed from the Settings UI.
+
+**Environment Variable:** none yet — `config.yaml`-only.
+
+#### `network_access.allowlist`
+
+**Type:** list of strings (IPs or hostnames)
+**Default:** unset (absent)
+**Description:** When `mode: remote`, restricts which client sources may reach the server. Enforced by a middleware layer ahead of every request — including unauthenticated endpoints like `/health` — before authentication runs; a rejected source gets HTTP 403 without reaching any application code. Cannot currently be changed from the Settings UI.
+
+**IMPORTANT — absent vs. empty are NOT equivalent:**
+- **Omitting `allowlist` entirely** (or leaving out the whole `network_access` section) = allow all remote sources once `mode: remote` is set. This is an explicit admin choice to open access with no source restriction.
+- **`allowlist: []`** (present but empty) = deny **all** sources, fail-closed. Every remote request is rejected.
+- **`allowlist: [...]`** with one or more entries = only those sources are allowed; everything else is rejected.
+
+Double-check which of these three states you intend — the first and second look similar in a diff but have opposite effects.
+
+**Environment Variable:** none yet — `config.yaml`-only.
+
+---
+
+### worker_pool Section
+
+Configures the shared FIFO worker pool that executes Job and Chore runs.
+
+```yaml
+worker_pool:
+  max_concurrent_workers: 3
+```
+
+#### `worker_pool.max_concurrent_workers`
+
+**Type:** integer
+**Default:** `3`
+**Description:** Maximum number of Job/Chore runs that may execute concurrently, system-wide across all users, from one shared FIFO queue. An unset or non-positive value falls back to the default (3) rather than failing startup. Live-editable from the Settings page; reducing it never interrupts a run already in progress — it simply stops new runs from starting until the active count drops to the new limit.
+
+**Environment Variable:** none yet — `config.yaml`-only, though it can also be changed live from the Settings page in the web UI.
+
+---
+
+### retention_defaults Section
+
+Configures the default number of days Chats, Projects, and History (Job/Chore run) records are kept before automatic deletion.
+
+```yaml
+retention_defaults:
+  chat_days: 90
+  project_days: 180
+  history_days: 90
+```
+
+#### `retention_defaults.chat_days` / `.project_days` / `.history_days`
+
+**Type:** integer (days)
+**Default:** `90` / `180` / `90` respectively
+**Description:** Default retention window for each resource type. `0` (or omitting the field) means **"Never"** — no automatic expiry — not "expire immediately." Shown as the system-wide default on the Settings page.
+
+**Current status:** these values are stored and displayed, but as of this writing no scheduled process actually sweeps and deletes expired records yet — see the [Web Workspace Guide](web-workspace-guide.md#what-to-expect-today) for the full list of what's operational today versus still pending.
+
+**Environment Variable:** none yet — `config.yaml`-only.
 
 ---
 

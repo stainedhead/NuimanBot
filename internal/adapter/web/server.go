@@ -40,14 +40,25 @@ type Server struct {
 	profileService      ProfileService
 	botService          BotService
 	confirmationService ConfirmationService
+	chatsService        ChatsService
+	projectsService     ProjectsService
+	jobsService         JobsService
+	choresService       ChoresService
+	historyService      HistoryService
+	memoriesService     MemoriesService
+	settingsService     SettingsService
+	networkAccess       *networkAccessState
+	hub                 *Hub
 }
 
 // NewServer creates a new web admin server
 func NewServer(addr string) *Server {
 	server := &Server{
-		addr:         addr,
-		auth:         NewAuthService(), // Initialize auth service
-		loginLimiter: newLoginRateLimiterStore(),
+		addr:          addr,
+		auth:          NewAuthService(), // Initialize auth service
+		loginLimiter:  newLoginRateLimiterStore(),
+		networkAccess: &networkAccessState{},
+		hub:           NewHub(),
 	}
 
 	// Parse templates
@@ -58,9 +69,16 @@ func NewServer(addr string) *Server {
 	mux := http.NewServeMux()
 	server.registerRoutes(mux)
 
+	// networkAllowlistMiddleware wraps every route, including /health and
+	// /static/ (FR-007's "rejected before reaching application handlers").
+	// See its doc comment: a server that never calls SetNetworkAccessConfig
+	// behaves exactly as before this field existed.
+	var handler http.Handler = mux
+	handler = server.networkAllowlistMiddleware(handler)
+
 	server.httpServer = &http.Server{
 		Addr:         addr,
-		Handler:      mux,
+		Handler:      handler,
 		ReadTimeout:  readTimeout,
 		WriteTimeout: writeTimeout,
 		IdleTimeout:  idleTimeout,
@@ -164,7 +182,55 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 		}
 	}))
 
+	// Chats environment routes (FR-011-FR-016): per-user, RoleUser is
+	// sufficient — every handler scopes to the requesting session's own
+	// Username, matching the confirmations routes' composition above.
+	userHandler := func(h http.HandlerFunc) http.Handler {
+		return s.requireRole(domain.RoleUser)(s.requirePasswordChange(h))
+	}
+	mux.Handle("/admin/chats", userHandler(s.handleChats))
+	mux.Handle("/admin/chats/", userHandler(s.handleChatSubroutes))
+
+	// Projects/Jobs/Chores/History/Memories environment routes (FR-017-047):
+	// per-user, RoleUser, same composition as Chats above. Each
+	// <env>_handler.go owns its own handler implementations; this file only
+	// owns route registration.
+	mux.Handle("/admin/projects", userHandler(s.handleProjects))
+	mux.Handle("/admin/projects/", userHandler(s.handleProjectSubroutes))
+	mux.Handle("/admin/jobs", userHandler(s.handleJobs))
+	mux.Handle("/admin/jobs/", userHandler(s.handleJobSubroutes))
+	mux.Handle("/admin/chores", userHandler(s.handleChores))
+	mux.Handle("/admin/chores/", userHandler(s.handleChoreSubroutes))
+	mux.Handle("/admin/history", userHandler(s.handleHistory))
+	mux.Handle("/admin/history/", userHandler(s.handleHistorySubroutes))
+	mux.Handle("/admin/memories", userHandler(s.handleMemories))
+	mux.Handle("/admin/memories/", userHandler(s.handleMemorySubroutes))
+
+	// Settings (FR-001-FR-004): viewable by any authenticated user (shows
+	// per-user retention info), system-wide changes gated to admin inside
+	// the handler itself (same fail-closed posture as elsewhere).
+	mux.Handle("/admin/settings", userHandler(s.handleSettings))
+
+	// WebSocket endpoint (P6.8): pushes Job/Chore Run status/log/
+	// notification-badge updates to the connecting session's own user.
+	// handleWebSocket enforces authentication directly via
+	// s.getCurrentUser (401 if no valid session) rather than going
+	// through userHandler/requireRole(domain.RoleUser): RoleUser is the
+	// floor of the Role enum (see domain.Role), so any authenticated
+	// session already satisfies it and requireRole's role check would be
+	// redundant here. requirePasswordChange's redirect-on-force-change
+	// behavior is deliberately not applied either, since a 302 makes no
+	// sense as a response to a WebSocket handshake.
+	mux.HandleFunc("/ws", s.handleWebSocket)
+
 	mux.Handle("/admin/", adminHandler(s.handleAdminIndex))
+}
+
+// Hub returns the server's WebSocket hub, so DI wiring (cmd/nuimanbot) can
+// wrap domain.RunRepository with a notifying decorator that publishes to
+// it as the worker pool executes runs.
+func (s *Server) Hub() *Hub {
+	return s.hub
 }
 
 // handleHealth handles health check requests
@@ -252,6 +318,11 @@ type BaseData struct {
 	FlashSuccess    string
 	FlashError      string
 	Version         string
+	// UnviewedRunCount drives the History nav item's notification badge
+	// (FR-044). Zero (the default) renders no badge. Populated by handlers
+	// that have a HistoryService available; pages without one simply leave
+	// it at zero rather than requiring every handler to know about History.
+	UnviewedRunCount int
 }
 
 // User represents a simplified user for template rendering

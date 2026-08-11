@@ -474,3 +474,313 @@ during reconciliation. See `internal/usecase/chat/rbac_test.go` for both
 sets of regression tests, now coexisting in one file (Buzz's cross-platform
 tests plus this feature's action-aware/MCP-trust tests, both passing against
 the unified model).
+
+---
+
+## ADR-009: Extend `ConversationRepository` for Chats rather than a new entity
+
+**Date:** 2026-08-05 (spec review, `specs/260805-nuimanbot-extend-context-and-ui`)
+**Status:** Accepted
+
+### Context
+
+The web admin needed a Chats environment (FR-011–FR-016): lightweight,
+directory-less conversations, auto-named from their first message,
+independently retained, exportable, and deletable. The codebase already had
+`domain.Conversation`/`ConversationRepository` plus
+`internal/infrastructure/storage/file_conversation_repository.go`
+(`FileConversationRepository`) — a per-user, file-based, atomic-write
+conversation store already tracking `UserID`, `CreatedAt`/`UpdatedAt`,
+message count, and last-message snippet — backing the CLI/Telegram/Slack/Buzz
+gateways' conversation history. A new `Chat` entity would have duplicated
+most of `Conversation`'s shape for no functional gain.
+
+### Decision
+
+Extend `Conversation`/`ConversationRepository` with the fields Chats need
+(auto-generated `Name`, `RetentionPolicy`) rather than introducing a
+parallel `Chat` domain entity. `internal/usecase/chats.Service` wraps
+`ConversationRepository` directly, and `ExportChat` reuses the pre-existing
+`chat.Service.ExportConversation` (JSON/Markdown) rather than building new
+export logic — a reusable asset found during spec review, not referenced in
+the original PRD.
+
+### Consequences
+
+- Chats and CLI/Telegram/Slack/Buzz gateway conversations share one
+  underlying entity and one file-based store — no data model fork, no new
+  repository to keep in sync with the existing one.
+- The web Chats environment inherits `ConversationRepository`'s existing
+  shape but **not** any wiring to the LLM — `chats.Service.AppendUserMessage`
+  only appends a user-role message via `ConversationRepository.AppendMessage`
+  and returns. Extending an existing *storage* entity did not, by itself,
+  connect the web UI to `chat.Service.ProcessMessage` or any other
+  agent-invocation path — that remains unbuilt (see
+  `documentation/product-summary.md`'s "Persistent Agent Workspace — In
+  Progress" and `documentation/product-details.md`'s FR-025).
+- `FileConversationRepository`'s pre-existing raw-`filepath.Join` path
+  construction (predating this feature) was not brought onto the new
+  `fsguard` path-confinement pattern (ADR-013) — flagged as a follow-up,
+  not fixed here, since it was out of scope for a "reuse, don't rebuild"
+  decision.
+
+---
+
+## ADR-010: `robfig/cron/v3` for Chore scheduling
+
+**Date:** 2026-08-05 (spec review)
+**Status:** Accepted
+
+### Context
+
+Chores (FR-031–FR-038) need cron-style recurrence: preset shorthands
+(hourly/daily/weekly/monthly) plus a raw cron expression field, skip-if-
+still-running semantics (FR-035), and a persisted `NextFireTime` that
+survives a restart without missing or double-firing a scheduled window. No
+existing scheduler, cron parser, or job-queue infrastructure existed in the
+codebase.
+
+### Decision
+
+Add `github.com/robfig/cron/v3` as a new `go.mod` dependency (the only new
+third-party dependency this feature introduces) rather than writing an
+in-house cron parser. `internal/infrastructure/scheduler/cron.go` wraps it
+behind two package functions, `ValidateCronExpression` and `NextFireTime`,
+so no other package in the codebase imports `robfig/cron/v3` directly —
+`internal/domain` and `internal/usecase/chores` depend only on
+`chores.ScheduleEvaluator` (an interface `cmd/nuimanbot`'s
+`scheduleEvaluatorAdapter` implements against the wrapper).
+
+### Consequences
+
+- `Schedule.Next(time.Time) time.Time` directly provides what FR-035
+  (skip-if-still-running) and the restart-durability NFR both need, without
+  reimplementing well-tested cron-grammar parsing.
+- Keeping the dependency behind a two-function wrapper means a future
+  replacement (a different cron library, or an in-house parser) only touches
+  `cron.go` and its adapter — no ripple into `domain` or `usecase`.
+- `go mod tidy` reclassified this dependency from indirect to direct once
+  `internal/infrastructure/scheduler` imported it, which is expected and
+  was verified as part of this feature's quality-gate pass, not a leftover
+  from `gorilla/websocket` (which was already a direct dependency via the
+  Buzz gateway).
+
+---
+
+## ADR-011: WebSocket over polling for near-real-time run/notification updates
+
+**Date:** 2026-08-05 (spec review)
+**Status:** Accepted
+
+### Context
+
+Job/Chore run status, log output, and the History notification badge need to
+update without a manual page refresh while a run is active (Performance
+NFR). The two realistic options were client-side polling (simple, but adds
+either latency or request volume depending on interval) and a push
+transport. `github.com/gorilla/websocket` was already a `go.mod` dependency,
+used by `internal/infrastructure/nostr/client.go` for the Buzz gateway's
+relay connections — but never inside `internal/adapter/web`.
+
+### Decision
+
+Use `gorilla/websocket` for a per-user push transport (`Hub`,
+`internal/adapter/web/websocket_handler.go`) rather than polling, precisely
+because the dependency was already present and battle-tested elsewhere in
+the codebase — adopting it for a second use case cost zero new dependencies.
+Connection/subscription model: one WebSocket connection per browser tab,
+subscribed server-side to a per-user broadcast channel (not per-run); a
+disconnect is handled by simple client-driven backoff plus a full state
+resync over the existing HTTP API on reconnect — no server-side replay
+buffer (spec.md Edge Case #5).
+
+### Consequences
+
+- The transport itself — handshake, per-user channel isolation, bounded
+  per-client send buffers so one slow client can't stall delivery to
+  others — is implemented and verified under `-race`.
+- Choosing WebSocket over polling paid off on both the *transport* and the
+  *product* side: a browser-side consumer (`internal/adapter/web/static/run-events.js`)
+  now subscribes to `/ws` from the Job/Chore/Run detail pages and updates the
+  DOM live — status transitions and log growth are visible without a manual
+  refresh. See `documentation/product-summary.md`'s "Persistent Agent
+  Workspace — In Progress" for what else remains partial in this feature.
+- Treating this as net-new engineering (not a reused pattern) was the right
+  call in hindsight: Buzz's Nostr usage of `gorilla/websocket` is a relay
+  *client*; this feature needed a connection-accepting *server* with
+  per-user fan-out, a structurally different problem the shared dependency
+  didn't already solve.
+
+---
+
+## ADR-012: File-based `AtomicFileWriter` persistence over introducing a database
+
+**Date:** 2026-08-05 (spec review)
+**Status:** Accepted
+
+### Context
+
+Project, Job, Chore, and Run records, plus the worker pool's FIFO queue
+state, all need crash-safe persistence meeting the Reliability NFR: a
+restart must not lose a queued Job, drop an in-flight run's record, or cause
+a Chore to miss its next fire time. The codebase already had
+`internal/infrastructure/storage/atomic_file_writer.go`
+(`AtomicFileWriter`: temp-file + rename atomic write; `FileLock`:
+flock-based exclusive locking), used for `users.json`/`bots.json` and the
+existing `FileConversationRepository`. The alternative was introducing
+SQLite or another embedded database specifically for this feature.
+
+### Decision
+
+Use `AtomicFileWriter` + `FileLock` for every new entity (`FileProjectRepository`,
+`FileJobRepository`, `FileChoreRepository`, `FileRunRepository`) and for the
+worker pool's `Queue` — no new persistence mechanism, no write-ahead log.
+
+### Consequences
+
+- Run/queue volume is bounded by a single-process, single-machine worker
+  pool, not a distributed system — the same atomic-rename + flock guarantee
+  (a write either lands whole or not at all) that already protects
+  `users.json`/`bots.json` is exactly what queue/run-state persistence
+  needs, and this feature never needed to reach for anything stronger.
+- Consistency across the whole codebase: every new repository looks and
+  behaves like every existing file-based repository, so the same operational
+  runbook (backup a directory, inspect a JSON file) applies to the new
+  entities without a new set of tools or procedures.
+- This is a scale ceiling, not a defect: if a future deployment needs
+  multi-process worker pools or very high run-volume throughput, this
+  decision should be revisited — profiling data showing write-frequency
+  contention was the explicitly named trigger for reconsidering it (spec.md),
+  and no such profiling has been done, because no such contention has been
+  observed at this feature's current scale.
+- **This decision covers durable persistence of state; it does not by
+  itself provide crash recovery for work already in flight.** `Queue`'s
+  persisted state is correctly restart-durable for anything still waiting
+  to be dispatched, but a `RunRequest` already dequeued to a worker at the
+  moment of a crash has no reconciliation path on restart — its `Run`
+  record is left at whatever non-terminal status it last reached. This is a
+  currently-open gap in meeting the Reliability NFR in full, not resolved
+  by this ADR's choice of persistence mechanism alone; see
+  `documentation/technical-details.md`'s Queue section.
+
+---
+
+## ADR-013: `fsguard` path-confinement helper for Project/Job/Chore/Run file operations
+
+**Date:** 2026-08-05 (spec review; hardening fix same day during Phase 6/7)
+**Status:** Accepted
+
+### Context
+
+Every Job/Chore/Project file operation resolves a user- or agent-supplied
+relative path (a Project's output/hidden directories, a Job/Chore's hidden
+directory, a Run's artifact directory) against a base directory. Spec review
+verified no reusable path-confinement helper existed:
+`internal/infrastructure/preprocess.CommandSandbox` sandboxes *command
+execution* (a shell whitelist + timeout), not filesystem path containment;
+`internal/config.FetchSecurityConfig` guards SSRF (network targets), not
+local paths. Building this net-new was treated as required hardening work,
+not optional (spec.md's Risks table lists Project directory sandboxing as a
+High-severity risk).
+
+### Decision
+
+Build a single, dedicated package, `internal/infrastructure/fsguard`, with
+one function every Project/Job/Chore/Run file operation must call:
+`ResolveWithin(baseDir, relPath string) (string, error)`. It rejects
+absolute `relPath` values, any lexical `..`-escape above `baseDir`, and NUL
+bytes; it performs no I/O and does not resolve symlinks (a documented,
+deliberate scope limit for callers to handle separately if an untrusted
+`baseDir` could itself be a symlink).
+
+### Consequences
+
+- `fsguard`'s own unit tests (adversarial: traversal, absolute paths, NUL
+  bytes, sibling-directory prefix confusion) were solid from Phase 2 onward.
+  **But a defense-in-depth gap surfaced later**, during Phase 7's own
+  verification pass: `FileJobRepository`/`FileChoreRepository`/
+  `FileProjectRepository`/`FileRunRepository` had all been built with raw
+  `filepath.Join(userDir, id+".json")` for their record (and, for Run, log)
+  paths — never routed through `fsguard.ResolveWithin`, despite the
+  package's own doc comment mandating it. A crafted ID like
+  `"../../../../etc/passwd"` was confirmed, in isolation, to read an
+  arbitrary file off disk and return it as a valid record.
+- This was **not** a confirmed live HTTP exploit — `net/http`'s `ServeMux`
+  happens to redirect literal `..` path segments away before routing ever
+  reaches a handler, and each handler's path parsing only ever extracts a
+  single non-slash segment as the ID — but that was incidental behavior, not
+  a deliberate control, so the gap was real defense-in-depth hardening, not
+  a false alarm. Fixed by routing all four repositories' path construction
+  through `fsguard.ResolveWithin`, mapping any resolution failure uniformly
+  to `domain.ErrNotFound` (never disclosing more than "not accessible to
+  you," consistent with SC-007's IDOR posture). Adversarial tests were added
+  per repository: a table of traversal strings against Get/Delete
+  (/AppendLog for Run), plus a concrete plant-one-user's-record,
+  craft-another-user's-ID scenario per repository.
+- The lesson generalizes beyond this feature: "the helper is safe" and
+  "every call site actually uses the helper" are two different claims, and
+  only testing the former does not verify the latter. `FileConversationRepository`
+  (pre-existing, backs Chats, predates this feature) has the identical
+  raw-`filepath.Join` shape on `convID` and was deliberately left unfixed —
+  a known, explicitly flagged follow-up, not an oversight repeated blindly.
+
+---
+
+## ADR-014: `StubExecutor` as an interim, non-agent-invoking `Executor` implementation
+
+**Date:** 2026-08-05 (implementation, Phase 3 of `specs/260805-nuimanbot-extend-context-and-ui`)
+**Status:** Accepted / superseded-by-future-work (not a permanent design)
+
+### Context
+
+The worker pool (ADR-012's `Queue` + `WorkerPool`) needs something to
+actually execute a dequeued `RunRequest`. A real implementation means
+wiring a Job/Chore's `Description`/`JOB-DESCRIPTION.md` into the existing
+agent/tool-calling machinery (`internal/usecase/chat` and friends) — a
+substantial integration (resolving the right LLM provider/model, mapping
+`WorkingDirectory` into the agent's tool sandbox, streaming log output back
+per line, handling provider/LLM failures per spec.md Edge Case #13) that was
+judged too large to land in the same pass as the queueing/scheduling/
+persistence/WebSocket/network-access infrastructure, without leaving the
+rest of that infrastructure completely undemonstrated (every run stuck at
+`Queued` forever, no History content, no WebSocket events to test against).
+
+### Decision
+
+Ship `internal/infrastructure/scheduler.StubExecutor`, a functional,
+non-agent-invoking `Executor`: it drives a `Run` through a real
+`Queued` → `Running` → `Completed`/`Failed` lifecycle, appends real log
+lines, and writes a real `RESULTS.md` (fsguard-confined) whose content
+explicitly states "no agent/LLM invocation occurred" — never a silent or
+disguised placeholder. Wire it as the only `Executor` implementation in
+`cmd/nuimanbot/extended_context.go` for this pass.
+
+### Consequences
+
+- Every other piece of this feature — History, the notification badge, the
+  WebSocket push transport, worker-pool concurrency/FIFO bookkeeping,
+  restart-durability — has a genuine, testable, end-to-end execution path
+  today, rather than being validated only against a mock.
+- **This is the single most consequential scope cut in the whole feature.**
+  Jobs and Chores queue and "run" correctly, but produce no real agent work
+  product. Every documentation layer must state this plainly and avoid
+  implying Jobs/Chores do real work today — `documentation/product-summary.md`,
+  `documentation/product-details.md` (FR-027/FR-028), and
+  `documentation/technical-details.md`'s Persistent Agent Workspace section
+  all do so explicitly, per this ADR.
+- The replacement path is a clean drop-in: nothing in `internal/infrastructure/scheduler`
+  depends on `StubExecutor` specifically, only on the `Executor` interface —
+  a future agent-invoking `Executor` can be substituted in
+  `wireExtendedContextEnvironments` with no change to `Queue`, `WorkerPool`,
+  or `ChoreScheduler`.
+- The same "infrastructure real, product value deferred" pattern applies to
+  the web Chats environment (ADR-009's consequences) and to the per-Job/
+  Chore/Run chat interfaces (still not built this pass). Memories now has a
+  minimal per-item chat (FR-047/FR-R4) — grounded Q&A over that memory
+  cell's own content, one LLM call per question, no persisted history — as
+  the reference implementation the other three are meant to follow; it does
+  not invoke `internal/usecase/chat`'s full agent/tool-calling loop, which
+  remains the shared root cause of the other three gaps. Closing that
+  end-to-end is the natural next-phase scope, tracked in
+  `documentation/product-details.md`'s "Post-Feature: Persistent Agent
+  Workspace — Remaining Work."

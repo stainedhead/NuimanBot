@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>History - NuimanBot Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.5/dist/cdn.min.js"></script>
+    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="icon" href="/static/img/NuimanProfile.jpg">
+</head>
+<body class="bg-gray-100 min-h-screen">
+    {{template "nav" .}}
+    <div class="container mx-auto px-4 py-8">
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <div class="flex justify-between items-center mb-6">
+                <h1 class="text-3xl font-bold text-gray-900">History</h1>
+            </div>
+
+            <form method="GET" action="/admin/history" class="mb-8 bg-gray-50 border border-gray-200 rounded-lg p-4 flex flex-wrap gap-4 items-end">
+                <div>
+                    <label for="source_type" class="block text-sm font-medium text-gray-700 mb-1">Source</label>
+                    <select id="source_type" name="source_type" class="rounded-md border-gray-300 shadow-sm focus:border-teal-500 focus:ring-teal-500">
+                        <option value="" {{if eq .Filter.SourceType ""}}selected{{end}}>All</option>
+                        <option value="job" {{if eq .Filter.SourceType "job"}}selected{{end}}>Job</option>
+                        <option value="chore" {{if eq .Filter.SourceType "chore"}}selected{{end}}>Chore</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="status" class="block text-sm font-medium text-gray-700 mb-1">Status</label>
+                    <select id="status" name="status" class="rounded-md border-gray-300 shadow-sm focus:border-teal-500 focus:ring-teal-500">
+                        <option value="" {{if eq .Filter.Status ""}}selected{{end}}>All</option>
+                        <option value="queued" {{if eq .Filter.Status "queued"}}selected{{end}}>Queued</option>
+                        <option value="running" {{if eq .Filter.Status "running"}}selected{{end}}>Running</option>
+                        <option value="completed" {{if eq .Filter.Status "completed"}}selected{{end}}>Completed</option>
+                        <option value="failed" {{if eq .Filter.Status "failed"}}selected{{end}}>Failed</option>
+                        <option value="skipped" {{if eq .Filter.Status "skipped"}}selected{{end}}>Skipped</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="since" class="block text-sm font-medium text-gray-700 mb-1">Since</label>
+                    <input type="date" id="since" name="since" value="{{.Filter.Since}}"
+                           class="rounded-md border-gray-300 shadow-sm focus:border-teal-500 focus:ring-teal-500">
+                </div>
+                <div>
+                    <label for="until" class="block text-sm font-medium text-gray-700 mb-1">Until</label>
+                    <input type="date" id="until" name="until" value="{{.Filter.Until}}"
+                           class="rounded-md border-gray-300 shadow-sm focus:border-teal-500 focus:ring-teal-500">
+                </div>
+                <div>
+                    <button type="submit" class="btn-primary">Filter</button>
+                    <a href="/admin/history" class="ml-2 text-sm text-gray-500 hover:text-gray-700">Clear</a>
+                </div>
+            </form>
+
+            {{if .Runs}}
+            <div class="overflow-x-auto">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Source</th>
+                            <th>Status</th>
+                            <th>Started</th>
+                            <th>Duration</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .Runs}}
+                        <tr>
+                            <td>{{.SourceType}} &middot; {{.SourceID}}</td>
+                            <td>{{.Status}}</td>
+                            <td>{{if .StartedAt}}{{.StartedAt.Format "2006-01-02 15:04"}}{{else}}&mdash;{{end}}</td>
+                            <td>{{.Duration}}</td>
+                            <td><a href="/admin/history/{{.ID}}" class="text-teal-600 hover:text-teal-800">View</a></td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+            {{else}}
+            <p class="text-gray-500">No runs match the current filter.</p>
+            {{end}}
+        </div>
+    </div>
+</body>
+</html>

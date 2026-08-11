@@ -1,0 +1,424 @@
+package storage
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"nuimanbot/internal/domain"
+)
+
+func newTestRunRepo(t *testing.T) *FileRunRepository {
+	t.Helper()
+	return NewFileRunRepository(t.TempDir())
+}
+
+func TestFileRunRepository_SaveAndGet(t *testing.T) {
+	repo := newTestRunRepo(t)
+	ctx := context.Background()
+	run := &domain.Run{ID: "r1", OwnerUserID: "user-a", SourceType: domain.SourceTypeJob, SourceID: "job-1", Status: domain.RunStatusQueued, CreatedAt: time.Now()}
+	if err := repo.SaveRun(ctx, run); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+	got, err := repo.GetRun(ctx, "user-a", "r1")
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if got.SourceID != "job-1" || got.Status != domain.RunStatusQueued {
+		t.Fatalf("unexpected round-trip: %+v", got)
+	}
+}
+
+func TestFileRunRepository_CrossOwnerIsolation(t *testing.T) {
+	repo := newTestRunRepo(t)
+	ctx := context.Background()
+	if err := repo.SaveRun(ctx, &domain.Run{ID: "shared", OwnerUserID: "user-a"}); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+	if _, err := repo.GetRun(ctx, "user-b", "shared"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+	if err := repo.AppendLog(ctx, "user-b", "shared", "x"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for cross-owner AppendLog, got %v", err)
+	}
+	if err := repo.MarkNotified(ctx, "user-b", "shared"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for cross-owner MarkNotified, got %v", err)
+	}
+	if err := repo.DeleteRun(ctx, "user-b", "shared"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for cross-owner delete, got %v", err)
+	}
+}
+
+// TestFileRunRepository_GetRun_RejectsPathTraversal is a P7.1 adversarial
+// test mirroring the Job repository's: runID derives from a URL path
+// segment, so a crafted value must never escape the calling user's own
+// runs directory.
+func TestFileRunRepository_GetRun_RejectsPathTraversal(t *testing.T) {
+	repo := newTestRunRepo(t)
+	ctx := context.Background()
+
+	malicious := []string{
+		"../../../etc/passwd",
+		"..",
+		"../bob/runs/some-run",
+		"run/../../escape",
+	}
+	for _, id := range malicious {
+		if _, err := repo.GetRun(ctx, "alice", id); !errors.Is(err, domain.ErrNotFound) {
+			t.Errorf("GetRun(%q): expected ErrNotFound, got %v", id, err)
+		}
+		if err := repo.DeleteRun(ctx, "alice", id); !errors.Is(err, domain.ErrNotFound) {
+			t.Errorf("DeleteRun(%q): expected ErrNotFound, got %v", id, err)
+		}
+		if err := repo.AppendLog(ctx, "alice", id, "x"); !errors.Is(err, domain.ErrNotFound) {
+			t.Errorf("AppendLog(%q): expected ErrNotFound, got %v", id, err)
+		}
+	}
+}
+
+// TestFileRunRepository_GetRun_CannotReadAnotherUsersRecordViaTraversal
+// plants a real Run for "bob" and confirms alice cannot read it via a
+// crafted runID that traverses out of her own directory and back into
+// bob's.
+func TestFileRunRepository_GetRun_CannotReadAnotherUsersRecordViaTraversal(t *testing.T) {
+	repo := newTestRunRepo(t)
+	ctx := context.Background()
+
+	bobRun := &domain.Run{ID: "legit-run", OwnerUserID: "bob", SourceType: domain.SourceTypeJob, SourceID: "job-1", Status: domain.RunStatusQueued, CreatedAt: time.Now()}
+	if err := repo.SaveRun(ctx, bobRun); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+
+	craftedID := "../../bob/runs/legit-run"
+	if _, err := repo.GetRun(ctx, "alice", craftedID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for cross-owner traversal via runID %q, got err=%v (should never disclose bob's run)", craftedID, err)
+	}
+}
+
+func TestFileRunRepository_ListRuns_FilterAndOrder(t *testing.T) {
+	repo := newTestRunRepo(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	jobRunOld := &domain.Run{ID: "r-old", OwnerUserID: "user-a", SourceType: domain.SourceTypeJob, SourceID: "job-1", Status: domain.RunStatusCompleted, CreatedAt: now.Add(-2 * time.Hour)}
+	jobRunNew := &domain.Run{ID: "r-new", OwnerUserID: "user-a", SourceType: domain.SourceTypeJob, SourceID: "job-1", Status: domain.RunStatusCompleted, CreatedAt: now.Add(-1 * time.Minute)}
+	choreRun := &domain.Run{ID: "r-chore", OwnerUserID: "user-a", SourceType: domain.SourceTypeChore, SourceID: "chore-1", Status: domain.RunStatusFailed, CreatedAt: now}
+
+	for _, run := range []*domain.Run{jobRunOld, jobRunNew, choreRun} {
+		if err := repo.SaveRun(ctx, run); err != nil {
+			t.Fatalf("SaveRun: %v", err)
+		}
+	}
+
+	// No filter: all 3, newest first.
+	all, err := repo.ListRuns(ctx, "user-a", domain.RunFilter{})
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("expected 3 runs, got %d", len(all))
+	}
+	if all[0].ID != "r-chore" || all[2].ID != "r-old" {
+		t.Fatalf("expected newest-first ordering, got %v, %v, %v", all[0].ID, all[1].ID, all[2].ID)
+	}
+
+	// Filter by SourceType.
+	jobType := domain.SourceTypeJob
+	jobsOnly, err := repo.ListRuns(ctx, "user-a", domain.RunFilter{SourceType: &jobType})
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(jobsOnly) != 2 {
+		t.Fatalf("expected 2 job runs, got %d", len(jobsOnly))
+	}
+
+	// Filter by Status.
+	failed := domain.RunStatusFailed
+	failedOnly, err := repo.ListRuns(ctx, "user-a", domain.RunFilter{Status: &failed})
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(failedOnly) != 1 || failedOnly[0].ID != "r-chore" {
+		t.Fatalf("expected only r-chore, got %v", failedOnly)
+	}
+
+	// Filter by date range.
+	since := now.Add(-30 * time.Minute)
+	recentOnly, err := repo.ListRuns(ctx, "user-a", domain.RunFilter{Since: &since})
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(recentOnly) != 2 {
+		t.Fatalf("expected 2 recent runs, got %d", len(recentOnly))
+	}
+}
+
+func TestFileRunRepository_ListRuns_Empty(t *testing.T) {
+	repo := newTestRunRepo(t)
+	got, err := repo.ListRuns(context.Background(), "user-a", domain.RunFilter{})
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if got == nil || len(got) != 0 {
+		t.Fatalf("expected empty non-nil slice, got %v", got)
+	}
+}
+
+func TestFileRunRepository_AppendLog(t *testing.T) {
+	repo := newTestRunRepo(t)
+	ctx := context.Background()
+	if err := repo.SaveRun(ctx, &domain.Run{ID: "r1", OwnerUserID: "user-a"}); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+	if err := repo.AppendLog(ctx, "user-a", "r1", "line one\n"); err != nil {
+		t.Fatalf("AppendLog: %v", err)
+	}
+	if err := repo.AppendLog(ctx, "user-a", "r1", "line two\n"); err != nil {
+		t.Fatalf("AppendLog: %v", err)
+	}
+	logPath, err := repo.logPath("user-a", "r1")
+	if err != nil {
+		t.Fatalf("logPath: %v", err)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("reading log file: %v", err)
+	}
+	if string(data) != "line one\nline two\n" {
+		t.Fatalf("unexpected log content: %q", data)
+	}
+}
+
+func TestFileRunRepository_AppendLog_NotFound(t *testing.T) {
+	repo := newTestRunRepo(t)
+	err := repo.AppendLog(context.Background(), "user-a", "missing", "x")
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+// TestFileRunRepository_ReadLog verifies ReadLog (FR-R17) returns the
+// content AppendLog actually wrote, reading through the repository's own
+// confined per-owner log path rather than any path field on the Run record.
+func TestFileRunRepository_ReadLog(t *testing.T) {
+	repo := newTestRunRepo(t)
+	ctx := context.Background()
+	if err := repo.SaveRun(ctx, &domain.Run{ID: "r1", OwnerUserID: "user-a"}); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+	if err := repo.AppendLog(ctx, "user-a", "r1", "line one\n"); err != nil {
+		t.Fatalf("AppendLog: %v", err)
+	}
+	if err := repo.AppendLog(ctx, "user-a", "r1", "line two\n"); err != nil {
+		t.Fatalf("AppendLog: %v", err)
+	}
+
+	got, err := repo.ReadLog(ctx, "user-a", "r1")
+	if err != nil {
+		t.Fatalf("ReadLog: %v", err)
+	}
+	if got != "line one\nline two\n" {
+		t.Fatalf("unexpected log content: %q", got)
+	}
+}
+
+// TestFileRunRepository_ReadLog_NoLogYet verifies ReadLog returns ("", nil)
+// — not an error — for a run that has never had AppendLog called on it
+// (e.g. still queued), mirroring the graceful-empty behavior the old
+// os.ReadFile-based handler code relied on.
+func TestFileRunRepository_ReadLog_NoLogYet(t *testing.T) {
+	repo := newTestRunRepo(t)
+	ctx := context.Background()
+	if err := repo.SaveRun(ctx, &domain.Run{ID: "r1", OwnerUserID: "user-a"}); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+
+	got, err := repo.ReadLog(ctx, "user-a", "r1")
+	if err != nil {
+		t.Fatalf("ReadLog: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("expected empty log content, got %q", got)
+	}
+}
+
+// TestFileRunRepository_ReadLog_NotFound verifies ReadLog is scoped to its
+// owner like every other RunRepository method, returning ErrNotFound rather
+// than disclosing a cross-owner run's existence.
+func TestFileRunRepository_ReadLog_NotFound(t *testing.T) {
+	repo := newTestRunRepo(t)
+	if _, err := repo.ReadLog(context.Background(), "user-a", "missing"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+// TestFileRunRepository_ReadResults verifies ReadResults (FR-R17) returns
+// the content at the Run's ResultsPath (set by the Executor at write time).
+func TestFileRunRepository_ReadResults(t *testing.T) {
+	repo := newTestRunRepo(t)
+	ctx := context.Background()
+	resultsPath := filepath.Join(t.TempDir(), "RESULTS.md")
+	if err := os.WriteFile(resultsPath, []byte("the results"), 0644); err != nil {
+		t.Fatalf("writing results file: %v", err)
+	}
+	if err := repo.SaveRun(ctx, &domain.Run{ID: "r1", OwnerUserID: "user-a", ResultsPath: resultsPath}); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+
+	got, err := repo.ReadResults(ctx, "user-a", "r1")
+	if err != nil {
+		t.Fatalf("ReadResults: %v", err)
+	}
+	if got != "the results" {
+		t.Fatalf("unexpected results content: %q", got)
+	}
+}
+
+// TestFileRunRepository_ReadResults_NoResultsYet verifies ReadResults
+// returns ("", nil) for a run with an empty ResultsPath (not yet produced).
+func TestFileRunRepository_ReadResults_NoResultsYet(t *testing.T) {
+	repo := newTestRunRepo(t)
+	ctx := context.Background()
+	if err := repo.SaveRun(ctx, &domain.Run{ID: "r1", OwnerUserID: "user-a"}); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+
+	got, err := repo.ReadResults(ctx, "user-a", "r1")
+	if err != nil {
+		t.Fatalf("ReadResults: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("expected empty results content, got %q", got)
+	}
+}
+
+// TestFileRunRepository_ReadResults_NotFound verifies ReadResults is scoped
+// to its owner like every other RunRepository method.
+func TestFileRunRepository_ReadResults_NotFound(t *testing.T) {
+	repo := newTestRunRepo(t)
+	if _, err := repo.ReadResults(context.Background(), "user-a", "missing"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestFileRunRepository_MarkNotifiedAndCountUnnotified(t *testing.T) {
+	repo := newTestRunRepo(t)
+	ctx := context.Background()
+
+	r1 := &domain.Run{ID: "r1", OwnerUserID: "user-a", Status: domain.RunStatusCompleted}
+	r2 := &domain.Run{ID: "r2", OwnerUserID: "user-a", Status: domain.RunStatusFailed}
+	r3 := &domain.Run{ID: "r3", OwnerUserID: "user-a", Status: domain.RunStatusRunning} // not terminal
+	for _, run := range []*domain.Run{r1, r2, r3} {
+		if err := repo.SaveRun(ctx, run); err != nil {
+			t.Fatalf("SaveRun: %v", err)
+		}
+	}
+
+	count, err := repo.CountUnnotified(ctx, "user-a")
+	if err != nil {
+		t.Fatalf("CountUnnotified: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 unnotified terminal runs, got %d", count)
+	}
+
+	if err := repo.MarkNotified(ctx, "user-a", "r1"); err != nil {
+		t.Fatalf("MarkNotified: %v", err)
+	}
+
+	count, err = repo.CountUnnotified(ctx, "user-a")
+	if err != nil {
+		t.Fatalf("CountUnnotified: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 unnotified run after marking r1, got %d", count)
+	}
+
+	got, err := repo.GetRun(ctx, "user-a", "r1")
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if got.NotifiedAt == nil {
+		t.Fatal("expected NotifiedAt to be set")
+	}
+}
+
+func TestFileRunRepository_DeleteRun_RemovesLogToo(t *testing.T) {
+	repo := newTestRunRepo(t)
+	ctx := context.Background()
+	if err := repo.SaveRun(ctx, &domain.Run{ID: "r1", OwnerUserID: "user-a"}); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+	if err := repo.AppendLog(ctx, "user-a", "r1", "hello\n"); err != nil {
+		t.Fatalf("AppendLog: %v", err)
+	}
+	if err := repo.DeleteRun(ctx, "user-a", "r1"); err != nil {
+		t.Fatalf("DeleteRun: %v", err)
+	}
+	if _, err := repo.GetRun(ctx, "user-a", "r1"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound after delete, got %v", err)
+	}
+	logPath, err := repo.logPath("user-a", "r1")
+	if err != nil {
+		t.Fatalf("logPath: %v", err)
+	}
+	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
+		t.Fatalf("expected log file to be removed, stat err: %v", err)
+	}
+}
+
+func TestFileRunRepository_DeleteRun_NotFound(t *testing.T) {
+	repo := newTestRunRepo(t)
+	err := repo.DeleteRun(context.Background(), "user-a", "missing")
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestFileRunRepository_ListAllNonTerminal_CrossUser(t *testing.T) {
+	// FR-R2: the restart-reconciliation step is a system-wide process (like
+	// ChoreRepository.ListAllDue), so this cross-user query is the one
+	// intentionally-cross-user exception on this repository.
+	repo := newTestRunRepo(t)
+	ctx := context.Background()
+
+	runs := []*domain.Run{
+		{ID: "running-a", OwnerUserID: "user-a", Status: domain.RunStatusRunning, CreatedAt: time.Now()},
+		{ID: "queued-b", OwnerUserID: "user-b", Status: domain.RunStatusQueued, CreatedAt: time.Now()},
+		{ID: "completed-a", OwnerUserID: "user-a", Status: domain.RunStatusCompleted, CreatedAt: time.Now()},
+		{ID: "failed-b", OwnerUserID: "user-b", Status: domain.RunStatusFailed, CreatedAt: time.Now()},
+		{ID: "skipped-a", OwnerUserID: "user-a", Status: domain.RunStatusSkipped, CreatedAt: time.Now()},
+	}
+	for _, r := range runs {
+		if err := repo.SaveRun(ctx, r); err != nil {
+			t.Fatalf("SaveRun(%s): %v", r.ID, err)
+		}
+	}
+
+	got, err := repo.ListAllNonTerminal(ctx)
+	if err != nil {
+		t.Fatalf("ListAllNonTerminal: %v", err)
+	}
+
+	ids := make(map[string]bool, len(got))
+	for _, r := range got {
+		ids[r.ID] = true
+	}
+	if len(got) != 2 || !ids["running-a"] || !ids["queued-b"] {
+		t.Fatalf("expected exactly [running-a, queued-b], got %+v", ids)
+	}
+}
+
+func TestFileRunRepository_ListAllNonTerminal_NoUsersYet(t *testing.T) {
+	repo := newTestRunRepo(t)
+	got, err := repo.ListAllNonTerminal(context.Background())
+	if err != nil {
+		t.Fatalf("ListAllNonTerminal: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected empty slice, got %+v", got)
+	}
+}

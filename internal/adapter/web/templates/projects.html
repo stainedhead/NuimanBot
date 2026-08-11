@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Projects - NuimanBot Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.5/dist/cdn.min.js"></script>
+    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="icon" href="/static/img/NuimanProfile.jpg">
+</head>
+<body class="bg-gray-100 min-h-screen">
+    {{template "nav" .}}
+    <div class="container mx-auto px-4 py-8">
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <div class="flex justify-between items-center mb-6">
+                <h1 class="text-3xl font-bold text-gray-900">Projects</h1>
+            </div>
+
+            <form method="POST" action="/admin/projects" class="mb-8 bg-amber-50 border border-amber-200 rounded-lg p-4">
+                <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                <label for="name" class="block text-sm font-medium text-gray-700 mb-2">Create a new Project</label>
+                <div class="flex flex-col gap-2 sm:flex-row">
+                    <input type="text" id="name" name="name" placeholder="Project name" required
+                           class="flex-1 rounded-md border-gray-300 shadow-sm focus:border-teal-500 focus:ring-teal-500">
+                    <input type="text" id="output_directory" name="output_directory" placeholder="Output directory (e.g. /home/user/my-project)" required
+                           class="flex-1 rounded-md border-gray-300 shadow-sm focus:border-teal-500 focus:ring-teal-500">
+                    <button type="submit" class="btn-primary self-start">New Project</button>
+                </div>
+                <p class="text-xs text-gray-500 mt-2">The output directory is created if it doesn't exist. You keep direct filesystem access to it at all times.</p>
+            </form>
+
+            {{if .Projects}}
+            <div class="overflow-x-auto">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Output Directory</th>
+                            <th>Last Activity</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .Projects}}
+                        <tr>
+                            <td><a href="/admin/projects/{{.ID}}" class="text-teal-700 hover:underline">{{.Name}}</a></td>
+                            <td class="font-mono text-xs text-gray-600">{{.OutputDirectory}}</td>
+                            <td>{{.UpdatedAt.Format "2006-01-02 15:04"}}</td>
+                            <td>
+                                <a href="/admin/projects/{{.ID}}" class="text-teal-600 hover:text-teal-800">Open</a>
+                            </td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+            {{else}}
+            <p class="text-gray-500">No projects yet — create one above.</p>
+            {{end}}
+        </div>
+    </div>
+</body>
+</html>

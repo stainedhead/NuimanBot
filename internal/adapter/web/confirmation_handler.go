@@ -68,11 +68,11 @@ func (s *Server) handleConfirmations(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := struct {
-		Title         string
+		*BaseData
 		Confirmations []PendingConfirmation
 		IsAdmin       bool
 	}{
-		Title:         "Pending Confirmations",
+		BaseData:      s.baseDataFor(r.Context(), user, "Pending Confirmations", "confirmations"),
 		Confirmations: pending,
 		IsAdmin:       user.Role == "admin",
 	}

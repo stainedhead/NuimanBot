@@ -1,0 +1,235 @@
+# Web Workspace Guide
+
+**Version:** 1.0
+**Last Updated:** 2026-08-05
+**Target Audience:** NuimanBot Users
+
+This guide covers NuimanBot's web workspace: **Chats**, **Projects**, **Jobs**, **Chores**, **History**, and **Memories**, plus the **Settings** page. These are new environments in the web admin interface (`/admin/...`), separate from chatting with NuimanBot through Telegram, Slack, or the CLI.
+
+---
+
+## Table of Contents
+
+1. [What to Expect Today](#what-to-expect-today)
+2. [Signing In](#signing-in)
+3. [Chats](#chats)
+4. [Projects](#projects)
+5. [Jobs](#jobs)
+6. [Chores](#chores)
+7. [History](#history)
+8. [Memories](#memories)
+9. [Settings](#settings)
+10. [Troubleshooting](#troubleshooting)
+
+---
+
+## What to Expect Today
+
+This part of NuimanBot is new, and it is honest to say up front: **the organizing, scheduling, and live-update pieces work today, but the agent itself is not yet plugged into Job/Chore execution or web Chats.** Please read this section before you start, so nothing here surprises you.
+
+**Works today:**
+- Creating, naming, listing, and deleting Chats, Projects, Jobs, and Chores
+- Jobs and Chores queue correctly and run through their full lifecycle (Queued → Running → Completed)
+- Job/Chore run history, with filtering and a notification badge for runs you haven't looked at yet, visible on every page in the workspace
+- Live status/log updates on Job, Chore, and run detail pages — no need to refresh
+- Retention windows (Chats, Projects, History) and soft-deleted Job/Chore cleanup are enforced automatically, on a recurring schedule
+- A run interrupted by a server restart is automatically marked failed rather than getting stuck
+- Browsing and searching NuimanBot's long-term memory (read-only), plus asking a quick question about a specific memory entry
+- Choosing between localhost-only and remote network access, with an optional allowlist
+
+**Not yet working — please don't rely on these:**
+- **Jobs and Chores do not do real agent work yet.** When a Job or Chore "runs," it goes through the full queue → execute → complete pipeline, but the result is a placeholder file that says no agent work was performed. Think of this as the scaffolding being built and tested before the agent is connected to it.
+- **Typing a message in a web Chat does not get you a reply.** The message is saved, but nothing responds. If you want to actually talk with NuimanBot today, use Telegram, Slack, or the CLI — those work exactly as before and are unaffected by any of this.
+- There's no "chat about this specific Job/Chore/run" conversation yet — those panels are planned but not built. Memories now has a similar chat panel (see [Memories](#memories)) as a preview of what's coming to the other three.
+
+If you're looking to actually get work done with NuimanBot today, use the existing chat gateways (Telegram/Slack/CLI) — see the [User Onboarding Guide](user-onboarding.md). Use this web workspace to get familiar with Projects, Jobs, and Chores organization ahead of the agent being connected to them.
+
+---
+
+## Signing In
+
+1. Open your browser to the NuimanBot admin address (e.g. `https://localhost:8443/admin` — ask your administrator for the exact URL, especially if the server is configured for remote access)
+2. Sign in with your username and password
+3. If this is your first time signing in with a default password, you'll be asked to set a new one before continuing
+4. Once signed in, you'll see a left-hand navigation sidebar with **Chats**, **Projects**, **Jobs**, **Chores**, **History**, and **Memories** — it also appears on Dashboard, Bots, Users, and Confirmations, so you can navigate between the older admin pages and the new workspace without losing your place.
+
+---
+
+## Chats
+
+A Chat is a lightweight, ad-hoc conversation with no project or folder attached to it.
+
+### Creating a Chat
+
+1. Click **Chats** in the sidebar
+2. Type your first message and submit it
+3. NuimanBot names the Chat automatically from that first message (if you leave the message blank, it names the Chat with a timestamp instead, so you'll never see an unnamed Chat in your list)
+
+### Using a Chat
+
+- Open a Chat from the list to see its full message history
+- You can keep typing and sending messages — they're saved to the Chat's history
+- **Remember:** as of this writing, no reply comes back in the web UI. Your message is recorded, not answered here.
+
+### Exporting a Chat
+
+Open a Chat and use the export/download control to save its transcript as JSON or Markdown — useful for keeping a record or moving a conversation elsewhere.
+
+### Deleting a Chat
+
+Open a Chat and use the delete control. Deletion is immediate and cannot be undone.
+
+### Retention
+
+Chats can be set to auto-delete after a period of inactivity (see [Settings](#settings)), or kept forever ("Never"). A background sweep checks every 15 minutes and deletes Chats that have passed their retention window since their last activity.
+
+---
+
+## Projects
+
+A Project is a durable workspace tied to a real folder on disk — unlike a Chat, it isn't ephemeral, and you can work with its files outside NuimanBot too.
+
+### Creating a Project
+
+1. Click **Projects** in the sidebar
+2. Give it a name and an output directory (a folder path on the server's filesystem)
+3. NuimanBot creates that folder (if it doesn't already exist) along with a hidden folder alongside it for the agent's own notes — you won't see the hidden folder in the Project's file view, and you don't need to manage it
+
+### AGENTS.md
+
+`AGENTS.md`, if present in a Project's output directory, is meant to steer how the agent works in that Project (similar in spirit to this repository's own `AGENTS.md`).
+
+- The intended way to create or edit it is by asking the agent to do so in a conversation scoped to the Project — this path isn't available yet (see [What to Expect Today](#what-to-expect-today))
+- In the meantime, open the Project's detail page and use the subdued **"Add AGENTS.md"** control to create a starter file
+- You can also open and edit the Project's output folder directly with any text editor or file manager on the server — NuimanBot never locks you out of your own files. If you and the agent ever edit `AGENTS.md` at the same time, whichever save happens last wins, the same as editing any file open in two places at once.
+
+### Deleting a Project
+
+Deleting a Project removes the Project record, but **does not** touch the files in its output directory, and does not delete any Job or Chore that references it. If a Job or Chore that references a deleted Project runs afterward, the run fails cleanly with an error explaining the Project no longer exists, rather than silently "completing."
+
+### Retention
+
+Same model as Chats: configurable, including "Never," and automatically enforced by the same 15-minute background sweep.
+
+---
+
+## Jobs
+
+A Job is a one-time task you hand to the agent, run once, and check the results of later.
+
+### Creating a Job
+
+1. Click **Jobs** in the sidebar
+2. Give it a Title and a Description of the task
+3. Choose whether it runs in the context of a Chat or a Project. If you pick a Project, that Project's output folder becomes the Job's working directory by default.
+4. Submit — your Job joins the queue
+
+### What happens next
+
+Jobs run in the order they were created (first in, first out), through a shared pool of workers your administrator sizes in Settings. Right now, "running" a Job exercises the full queue-and-execute pipeline, but produces a placeholder result rather than real agent work — see [What to Expect Today](#what-to-expect-today).
+
+### Checking on a Job
+
+Open the Job's detail page to see its current status, or check [History](#history) for its full run record once it finishes.
+
+### Deleting a Job
+
+If a Job's run is currently in progress, deleting it marks it for removal rather than deleting it outright — nothing running is killed mid-run. Once that run finishes, a background sweep automatically finishes removing the Job within about 15 minutes; you don't need to come back and delete it again.
+
+---
+
+## Chores
+
+A Chore is a Job that repeats on a schedule.
+
+### Creating a Chore
+
+1. Click **Chores** in the sidebar
+2. Give it a Title, Description, and (optionally) a working directory
+3. Set a schedule — either a common preset (hourly, daily, weekly, monthly) or your own cron expression for finer control
+4. Submit
+
+### Agent-proposed schedules
+
+If a schedule was suggested by the agent rather than set by you directly, it stays in a **"pending confirmation"** state and will never fire until you explicitly confirm it. It won't quietly expire either — it just waits for your decision.
+
+### Overlapping runs
+
+If a Chore's next scheduled time arrives while its previous run is still going, NuimanBot skips that firing (and records it as "skipped" in History) rather than running two copies at once. The Chore picks back up at its next scheduled time as normal.
+
+### Deleting a Chore
+
+Deleting a Chore now works the same way as deleting a Job: if a run is currently in progress, the Chore is marked for removal rather than deleted outright, and the same background sweep finishes removing it automatically once that run completes. A Chore marked for removal never fires again in the meantime.
+
+---
+
+## History
+
+History is your list of every Job and Chore run you own, in one place.
+
+### Browsing runs
+
+- Open **History** to see every run, most recent first
+- Filter by which Job/Chore it belongs to, a date range, or status (Queued, Running, Completed, Failed, Skipped)
+- Open any run to see its full log and results
+
+### Notification badge
+
+A badge showing how many completed runs you haven't looked at yet appears next to **History** in the sidebar — and on every page in the workspace, not just History itself. Opening a run clears its badge, and the badge updates live on screen the moment that happens, without a refresh.
+
+### Retention
+
+Configurable independently from Chat and Project retention, including "Never" — automatically enforced by the same 15-minute background sweep. If a run you haven't looked at yet is deleted by this sweep, its badge count is cleared first, so the number you see never refers to a run that's already gone.
+
+---
+
+## Memories
+
+Memories is a read-only window into what NuimanBot has learned and remembered about your conversations over time (the same long-term memory system described in the [Self-Organizing Memory Guide](self-organizing-memory-guide.md)).
+
+- Browse or search memory entries from here
+- You cannot create, edit, or delete a memory entry directly in this view — the agent is the only writer, based on what comes up in conversation
+- Open a memory entry and use its **"ask about this memory"** panel to ask a quick question grounded in that entry's own content — a lightweight Q&A, not a full conversation, and it can't make changes to the entry
+- Depending on how you've talked to NuimanBot, this view may not show everything it remembers about you yet — see the note in the app if it applies to your account
+
+---
+
+## Settings
+
+Settings has two kinds of controls: **system-wide** (visible to everyone, changeable by admins only) and things that reflect your own account.
+
+### What admins can change here
+
+- **Worker pool size** — how many Jobs/Chores can run at the same time, across all users. Changing this takes effect immediately and never interrupts a run already in progress.
+- **Network access mode** — localhost-only (the safe default) or remote. Note: switching this here changes who's *allowed* to connect, but if you're moving to remote access for the first time, your administrator also needs to have set a bind address in the configuration file and restarted the server — this page alone won't move the server onto a new network address.
+- **Retention defaults** — the default number of days Chats, Projects, and History runs are kept before auto-deleting, shown here for reference.
+
+### What's config-file-only for now
+
+The remote-access allowlist (which specific IPs/hostnames are trusted) and the bind address itself aren't editable from this page yet — your administrator sets those in `config.yaml`. See the [Configuration Reference](configuration-reference.md#network-access--workspace-configuration) for details.
+
+### Skills, Plugins, Gateways, Users
+
+These are existing systems, simply linked from Settings rather than rebuilt — see the [Admin Guide](admin-guide.md) and [Agent Skills Guide](skills-guide.md) for how to manage them.
+
+---
+
+## Troubleshooting
+
+**I sent a message in a Chat and nothing answered me.**
+Expected for now — see [What to Expect Today](#what-to-expect-today). Use Telegram, Slack, or the CLI for an actual conversation with the agent today.
+
+**My Job/Chore says "Completed" but there's no real output.**
+Expected for now. The queue and execution pipeline is real; the agent isn't connected to it yet. Check back after this is announced as ready.
+
+**A run's status didn't change even though I know it finished.**
+Run status updates live on Job/Chore/Run detail pages, so this shouldn't normally happen — if it does, try refreshing the page, and check with your administrator if it keeps occurring.
+
+**I set a retention period, but nothing has been deleted.**
+Give it up to 15 minutes — retention is enforced by a periodic background sweep, not instantly the moment something expires. If it's been longer than that and nothing was deleted, check with your administrator.
+
+**I can't reach the workspace from another computer.**
+Your administrator needs to enable remote access in `config.yaml` (and possibly add you to an allowlist) — see the [Configuration Reference](configuration-reference.md#network-access--workspace-configuration). By default, NuimanBot only accepts connections from the same machine it's running on.
+
+**A page I try to open says "not found."**
+If you're trying to open a Chat/Project/Job/Chore/run you don't own — including by guessing or reusing a link — NuimanBot always shows "not found" rather than any error that would confirm it exists. This is intentional: your resources are private to you, even from administrators.

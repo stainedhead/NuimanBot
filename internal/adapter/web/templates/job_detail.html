@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Job.Title}} - NuimanBot Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.5/dist/cdn.min.js"></script>
+    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="icon" href="/static/img/NuimanProfile.jpg">
+</head>
+<body class="bg-gray-100 min-h-screen" data-source-type="job" data-source-id="{{.Job.ID}}">
+    {{template "nav" .}}
+    <div class="container mx-auto px-4 py-8">
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <div class="flex justify-between items-center mb-6">
+                <div>
+                    <a href="/admin/jobs" class="text-sm text-teal-700 hover:underline">&larr; All Jobs</a>
+                    <h1 class="text-2xl font-bold text-gray-900 mt-1">{{.Job.Title}}</h1>
+                </div>
+                <div class="flex gap-3 items-center">
+                    <form method="POST" action="/admin/jobs/{{.Job.ID}}/delete" onsubmit="return confirm('Delete this job? This cannot be undone.');">
+                        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+                        <button type="submit" class="text-red-600 hover:text-red-800 text-sm">Delete</button>
+                    </form>
+                </div>
+            </div>
+
+            <dl class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+                <div>
+                    <dt class="text-xs font-semibold text-gray-500 uppercase">Status</dt>
+                    <dd id="job-status" class="text-gray-800">{{.Job.Status}}{{if .Job.PendingDeletion}} (pending deletion){{end}}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs font-semibold text-gray-500 uppercase">Context</dt>
+                    <dd class="text-gray-800">{{.Job.ContextType}}{{if .Job.ContextID}} ({{.Job.ContextID}}){{end}}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs font-semibold text-gray-500 uppercase">Working Directory</dt>
+                    <dd class="text-gray-800">{{if .Job.WorkingDirectory}}{{.Job.WorkingDirectory}}{{else}}&mdash;{{end}}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs font-semibold text-gray-500 uppercase">Created</dt>
+                    <dd class="text-gray-800">{{.Job.CreatedAt.Format "2006-01-02 15:04"}}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs font-semibold text-gray-500 uppercase">Last Updated</dt>
+                    <dd class="text-gray-800">{{.Job.UpdatedAt.Format "2006-01-02 15:04"}}</dd>
+                </div>
+            </dl>
+
+            <div class="mb-6">
+                <h2 class="text-sm font-semibold text-gray-500 uppercase mb-2">Description</h2>
+                <div class="p-3 rounded-lg bg-gray-50 text-gray-800 whitespace-pre-wrap">{{.Job.Description}}</div>
+            </div>
+
+            <div class="border-t pt-4">
+                <p class="text-gray-500 text-sm">Chat interface coming soon.</p>
+            </div>
+        </div>
+    </div>
+    <script src="/static/run-events.js" defer></script>
+</body>
+</html>

@@ -45,11 +45,11 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 
 	// Render template
 	data := struct {
-		Title string
+		*BaseData
 		Users []*domain.UserProfile
 	}{
-		Title: "Users",
-		Users: users,
+		BaseData: s.baseDataFor(r.Context(), user, "Users", "users"),
+		Users:    users,
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

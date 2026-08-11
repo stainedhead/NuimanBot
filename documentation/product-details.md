@@ -1,8 +1,8 @@
 # NuimanBot Product Details
 
-**Version:** 1.5
-**Last Updated:** 2026-08-02
-**Status:** Production Ready (100% Complete)
+**Version:** 1.6
+**Last Updated:** 2026-08-05
+**Status:** Production Ready (Core Platform, 100% Complete) — Persistent Agent Workspace In Progress (see FR-025–FR-031, Feature 9)
 
 ---
 
@@ -354,6 +354,97 @@
   - ✅ Tests tagged with `//go:build integration` to separate from unit tests
   - ✅ Coverage: storage layer (Ingatan client, file repositories), web admin, memoryv2 use cases
   - ✅ Run with `go test -tags integration ./...`
+
+#### FR-025: Persistent Agent Workspace — Chats
+- **Priority:** P1 (High)
+- **Status:** 🔶 Partial — persistence complete, agent replies not wired
+- **Description:** Lightweight, directory-less web conversations, distinct from the CLI/Telegram/Slack/Buzz gateway conversations, built by extending the existing `ConversationRepository` rather than a new entity (see ADR-009)
+- **Acceptance Criteria:**
+  - ✅ User can create a Chat from the web UI; no working directory is exposed
+  - ✅ Chat is auto-named from the text of its first message; falls back to a timestamp-based name (`"Chat — 2026-08-05 14:32"`) for an empty/whitespace-only first message
+  - ✅ Full message history persisted; user can manually delete a Chat at any time
+  - ✅ Configurable retention per Chat, including "Never", measured from last activity (`UpdatedAt`), not creation time
+  - ✅ Transcript download/export in JSON and Markdown, reusing `chat.Service.ExportConversation`
+  - ✅ Strict per-user isolation: cross-owner access by ID returns 404, never 403
+  - ❌ **The web Chats UI does not generate agent replies.** Posting a message calls `ChatsService.AppendUserMessage`, which appends a user-role message and returns — no LLM call occurs. This is specific to the new web Chats environment; the CLI/Telegram/Slack/Buzz gateways' chat loop is unaffected.
+  - ✅ Retention is configurable and automatically enforced: `internal/infrastructure/scheduler.RetentionSweeper` polls every 15 minutes and invokes `chats.Service.SweepExpired` for every user in the system
+
+#### FR-026: Persistent Agent Workspace — Projects
+- **Priority:** P1 (High)
+- **Status:** 🔶 Partial — CRUD and sandboxing complete, agent-authored edits depend on FR-025's gap
+- **Description:** Durable, directory-scoped workspace with a real, user-visible output directory
+- **Acceptance Criteria:**
+  - ✅ User can create a Project with a configured output directory; a hidden backend directory for agent-managed context is created alongside it and never shown in the Project's file view
+  - ✅ UI provides a subdued "Add AGENTS.md" control that creates a starter `AGENTS.md` in the output directory if one doesn't already exist
+  - ✅ User retains direct filesystem access to the output directory outside the app (including `AGENTS.md`); last-write-wins if the agent and the user's own editor both write it, by design (no cross-boundary locking)
+  - ✅ Retention configurable independently of Chat retention, including "Never" — automatically enforced by `RetentionSweeper` every 15 minutes
+  - ✅ All Project file operations are path-confined via `fsguard.ResolveWithin` — a crafted path cannot escape the Project's output/hidden directories
+  - ✅ Deleting a Project does not delete Jobs/Chores that reference it — the Job/Chore record and its history remain
+  - ✅ A referencing Job/Chore's next run is now detected as stale (FR-R12): `StubExecutor.checkProjectExists` resolves the Job/Chore's context and, if it is `ContextTypeProject`, confirms the Project still exists before proceeding — a deleted Project fails the Run cleanly with `Error = "referenced Project no longer exists"` instead of silently "succeeding" against a placeholder artifact directory.
+  - ⚠️ The primary intended path to edit `AGENTS.md` — "chat with the agent in the Project's context" — is not available yet, since no chat surface in this feature invokes the agent (see FR-025); today `AGENTS.md` can only be created via the "Add AGENTS.md" control or edited directly on disk
+
+#### FR-027: Persistent Agent Workspace — Jobs
+- **Priority:** P1 (High)
+- **Status:** 🔶 Partial — queueing/persistence complete, execution is a placeholder
+- **Description:** One-time agent tasks queued in FIFO order and executed by a shared worker pool
+- **Acceptance Criteria:**
+  - ✅ User can create a Job with a Title and Description; Description is persisted as `JOB-DESCRIPTION.md` in the Job's hidden directory
+  - ✅ A Job can run in the context of a Chat or a Project; a Project-context Job defaults to that Project's output directory as its working directory
+  - ✅ Jobs are enqueued onto the shared, durable FIFO queue (`internal/infrastructure/scheduler.Queue`) and executed by the configurable worker pool in order
+  - ✅ Every run records timing (start/end/duration) and a processing log, retrievable via History
+  - ✅ Deleting a Job whose most recent status is `Running`/`Queued` soft-marks it (`job.PendingDeletion = true`, persisted) instead of deleting outright — confirmed in `jobs.Service.DeleteJob`. A `PendingDeletion` Job is now automatically hard-deleted once its Run reaches a terminal state, via `jobs.Service.CleanupPendingDeletion` (FR-R9), invoked every 15 minutes by `internal/infrastructure/scheduler.RetentionSweeper`. (`domain.Job.IsQueueable()`, the guard originally meant to prevent enqueueing a new run for a pending-deletion Job, was removed as dead code — the only enqueue path, `CreateJob`, always builds a brand-new Job that is queueable by construction, and there is no re-run/retry path anywhere in the codebase today for it to guard; an equivalent check should be reintroduced if such a flow is added.)
+  - ❌ **Execution does not invoke the agent.** `internal/infrastructure/scheduler.StubExecutor` drives each run through a real Queued → Running → Completed/Failed lifecycle and writes a placeholder `RESULTS.md` explicitly stating no agent/LLM invocation occurred. The queueing, concurrency, and persistence pipeline is genuine and tested; the work product is not.
+  - ❌ Per-Job chat interface (spec FR-029) is not built in this pass
+  - ✅ In-app notification on run completion (spec FR-030) has both the transport (WebSocket push) and a browser-side consumer (`internal/adapter/web/static/run-events.js`, loaded from the Job detail page) — the badge and run status now update live without a manual refresh
+
+#### FR-028: Persistent Agent Workspace — Chores
+- **Priority:** P1 (High)
+- **Status:** 🔶 Partial — scheduling complete, execution is a placeholder
+- **Description:** Recurring, cron-scheduled agent tasks sharing the same worker pool and execution model as Jobs
+- **Acceptance Criteria:**
+  - ✅ User can create a Chore with a Title, Description (persisted the same way as a Job's `JOB-DESCRIPTION.md`), an optional working directory, and a schedule — either a preset (hourly/daily/weekly/monthly) or a raw cron expression
+  - ✅ An agent-proposed schedule requires explicit user confirmation (`ScheduleConfirmed`) before it can fire; an unconfirmed schedule never fires and does not silently expire
+  - ✅ `internal/infrastructure/scheduler.ChoreScheduler` polls every 30 seconds (`defaultChoreSchedulerInterval`) for due Chores using `robfig/cron/v3` (see ADR-010) and either enqueues a new Run or records a skipped Run ("skipped — previous run still active") if the Chore's previous run is still executing (FR-035's skip-if-still-running)
+  - ✅ `NextFireTime` is advanced and persisted on every tick regardless of fire/skip outcome, so a scheduler outage doesn't cause repeated catch-up fires for the same missed window
+  - ✅ **Deleting a Chore now has full parity with Jobs (FR-R8).** `chores.Service.DeleteChore` soft-marks the record (`PendingDeletion = true`) when its most recent Run is `Queued`/`Running`, rather than deleting outright; `chores.Service.CleanupPendingDeletion` (FR-R9), invoked every 15 minutes by `RetentionSweeper`, hard-deletes it once that Run reaches a terminal state. A `PendingDeletion` Chore is never re-fired: `domain.Chore.IsDue` returns false for one, so `ChoreScheduler`'s due-Chore loop naturally skips it — no separate enforcement needed at schedule-fire time.
+  - ❌ Execution is the same `StubExecutor` placeholder described under FR-027 — Chores do not invoke the agent yet
+  - ❌ Per-Chore chat interface (spec FR-037) is not built in this pass
+
+#### FR-029: Persistent Agent Workspace — History
+- **Priority:** P1 (High)
+- **Status:** 🔶 Partial — listing/filtering/badge complete, per-run chat not built
+- **Description:** Per-user list of every Job/Chore run with status, timing, and links to logs/results
+- **Acceptance Criteria:**
+  - ✅ Lists the user's own runs, filterable by source (Job/Chore), date range, and status
+  - ✅ Each run exposes its status, start/end timing, log, and results path (`RESULTS.md`)
+  - ✅ An unviewed-run notification badge count (`HistoryService.UnviewedCount`) is available on every authenticated page, cleared per-run via `MarkViewed`; a retention sweep deleting an unviewed run decrements the count rather than leaving it dangling on a deleted run
+  - ✅ Retention configurable independently of Chat/Project retention, including "Never" — automatically enforced by `RetentionSweeper` every 15 minutes, same as Chat/Project retention (FR-025/FR-026)
+  - ✅ Run status/log/notification-badge changes are published server-side over WebSocket (`web.NotifyingRunRepository` wraps `RunRepository` so every `SaveRun`/`AppendLog`/`MarkNotified` also calls `Hub.Publish`) — verified end-to-end under `-race`
+  - ✅ A browser-side consumer (`internal/adapter/web/static/run-events.js`) subscribes to the WebSocket feed from the Job/Chore/Run detail pages, so the badge and run status update live without a manual refresh
+  - ❌ Per-run chat interface grounded in that run's log/results (spec FR-042) is not built in this pass
+
+#### FR-030: Persistent Agent Workspace — Memories
+- **Priority:** P1 (High)
+- **Status:** 🔶 Partial — read-only browse and per-item chat complete; `ownerUserID`→`ConversationID` mapping gap remains
+- **Description:** Read-only browse/search view over the existing self-organizing memory store, plus a minimal per-item "ask about this memory" chat
+- **Acceptance Criteria:**
+  - ✅ Lists/searches memory cells (`internal/domain/memoryv2`) visible to the current user, with no create/edit/delete controls in the UI — the agent remains the sole writer
+  - ✅ A per-item chat interface (spec FR-047, FR-R4) is built — Memories is the first of the four environments to get one, serving as the reference implementation the per-Job/Chore/Run chats are meant to follow. It is a minimal, grounded Q&A: one LLM call per question, scoped to that memory cell's own content, with no persisted chat history and no access to the full agent orchestration engine.
+  - ⚠️ Memories' `ownerUserID`→`ConversationID` mapping is a confirmed, documented gap: memory cells created via the CLI gateway are keyed to a single shared placeholder identity (`"cli:cli_user"`), not the web-admin session username Memories queries by, and no identity bridge exists yet between the two systems. The UI carries a visible notice that it may not show everything.
+
+#### FR-031: Persistent Agent Workspace — Settings & Network Access
+- **Priority:** P1 (High)
+- **Status:** 🔶 Partial — worker pool and access mode live-editable; allowlist/bind address config-file-only
+- **Description:** System-wide administration of the worker pool, network exposure, and per-user default retention windows
+- **Acceptance Criteria:**
+  - ✅ Admin-only Settings page surfaces read-only Skills/Plugins/Gateways listings (existing systems, not rebuilt) and links to existing Users management
+  - ✅ Worker pool size (`worker_pool.max_concurrent_workers`, default 3) is live-editable from Settings and takes effect immediately on the running `WorkerPool` without pre-empting in-flight runs
+  - ✅ Network access mode (localhost-only / remote) is live-editable from Settings, changing allowlist *enforcement* for subsequent requests immediately
+  - ✅ Per-user default retention windows for Chat/Project/History (days; 0 = "Never") are displayed, sourced from `retention_defaults` in `config.yaml`
+  - ✅ Web server supports localhost-only (bind 127.0.0.1 only, default) and remote-access (configured bind interface) modes; in remote mode, an optional IP/hostname allowlist is enforced by `networkAllowlistMiddleware` ahead of every handler, including `/health` and `/static/`, before authentication — a rejected source gets 403 without reaching any application code
+  - ✅ Absent vs. empty allowlist are distinct and intentional: an absent `allowlist` key means "allow all" once remote mode is set; an explicit `allowlist: []` means "deny all" (fail-closed) — documented in `config.yaml`'s comments and covered by a decode-path test against the real config loader
+  - ❌ Allowlist entries and the remote bind address are **not** editable from the Settings UI — config-file-only (`network_access.allowlist`, `network_access.bind_address`)
+  - ⚠️ Switching Settings' network mode to "remote" changes allowlist enforcement but does **not** rebind the running HTTP listener to a new address — the bind address is only read at process startup
 
 ### Non-Functional Requirements
 
@@ -1029,6 +1120,63 @@ NuimanBot has two separate, independently-implemented injection-detection paths:
 - Tool invocations triggered from Buzz are audit-logged identically to tool invocations from other platforms
 - An unbounded agent-to-agent reply chain terminates rather than running indefinitely
 
+### Workflow 18: Project-Scoped Job Execution (Queue → Placeholder Execution → History)
+
+**Actors:** User
+
+**Preconditions:**
+- User has a Project with a valid output directory
+
+**Steps:**
+1. User opens Projects, selects an existing Project (or creates one, supplying a name and output directory)
+2. User opens Jobs and creates a Job with a Title and Description, selecting "run in the context of" this Project
+3. `JobsService.CreateJob` persists the Description as `JOB-DESCRIPTION.md` in the Job's hidden directory, sets `WorkingDirectory` to the Project's `OutputDirectory`, and enqueues a `RunRequest` onto the shared FIFO queue (`internal/infrastructure/scheduler.Queue`), which persists the new queue state to disk before the call returns
+4. The `WorkerPool`'s dispatch loop picks up the request once a worker slot is free (respecting FIFO order and the configured concurrency limit) and hands it to `StubExecutor.Execute`
+5. `StubExecutor` transitions the Run: `Queued` → `Running` (persisted, logged), writes a placeholder `RESULTS.md` under the run's artifact directory via `fsguard.ResolveWithin`, then → `Completed` (persisted, logged) — **no LLM/agent call occurs**; this demonstrates the pipeline, not real task completion
+6. Every `SaveRun`/`AppendLog` call happens through `web.NotifyingRunRepository`, which also publishes a `RunEvent` to the owning user's WebSocket connections (if any are open); `run-events.js` on the Job detail page consumes it, so the UI updates live without a refresh
+7. User navigates to History, sees the completed run, its timing, and its (placeholder) results
+
+**Postconditions:**
+- The Job's queueing, concurrency-bounded execution, and full run record (status/timing/log/results path) are real and durable, surviving a server restart
+- The actual "work" performed is a placeholder — this workflow demonstrates infrastructure completeness, not agent task completion
+
+### Workflow 19: Chore Scheduling with Skip-if-Still-Running
+
+**Actors:** User
+
+**Preconditions:**
+- User has created a Chore with a confirmed schedule (e.g. the "hourly" preset)
+
+**Steps:**
+1. `ChoreScheduler.Run` ticks every 30 seconds and calls `ChoreRepository.ListAllDue(now)`
+2. For each due, confirmed Chore, the scheduler checks `WorkerPool.IsSourceRunning(chore.ID)`
+3. If the Chore's previous run is still executing, the scheduler records a new `Run` with `Status = Skipped` and `SkipReason = "skipped — previous run still active"` — no new work is enqueued
+4. Otherwise, the scheduler creates a `Run` with `Status = Queued` and enqueues a `RunRequest` on the shared worker pool, identically to a Job
+5. Either way, `NextFireTime` is recomputed from the Chore's cron expression (`robfig/cron/v3`) and persisted, so a scheduler outage doesn't cause a backlog of missed-window fires once it recovers
+6. User reviews History and sees a mix of `Completed` and `Skipped` runs for the Chore over time
+
+**Postconditions:**
+- A Chore never runs two overlapping executions concurrently
+- A confirmed Chore's `NextFireTime` survives a server restart (persisted on the domain entity, not held only in memory)
+
+### Workflow 20: Remote Network Access Configuration
+
+**Actors:** System Admin
+
+**Preconditions:**
+- NuimanBot is currently running in the default localhost-only mode
+
+**Steps:**
+1. Admin edits `config.yaml`'s `network_access` section: sets `mode: remote`, a `bind_address`, and (optionally) an `allowlist` of trusted IPs/hostnames
+2. Admin restarts NuimanBot so the new bind address takes effect (Settings' live "network mode" toggle changes allowlist *enforcement* only — it does not rebind the running listener)
+3. `networkAllowlistMiddleware` now enforces the allowlist ahead of every request, including `/health` and `/static/`, before authentication — a non-allowlisted source receives 403 without reaching any handler
+4. Admin verifies: a request from an allowlisted source reaches the login page; a request from a non-listed source is rejected
+5. Admin optionally uses Settings' network-mode toggle for subsequent quick enable/disable of enforcement without editing the config file — understanding that it does not change the bound address
+
+**Postconditions:**
+- Non-allowlisted sources cannot reach any part of the application, including unauthenticated endpoints
+- An admin who sets `allowlist: []` (present but empty) gets fail-closed behavior (deny all) rather than accidentally opening full remote access, which only an absent `allowlist` key or explicit entries produce
+
 ---
 
 ## System Constraints
@@ -1059,6 +1207,11 @@ NuimanBot has two separate, independently-implemented injection-detection paths:
 - **Constraint:** Custom tools only, no external tool marketplace
 - **Rationale:** Security posture, zero supply chain attack surface
 - **Impact:** All tools must be developed in-house
+
+#### TC-006: Filesystem Path Confinement for Project/Job/Chore/Run Operations
+- **Constraint:** Every filesystem path derived from a user- or agent-supplied relative path (Project output/hidden directories, Job/Chore hidden directories, Run artifact directories) must be resolved through `internal/infrastructure/fsguard.ResolveWithin` before use, never joined directly
+- **Rationale:** No reusable path-confinement helper existed in the codebase prior to this feature; `CommandSandbox` sandboxes command execution, not filesystem paths, and `FetchSecurityConfig` guards SSRF/network targets, not local paths — a gap that, left unaddressed, would let a crafted ID or relative path escape a Project's assigned directory (path traversal)
+- **Impact:** `fsguard.ResolveWithin` rejects absolute paths, `..`-escaping paths, and NUL bytes, returning the confined absolute path or an error mapped to `domain.ErrNotFound`. All four new file-based repositories (`FileProjectRepository`/`FileJobRepository`/`FileChoreRepository`/`FileRunRepository`) route their record and log paths through it; a defense-in-depth gap where these repositories initially built paths via raw `filepath.Join` was found and fixed during this feature's own hardening pass (see `documentation/architectural-decision-record.md` ADR-013). The pre-existing `FileConversationRepository` (backing Chats) was not brought into this pattern and is a flagged follow-up, not yet fixed.
 
 ### Security Constraints
 
@@ -1096,6 +1249,16 @@ NuimanBot has two separate, independently-implemented injection-detection paths:
 - **Constraint:** `summarize`/`doc_summarize` must resolve and validate a fetch target's IP address, rejecting loopback, RFC 1918 private ranges, link-local (including the `169.254.169.254` cloud metadata address), and multicast/reserved ranges, on both the initial request and every redirect hop
 - **Rationale:** Prevent these tools from being used to reach internal/cloud-metadata network resources
 - **Impact:** Both tools dial the validated IP directly on redirect hops to close the DNS-rebinding TOCTOU window; `security.fetch.ssrf_protection`/`follow_redirects` config controls this behavior
+
+#### SC-007: Persistent Agent Workspace Per-User Isolation
+- **Constraint:** Every Chat, Project, Job, Chore, and Run belongs to exactly one owning user; a request for another user's resource by ID must return 404, never 403 or a partial 500, so a resource's existence is never disclosed — including to admins
+- **Rationale:** Full data isolation (not merely UI-level hiding) is required even for privileged callers; disclosing "this ID exists but isn't yours" via a 403 is itself an information leak (IDOR)
+- **Impact:** Enforced at the repository layer (`Get`/`Delete` methods take `ownerUserID` and resolve any cross-owner match as `domain.ErrNotFound`, not a permission error), not just hidden in the UI; every environment's handler maps `errors.Is(err, domain.ErrNotFound)` to `http.NotFound`, verified by explicit `TestHandle*_CrossOwnerReturns404` tests per environment. The owning-user identifier is the session's `Username` (a stable per-user string), not `session.ID` (a per-session token) — renaming a username would therefore orphan that user's existing Chats/Projects/Jobs/Chores/Runs from future lookups, a known characteristic of this identifier choice, not a defect.
+
+#### SC-008: Remote-Access Allowlist Enforcement
+- **Constraint:** In remote-access mode, an optional IP/hostname allowlist is enforced ahead of every request — including unauthenticated endpoints like `/health` and `/static/` — before any application handler runs
+- **Rationale:** A network-layer control that runs after authentication, or only on some routes, would leave an exploitable gap; fail-closed enforcement must happen at the earliest possible point in the request pipeline
+- **Impact:** `networkAllowlistMiddleware` wraps the entire `http.ServeMux`. An absent `allowlist` key means "allow all" (an explicit admin choice once `mode: remote` is set); an empty-but-present `allowlist: []` means "deny all" — this distinction is intentional and documented in `config.yaml`'s comments, verified through the real config-decode path (not just domain-logic unit tests), since the two are easy to conflate in a naive YAML-to-struct mapping.
 
 ### Operational Constraints
 
@@ -1722,6 +1885,44 @@ gateways:
 
 ---
 
+### Feature 9: Persistent Agent Workspace (Chats, Projects, Jobs, Chores, History, Memories, Settings)
+
+**Description:** A web-based, multi-user workspace extending the existing admin UI (`internal/adapter/web`) with six user-facing environments plus Settings, backed by a net-new worker-pool/scheduler subsystem and configurable network exposure. See `documentation/technical-details.md`'s "Persistent Agent Workspace" section for full architecture and data flow, and FR-025–FR-031 above for per-environment status. Summarized here as one feature because the six environments share one architecture, one worker pool, and one set of scope cuts.
+
+**Functional Specification:**
+- **Domain:** `Project`/`Job`/`Chore`/`Run` entities (`internal/domain`), plus `RetentionPolicy` ("Never" = nil period), `Schedule` (cron expression + optional preset), `NetworkAccessConfig`, and `WorkerPoolConfig` value objects. Chats extend the existing `Conversation`/`ConversationRepository` rather than introducing a new entity (ADR-009).
+- **Persistence:** File-based repositories (`FileProjectRepository`, `FileJobRepository`, `FileChoreRepository`, `FileRunRepository`) modeled on the existing `FileConversationRepository`, using `AtomicFileWriter` (temp-file + rename) for crash-safe writes — no new database introduced (ADR-012). All record/log paths are confined via `fsguard.ResolveWithin` (TC-006).
+- **Execution:** A durable FIFO `Queue` (`internal/infrastructure/scheduler`) persists queued work to disk on every mutation; a `WorkerPool` runs up to N concurrent workers (Settings-configurable, default 3) pulling from the queue; a `ChoreScheduler` polls every 30s using `robfig/cron/v3` (ADR-010) to enqueue due Chores, implementing skip-if-still-running. Execution itself is currently a `StubExecutor` placeholder — see FR-027/FR-028's Known Limitations. On startup, `scheduler.ReconcileInterruptedRuns` scans for any Run left non-terminal by a prior crash and marks it `Failed` (`Error = "run interrupted by server restart"`) so it never stays silently stuck. Every 15 minutes, `scheduler.RetentionSweeper` iterates every user and enforces the configured Chat/Project/History retention windows plus `CleanupPendingDeletion` for Jobs and Chores.
+- **Live updates:** A per-user WebSocket `Hub` (`internal/adapter/web/websocket_handler.go`) delivers Run status/log/notification-badge events, chosen over polling because `gorilla/websocket` was already a dependency (ADR-011). A browser-side consumer (`internal/adapter/web/static/run-events.js`), loaded from the Job/Chore/Run detail pages, subscribes and applies these events live.
+- **Network access:** `networkAllowlistMiddleware` wraps the whole `ServeMux`, enforcing an optional allowlist pre-authentication in remote-access mode (SC-008); localhost-only is the safe default.
+- **Isolation:** every environment scopes reads/writes by `ownerUserID` (the session's `Username`) at the repository layer, with cross-owner access uniformly mapped to 404 (SC-007).
+
+**Configuration Example:**
+```yaml
+network_access:
+  mode: localhost_only   # localhost_only | remote
+
+worker_pool:
+  max_concurrent_workers: 3
+
+retention_defaults:
+  chat_days: 90
+  project_days: 180
+  history_days: 90
+```
+
+**Known Limitations (see FR-025–FR-031 for detail):**
+- No environment in this feature invokes the agent/LLM — Job/Chore execution uses `StubExecutor`, and the web Chats UI does not generate assistant replies
+- Per-Job/Chore/Run "chat with the agent" interfaces are not built (Memories now has one — see FR-030 — as the reference implementation the other three are meant to follow)
+- Memories' `ownerUserID`→`ConversationID` mapping is a confirmed gap: no identity bridge exists yet between the web-admin account system and the CLI/Telegram/Buzz gateway identity system
+
+**Testing:**
+- Domain coverage 97.9%; `usecase/chats` 91.7%, `usecase/chores` 93.2%, `usecase/jobs` 92.2%, `usecase/projects` 96.4%, `usecase/history` 100%, `usecase/memories` 100%, `usecase/settings` 100%
+- Adversarial path-traversal tests per file-based repository (crafted IDs, absolute paths, NUL bytes, sibling-directory prefix confusion) and per-environment cross-owner-IDOR tests (`TestHandle*_CrossOwnerReturns404`)
+- WebSocket hub tested under `-race` (handshake, per-user isolation, slow-client drop); the `Queue`'s own persist/reload round trip is tested explicitly for restart durability — this does not cover recovery of a run already dequeued to a worker at crash time (see `documentation/technical-details.md`'s Queue section)
+
+---
+
 ## Security Requirements
 
 ### SR-001: Threat Model
@@ -1926,6 +2127,28 @@ gateways:
 
 **Priority:** P3 (Low)
 **Status:** ⏸️ On Hold
+
+### Post-Feature: Persistent Agent Workspace — Remaining Work
+
+Not a new phase — this is the punch list against Feature 9 / FR-025–FR-031 above, tracked for the next iteration on `specs/260805-nuimanbot-extend-context-and-ui` (or a successor spec):
+
+**Planned Work:**
+- Replace `StubExecutor` with a real agent-invoking `Executor` (wiring `internal/usecase/chat` and the existing tool-calling loop into a Job/Chore run)
+- Wire the web Chats environment to actually call the LLM (today it only persists the user's message)
+- Build the per-Job, per-Chore, and per-Run chat interfaces (spec FR-029/FR-037/FR-042) — Memories' equivalent (FR-047) shipped in the review-fix pass and is the reference implementation to follow
+- Close the Memories `ownerUserID`→`ConversationID` identity-bridge gap between the web-admin account system and the CLI/Telegram/Buzz gateway identity system
+- Make allowlist entries and the remote bind address editable from Settings (currently config-file-only); rebind the listener when the network mode changes at runtime, or clearly document that a restart is required
+
+**Completed in the review-fix pass (2026-08-05), no longer outstanding:**
+- Retention-sweep logic (`chats.Service.SweepExpired` and its Project/History equivalents) is now scheduled — `scheduler.RetentionSweeper` invokes it for every user every 15 minutes, alongside `CleanupPendingDeletion` for Jobs and Chores
+- A browser-side WebSocket consumer (`run-events.js`) now renders Run status/log/notification-badge updates live, without a page refresh
+- The left-nav sidebar (and its notification badge) now covers `dashboard.html`/`bots.html`/`users.html`/`confirmations.html` as well as the six new environments
+- `FileConversationRepository` now routes through the `fsguard` path-confinement pattern used by the four new file-based repositories (FR-R13)
+- Chore soft-delete (`PendingDeletion`) now has full parity with Job (FR-R8/FR-R9)
+- Restart recovery: `scheduler.ReconcileInterruptedRuns` marks any Run left non-terminal by a crash as `Failed` on startup
+
+**Priority:** P1 (High) — the queueing/scheduling/persistence/live-update pipeline is production-quality, but the feature does not deliver its core value (autonomous agent work) until execution is real
+**Status:** 🔶 Foundation, scheduling, and live updates complete; agent-invoking execution outstanding
 
 ### Scalability Path
 
