@@ -23,6 +23,6 @@
 | 9  | Implement Review Fixes           | ✅ Complete (all 7 findings closed, filed GH issue #9 for audit-logging follow-up, 0 lint issues) | 2026-08-11T19:26:32Z | 2026-08-11T20:01:15Z | 35 |
 | 10 | Archive Fixes Spec               | ✅ Complete (specs/archive/260811-cli-parity-for-nuimanbot-features-auto-review/, commit 0128f25) | 2026-08-11T20:01:15Z | 2026-08-11T20:02:50Z | 2 |
 | 11 | Final Quality Pass               | ✅ Complete (all gates green, domain/usecase coverage confirmed ≥90% on every touched package, 3 doc gaps closed — deferred-chat-message wording, AD-6 messaging in Deliberately Deferred section, 2 broken README anchors fixed) | 2026-08-11T20:02:50Z | 2026-08-11T20:15:00Z | 12 |
-| 12 | Process Analysis Report          | 🔄 In Progress | 2026-08-11T20:15:00Z | — | — |
-| 13 | Archive Spec                     | ⬜ Pending | — | — | — |
-| 14 | Open Pull Request                | ⬜ Pending | — | — | — |
+| 12 | Process Analysis Report          | ✅ Complete (dev-flow-analysis.md, commit 9d79d3b) | 2026-08-11T20:15:00Z | 2026-08-11T20:19:08Z | 4 |
+| 13 | Archive Spec                     | ✅ Complete (already satisfied by Steps 7/10; verified specs/archive/ holds both) | 2026-08-11T20:19:08Z | 2026-08-11T20:19:08Z | 0 |
+| 14 | Open Pull Request                | 🔄 In Progress | 2026-08-11T20:19:08Z | — | — |
