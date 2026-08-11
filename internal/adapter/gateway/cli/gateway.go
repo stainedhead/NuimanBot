@@ -35,6 +35,27 @@ type PlatformUIDSetter interface {
 // it's obviously a placeholder if it ever surfaces in logs/data.
 const unauthenticatedPlatformUID = "cli_unauthenticated"
 
+// EnvCommandHandler is the common interface for the per-user environment
+// command families this feature adds — Chats (FR-011-016), Projects
+// (FR-017-022), Jobs (FR-023-027), Chores (FR-028-033), History
+// (FR-034-036), Memories (FR-037-038), and Settings (FR-039-043) — following
+// the existing AdminXCommandHandler pattern (HandleXCommand(ctx,
+// currentUser, input) (string, error)), but additionally receiving
+// ownerUserID as an explicit parameter distinct from currentUser: AD-5
+// requires every internal/usecase/{chats,projects,jobs,chores,history,
+// memories} call to use the authenticated session's Username specifically,
+// never currentUser.ID or any other domain.User field, and passing it
+// separately removes the guesswork rather than relying on each handler to
+// pick the right field off currentUser.
+type EnvCommandHandler interface {
+	// Handle processes input (the full command line, including its "/prefix"
+	// token) for the given currentUser (role/permission checks) and
+	// ownerUserID (AD-5's per-user data-scoping key — always
+	// currentSession.Username), returning the formatted terminal response or
+	// an error.
+	Handle(ctx context.Context, currentUser *domain.User, ownerUserID string, input string) (string, error)
+}
+
 // Gateway implements domain.Gateway for the command-line interface.
 type Gateway struct {
 	Cfg            *config.CLIConfig
@@ -48,6 +69,17 @@ type Gateway struct {
 	authHandler    *AuthCommandHandler // login/logout flow (FR-001-FR-007); nil disables auth-gating entirely
 	currentUser    *domain.User        // Current CLI user for admin commands
 	currentSession *auth.Session       // Current authenticated session, set by EnsureAuthenticated
+
+	// Per-user environment command handlers (Phase C/D). Each is nil until
+	// wired via its Set*Handler; dispatchEnvCommand shows a "not available"
+	// message for a nil handler rather than failing dispatch.
+	chatsHandler    EnvCommandHandler
+	projectsHandler EnvCommandHandler
+	jobsHandler     EnvCommandHandler
+	choresHandler   EnvCommandHandler
+	historyHandler  EnvCommandHandler
+	memoriesHandler EnvCommandHandler // distinct from memoryHandler above: "/memories" (plural, FR-037/038) vs "/memory " (singular, admin) — see AD-3
+	settingsHandler EnvCommandHandler
 	// stdin/stdout for testing purposes
 	Reader io.Reader
 	Writer io.Writer
@@ -316,6 +348,43 @@ func (g *Gateway) Start(ctx context.Context) error {
 				continue
 			}
 
+			// Environment command families (Phase C/D): Chats, Projects,
+			// Jobs, Chores, History, Memories, Settings. Available to any
+			// authenticated user (not admin-gated) — each handler scopes
+			// data internally via ownerUserID (AD-5). Checked in this order
+			// so that "/memories ..." (plural) never falls into the
+			// existing "/memory " (singular, admin) branch above or vice
+			// versa (AD-3 — the two prefixes are verified non-colliding,
+			// see isEnvCommand's doc comment).
+			if IsChatCommand(input) {
+				g.dispatchEnvCommand(ctx, g.chatsHandler, "Chat", input)
+				continue
+			}
+			if IsProjectCommand(input) {
+				g.dispatchEnvCommand(ctx, g.projectsHandler, "Project", input)
+				continue
+			}
+			if IsJobCommand(input) {
+				g.dispatchEnvCommand(ctx, g.jobsHandler, "Job", input)
+				continue
+			}
+			if IsChoreCommand(input) {
+				g.dispatchEnvCommand(ctx, g.choresHandler, "Chore", input)
+				continue
+			}
+			if IsHistoryCommand(input) {
+				g.dispatchEnvCommand(ctx, g.historyHandler, "History", input)
+				continue
+			}
+			if IsMemoriesCommand(input) {
+				g.dispatchEnvCommand(ctx, g.memoriesHandler, "Memories", input)
+				continue
+			}
+			if IsSettingsCommand(input) {
+				g.dispatchEnvCommand(ctx, g.settingsHandler, "Settings", input)
+				continue
+			}
+
 			// Check if this is a skill command (/skill-name or /help)
 			isCommand, commandName, commandArgs := parseCommand(input)
 			if isCommand {
@@ -443,6 +512,75 @@ func (g *Gateway) SetAuthHandler(handler *AuthCommandHandler) {
 	g.authHandler = handler
 }
 
+// SetChatsHandler sets the Chats environment command handler (FR-011-016).
+func (g *Gateway) SetChatsHandler(handler EnvCommandHandler) {
+	g.chatsHandler = handler
+}
+
+// SetProjectsHandler sets the Projects environment command handler (FR-017-022).
+func (g *Gateway) SetProjectsHandler(handler EnvCommandHandler) {
+	g.projectsHandler = handler
+}
+
+// SetJobsHandler sets the Jobs environment command handler (FR-023-027).
+func (g *Gateway) SetJobsHandler(handler EnvCommandHandler) {
+	g.jobsHandler = handler
+}
+
+// SetChoresHandler sets the Chores environment command handler (FR-028-033).
+func (g *Gateway) SetChoresHandler(handler EnvCommandHandler) {
+	g.choresHandler = handler
+}
+
+// SetHistoryHandler sets the History environment command handler (FR-034-036).
+func (g *Gateway) SetHistoryHandler(handler EnvCommandHandler) {
+	g.historyHandler = handler
+}
+
+// SetMemoriesHandler sets the Memories environment command handler
+// (FR-037-038, "/memories" plural — distinct from SetMemoryHandler's
+// "/memory " singular admin commands).
+func (g *Gateway) SetMemoriesHandler(handler EnvCommandHandler) {
+	g.memoriesHandler = handler
+}
+
+// SetSettingsHandler sets the Settings environment command handler (FR-039-043).
+func (g *Gateway) SetSettingsHandler(handler EnvCommandHandler) {
+	g.settingsHandler = handler
+}
+
+// dispatchEnvCommand routes input to handler (one of the seven per-user/
+// Settings environment command families) and writes its formatted result or
+// error to g.Writer. A nil handler (not yet wired) produces a clear
+// "commands not available" message rather than falling through to the
+// message handler or panicking. Mirrors the defensive
+// nil-currentUser-defaults-to-non-admin pattern the pre-existing admin
+// command dispatch (IsAdminCommand et al.) already uses.
+func (g *Gateway) dispatchEnvCommand(ctx context.Context, handler EnvCommandHandler, label, input string) {
+	if handler == nil {
+		if _, err := fmt.Fprintf(g.Writer, "Error: %s commands not available.\n", label); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing to CLI output: %v\n", err)
+		}
+		return
+	}
+
+	user := g.currentUser
+	if user == nil {
+		user = &domain.User{ID: "cli_default", Role: domain.RoleUser}
+	}
+
+	result, err := handler.Handle(ctx, user, g.platformUID(), input)
+	if err != nil {
+		if _, writeErr := fmt.Fprintf(g.Writer, "Error: %v\n", err); writeErr != nil {
+			fmt.Fprintf(os.Stderr, "Error writing to CLI output: %v\n", writeErr)
+		}
+		return
+	}
+	if _, writeErr := fmt.Fprintln(g.Writer, result); writeErr != nil {
+		fmt.Fprintf(os.Stderr, "Error writing to CLI output: %v\n", writeErr)
+	}
+}
+
 // authenticate runs the login-or-restore flow and, on success, updates
 // currentUser/currentSession and propagates the authenticated identity to
 // the skill handler (if it supports PlatformUIDSetter) so skill-invoked
@@ -500,3 +638,42 @@ func parseCommand(input string) (bool, string, []string) {
 
 	return true, commandName, commandArgs
 }
+
+// isEnvCommand reports whether input's first token is exactly prefix — i.e.
+// input equals prefix (bare command, no args — routes to the handler's own
+// help output rather than falling through as unrecognized) or begins with
+// "prefix " (a genuine word-boundary match, never a longer command word that
+// merely starts with the same characters). This is the same discipline
+// IsMemoryCommand already follows for "/memory " (note trailing space); it
+// is what keeps "/memories ..." (plural, IsMemoriesCommand) from ever
+// colliding with "/memory " (singular, admin) or vice versa — AD-3,
+// verified in architecture.md's Integration Points section: the two
+// prefixes diverge at their 7th character ('y' vs 'i'), well before either
+// reaches a space.
+func isEnvCommand(input, prefix string) bool {
+	return input == prefix || strings.HasPrefix(input, prefix+" ")
+}
+
+// IsChatCommand checks if the input is a Chats environment command (FR-011-016).
+func IsChatCommand(input string) bool { return isEnvCommand(input, "/chat") }
+
+// IsProjectCommand checks if the input is a Projects environment command (FR-017-022).
+func IsProjectCommand(input string) bool { return isEnvCommand(input, "/project") }
+
+// IsJobCommand checks if the input is a Jobs environment command (FR-023-027).
+func IsJobCommand(input string) bool { return isEnvCommand(input, "/job") }
+
+// IsChoreCommand checks if the input is a Chores environment command (FR-028-033).
+func IsChoreCommand(input string) bool { return isEnvCommand(input, "/chore") }
+
+// IsHistoryCommand checks if the input is a History environment command (FR-034-036).
+func IsHistoryCommand(input string) bool { return isEnvCommand(input, "/history") }
+
+// IsMemoriesCommand checks if the input is a Memories environment command
+// (FR-037-038, plural "/memories" — distinct from IsMemoryCommand's
+// singular "/memory ", see isEnvCommand's doc comment for the AD-3
+// non-collision argument).
+func IsMemoriesCommand(input string) bool { return isEnvCommand(input, "/memories") }
+
+// IsSettingsCommand checks if the input is a Settings environment command (FR-039-043).
+func IsSettingsCommand(input string) bool { return isEnvCommand(input, "/settings") }
