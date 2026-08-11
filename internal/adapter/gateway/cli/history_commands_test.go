@@ -319,6 +319,44 @@ func TestHistoryCommand_UnknownSubcommand(t *testing.T) {
 	}
 }
 
+// TestHistoryCommand_ChatNotImplemented guards FR-036's deliberate
+// deferral: HistoryService has no chat/converse method to mirror. FR-003
+// (auto-review fix pass): "/history chat" must return a specific "not yet
+// implemented" message naming the command and FR-036, distinguishable from
+// a genuine typo — not the generic "Unknown history command" fallthrough
+// TestHistoryCommand_UnknownSubcommand above exercises for a real typo.
+func TestHistoryCommand_ChatNotImplemented(t *testing.T) {
+	h, _ := newTestHistoryHandler(t)
+	got, err := h.HandleHistoryCommand(context.Background(), testUser(), "alice", "/history chat some-run-id hello there")
+	if err != nil {
+		t.Fatalf("HandleHistoryCommand: %v", err)
+	}
+	if strings.Contains(strings.ToLower(got), "hello there") {
+		t.Fatalf("chat subcommand must not be implemented as new capability, got: %s", got)
+	}
+	// history_commands_test.go is package cli_test (black-box) and cannot
+	// reference the unexported historyChatNotImplementedMessage constant
+	// directly, so this asserts on the message's distinctive, stable
+	// content instead of exact equality — still "the specific message
+	// text," not merely "some non-crashing response" (tasks.md B.2).
+	if !strings.Contains(got, "'/history chat'") || !strings.Contains(got, "not yet implemented") || !strings.Contains(got, "FR-036") {
+		t.Errorf("expected a specific '/history chat ... not yet implemented ... FR-036' message, got: %s", got)
+	}
+	if strings.Contains(got, "Unknown history command") {
+		t.Errorf("expected a specific not-yet-implemented message, not the generic unknown-command fallthrough, got: %s", got)
+	}
+
+	// Bare "/history chat" (no id/message args) must also return the
+	// specific message, not fall through to generic showHelp().
+	bareGot, err := h.HandleHistoryCommand(context.Background(), testUser(), "alice", "/history chat")
+	if err != nil {
+		t.Fatalf("HandleHistoryCommand: %v", err)
+	}
+	if !strings.Contains(bareGot, "'/history chat'") || !strings.Contains(bareGot, "not yet implemented") {
+		t.Errorf("expected bare '/history chat' to also return the not-yet-implemented message, got: %s", bareGot)
+	}
+}
+
 // TestHistoryCommandHandler_SatisfiesEnvCommandHandler verifies
 // *HistoryCommandHandler implements cli.EnvCommandHandler directly via
 // Handle, and that Handle delegates to HandleHistoryCommand.

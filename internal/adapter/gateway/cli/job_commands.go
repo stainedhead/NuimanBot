@@ -27,9 +27,18 @@ type JobService interface {
 	DeleteJob(ctx context.Context, ownerUserID, jobID string) error
 }
 
+// jobChatNotImplementedMessage documents FR-026's deliberate deferral
+// (auto-review fix pass FR-003): "/job chat" is a known, deferred command,
+// not a typo — JobService has no chat/converse method to mirror, matching
+// Settings' existing "not yet implemented" convention rather than falling
+// through to the generic unrecognized-subcommand response, which was
+// indistinguishable from a genuine typo.
+const jobChatNotImplementedMessage = "'/job chat' is not yet implemented (deferred, see spec.md FR-026). Use '/job help' for available commands."
+
 // JobCommandHandler handles the Jobs environment's CLI commands
-// (FR-023–FR-027; FR-026 is deferred — see spec.md's Jobs section and
-// architecture.md's "Scope correction").
+// (FR-023–FR-027; FR-026 is deferred — see spec.md's Jobs section,
+// architecture.md's "Scope correction", and HandleJobCommand's "chat"
+// case).
 type JobCommandHandler struct {
 	service JobService
 }
@@ -70,6 +79,15 @@ func (h *JobCommandHandler) HandleJobCommand(ctx context.Context, _ *domain.User
 		return h.delete(ctx, ownerUserID, args)
 	case "help":
 		return h.showHelp(), nil
+	case "chat":
+		// FR-026 ("/job chat <id> <message>") is explicitly DEFERRED — no
+		// per-Job chat interface exists. A dedicated case (rather than
+		// falling through to the generic unrecognized-subcommand
+		// response) guards against accidentally building new CLI-only
+		// chat capability later, and responds with a specific "not yet
+		// implemented" message (FR-003, auto-review fix pass) instead of
+		// one indistinguishable from a genuine typo.
+		return jobChatNotImplementedMessage, nil
 	default:
 		return fmt.Sprintf("Unknown job command: %s\nUse '/job help' for usage information.", subcommand), nil
 	}

@@ -439,7 +439,10 @@ func TestHandleChoreCommand_CrossUserIsolation(t *testing.T) {
 
 // TestHandleChoreCommand_ChatNotImplemented guards FR-031's deliberate
 // deferral: ChoresService has no chat/converse method to mirror, so
-// "/chore chat ..." must never grow new CLI-only chat capability.
+// "/chore chat ..." must never grow new CLI-only chat capability. FR-003
+// (auto-review fix pass): the response must be a specific "not yet
+// implemented" message naming the command and FR-031, distinguishable from
+// a genuine typo — not the generic "Unknown chore command" fallthrough.
 func TestHandleChoreCommand_ChatNotImplemented(t *testing.T) {
 	h, _ := newTestChoreHandler(t)
 	user := &domain.User{ID: "u1", Role: domain.RoleUser}
@@ -451,8 +454,38 @@ func TestHandleChoreCommand_ChatNotImplemented(t *testing.T) {
 	if strings.Contains(strings.ToLower(result), "hello there") {
 		t.Fatalf("chat subcommand must not be implemented as new capability, got: %s", result)
 	}
+	if result != choreChatNotImplementedMessage {
+		t.Errorf("expected the specific choreChatNotImplementedMessage, got: %s", result)
+	}
+	if strings.Contains(result, "Unknown chore command") {
+		t.Errorf("expected a specific not-yet-implemented message, not the generic unknown-command fallthrough, got: %s", result)
+	}
+
+	// Bare "/chore chat" (no id/message args) must also return the
+	// specific message, not fall through to generic showHelp().
+	bareResult, err := h.HandleChoreCommand(context.Background(), user, "alice", "/chore chat")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if bareResult != choreChatNotImplementedMessage {
+		t.Errorf("expected bare '/chore chat' to also return choreChatNotImplementedMessage, got: %s", bareResult)
+	}
+}
+
+// TestHandleChoreCommand_UnknownSubcommandStillGeneric verifies a genuine
+// typo (not "chat") still gets the generic unrecognized-subcommand
+// response, so FR-003's fix for "chat" doesn't accidentally swallow real
+// typos into a misleading "not yet implemented" message.
+func TestHandleChoreCommand_UnknownSubcommandStillGeneric(t *testing.T) {
+	h, _ := newTestChoreHandler(t)
+	user := &domain.User{ID: "u1", Role: domain.RoleUser}
+
+	result, err := h.HandleChoreCommand(context.Background(), user, "alice", "/chore chta")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if !strings.Contains(result, "Unknown chore command") {
-		t.Errorf("expected an unrecognized-subcommand response for chat, got: %s", result)
+		t.Errorf("expected the generic unknown-subcommand response for a real typo, got: %s", result)
 	}
 }
 

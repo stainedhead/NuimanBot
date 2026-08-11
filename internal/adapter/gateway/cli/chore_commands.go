@@ -10,9 +10,17 @@ import (
 	"nuimanbot/internal/usecase/chores"
 )
 
+// choreChatNotImplementedMessage documents FR-031's deliberate deferral
+// (auto-review fix pass FR-003): "/chore chat" is a known, deferred
+// command, not a typo — ChoresService has no chat/converse method to
+// mirror, matching Settings' existing "not yet implemented" convention
+// rather than falling through to the generic unrecognized-subcommand
+// response, which was indistinguishable from a genuine typo.
+const choreChatNotImplementedMessage = "'/chore chat' is not yet implemented (deferred, see spec.md FR-031). Use '/chore help' for available commands."
+
 // ChoreCommandHandler handles the Chores environment's CLI commands
 // (FR-028–FR-033; FR-031's "/chore chat" is deliberately DEFERRED — see
-// HandleChoreCommand's default case).
+// HandleChoreCommand's "chat" case).
 type ChoreCommandHandler struct {
 	service *chores.Service
 }
@@ -54,13 +62,18 @@ func (h *ChoreCommandHandler) HandleChoreCommand(ctx context.Context, currentUse
 		return h.confirmSchedule(ctx, ownerUserID, args)
 	case "help":
 		return h.showHelp(), nil
-	default:
+	case "chat":
 		// FR-031 ("/chore chat <id> <message>") is explicitly DEFERRED —
-		// ChoresService has no chat/converse method to mirror. Falling
-		// through to this unrecognized-subcommand response (rather than a
-		// dedicated case) is deliberate, mirroring
-		// ProjectCommandHandler's FR-020 deferral: it guards against
-		// accidentally building new CLI-only chat capability later.
+		// ChoresService has no chat/converse method to mirror. A dedicated
+		// case (rather than falling through to the generic
+		// unrecognized-subcommand response), mirroring
+		// ProjectCommandHandler's FR-020 deferral: guards against
+		// accidentally building new CLI-only chat capability later, and
+		// responds with a specific "not yet implemented" message (FR-003,
+		// auto-review fix pass) instead of one indistinguishable from a
+		// genuine typo.
+		return choreChatNotImplementedMessage, nil
+	default:
 		return fmt.Sprintf("Unknown chore command: %s\nUse '/chore help' for usage information.", subcommand), nil
 	}
 }

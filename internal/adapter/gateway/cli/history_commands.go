@@ -22,6 +22,14 @@ const historyListDisplayLimit = 20
 // terminal.
 const historyContentPreviewLimit = 4000
 
+// historyChatNotImplementedMessage documents FR-036's deliberate deferral
+// (auto-review fix pass FR-003): "/history chat" is a known, deferred
+// command, not a typo — HistoryService has no chat/converse method to
+// mirror, matching Settings' existing "not yet implemented" convention
+// rather than falling through to the generic unrecognized-subcommand
+// response, which was indistinguishable from a genuine typo.
+const historyChatNotImplementedMessage = "'/history chat' is not yet implemented (deferred, see spec.md FR-036). Use '/history help' for available commands."
+
 // HistoryCommandHandler handles the History environment's CLI commands
 // (FR-034-035; FR-036's chat sub-command is deferred, see spec.md and
 // architecture.md's "Scope correction").
@@ -58,6 +66,16 @@ func (h *HistoryCommandHandler) HandleHistoryCommand(ctx context.Context, _ *dom
 		return h.showRun(ctx, ownerUserID, parts[2:])
 	case "help":
 		return h.showHelp(), nil
+	case "chat":
+		// FR-036 ("/history chat <run-id> <message>") is explicitly
+		// DEFERRED — HistoryService has no chat/converse method to
+		// mirror. A dedicated case (rather than falling through to the
+		// generic unrecognized-subcommand response) guards against
+		// accidentally building new CLI-only chat capability later, and
+		// responds with a specific "not yet implemented" message (FR-003,
+		// auto-review fix pass) instead of one indistinguishable from a
+		// genuine typo.
+		return historyChatNotImplementedMessage, nil
 	default:
 		return fmt.Sprintf("Unknown history command: %s\nUse '/history help' for usage information.", parts[1]), nil
 	}

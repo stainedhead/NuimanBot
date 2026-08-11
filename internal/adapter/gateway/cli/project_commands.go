@@ -11,9 +11,19 @@ import (
 	"nuimanbot/internal/usecase/projects"
 )
 
+// projectChatNotImplementedMessage documents FR-020's deliberate deferral
+// (auto-review fix pass FR-003): "/project chat" is a known, deferred
+// command, not a typo — ProjectsService has no chat/converse method to
+// mirror, matching Settings' existing "not yet implemented" convention
+// (retentionSetNotImplementedMessage, networkModeNotImplementedMessage in
+// settings_commands.go) rather than falling through to the generic
+// unrecognized-subcommand response, which was indistinguishable from a
+// genuine typo (e.g. "/project chta").
+const projectChatNotImplementedMessage = "'/project chat' is not yet implemented (deferred, see spec.md FR-020). Use '/project help' for available commands."
+
 // ProjectCommandHandler handles the Projects environment's CLI commands
 // (FR-017–FR-022; FR-020's "/project chat" is deliberately DEFERRED — see
-// HandleProjectCommand's default case).
+// HandleProjectCommand's "chat" case).
 type ProjectCommandHandler struct {
 	service *projects.Service
 }
@@ -55,12 +65,17 @@ func (h *ProjectCommandHandler) HandleProjectCommand(ctx context.Context, curren
 		return h.deleteProject(ctx, ownerUserID, args)
 	case "help":
 		return h.showHelp(), nil
-	default:
+	case "chat":
 		// FR-020 ("/project chat <id> <message>") is explicitly DEFERRED —
-		// ProjectsService has no chat/converse method to mirror. Falling
-		// through to this unrecognized-subcommand response (rather than a
-		// dedicated case) is deliberate: it guards against accidentally
-		// building new CLI-only chat capability later.
+		// ProjectsService has no chat/converse method to mirror. A
+		// dedicated case (rather than falling through to the generic
+		// unrecognized-subcommand response) is deliberate for two reasons:
+		// it guards against accidentally building new CLI-only chat
+		// capability later, and it lets this respond with a specific
+		// "not yet implemented" message (FR-003, auto-review fix pass)
+		// instead of one indistinguishable from a genuine typo.
+		return projectChatNotImplementedMessage, nil
+	default:
 		return fmt.Sprintf("Unknown project command: %s\nUse '/project help' for usage information.", subcommand), nil
 	}
 }

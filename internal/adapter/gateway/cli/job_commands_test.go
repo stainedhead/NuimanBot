@@ -105,9 +105,13 @@ func TestJobCommand_UnrecognizedSubcommand(t *testing.T) {
 	}
 }
 
+// TestJobCommand_ChatDeferred guards FR-026's deliberate deferral: /job
+// chat must not be recognized as a working subcommand (no new chat
+// capability built). FR-003 (auto-review fix pass): the response must be a
+// specific "not yet implemented" message naming the command and FR-026,
+// distinguishable from a genuine typo — not the generic "Unknown job
+// command" fallthrough.
 func TestJobCommand_ChatDeferred(t *testing.T) {
-	// FR-026 is explicitly deferred: /job chat must not be recognized as a
-	// working subcommand (no new chat capability built).
 	h := newTestJobHandler(t, nil)
 	out, err := h.HandleJobCommand(context.Background(), &domain.User{ID: "u1"}, "alice", "/job chat job-1 hello")
 	if err != nil {
@@ -115,6 +119,45 @@ func TestJobCommand_ChatDeferred(t *testing.T) {
 	}
 	if strings.Contains(out, "hello") {
 		t.Fatalf("expected /job chat to NOT be handled as a real chat command, got: %q", out)
+	}
+	// job_commands_test.go is package cli_test (black-box) and cannot
+	// reference the unexported jobChatNotImplementedMessage constant
+	// directly, so this asserts on the message's distinctive, stable
+	// content instead of exact equality — still "the specific message
+	// text," not merely "some non-crashing response" (tasks.md B.2).
+	if !strings.Contains(out, "'/job chat'") || !strings.Contains(out, "not yet implemented") || !strings.Contains(out, "FR-026") {
+		t.Errorf("expected a specific '/job chat ... not yet implemented ... FR-026' message, got: %q", out)
+	}
+	if strings.Contains(out, "Unknown job command") {
+		t.Errorf("expected a specific not-yet-implemented message, not the generic unknown-command fallthrough, got: %q", out)
+	}
+
+	// Bare "/job chat" (no id/message args) must also return the specific
+	// message, not fall through to generic showHelp().
+	bareOut, err := h.HandleJobCommand(context.Background(), &domain.User{ID: "u1"}, "alice", "/job chat")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(bareOut, "'/job chat'") || !strings.Contains(bareOut, "not yet implemented") {
+		t.Errorf("expected bare '/job chat' to also return the not-yet-implemented message, got: %q", bareOut)
+	}
+}
+
+// TestJobCommand_UnknownSubcommandStillGeneric verifies a genuine typo
+// (not "chat") still gets the generic unrecognized-subcommand response —
+// complementing (not duplicating) TestJobCommand_UnrecognizedSubcommand's
+// looser "/job bogus" check above with a typo shaped specifically to
+// confirm FR-003's new "chat" case doesn't over-match ("chta" vs "chat"),
+// so FR-003's fix for "chat" doesn't accidentally swallow real typos into
+// a misleading "not yet implemented" message.
+func TestJobCommand_UnknownSubcommandStillGeneric(t *testing.T) {
+	h := newTestJobHandler(t, nil)
+	out, err := h.HandleJobCommand(context.Background(), &domain.User{ID: "u1"}, "alice", "/job chta")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "Unknown job command") {
+		t.Errorf("expected the generic unknown-subcommand response for a real typo, got: %q", out)
 	}
 }
 

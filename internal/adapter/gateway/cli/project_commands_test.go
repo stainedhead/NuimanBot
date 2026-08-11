@@ -300,7 +300,10 @@ func TestHandleProjectCommand_CrossUserIsolation(t *testing.T) {
 
 // TestHandleProjectCommand_ChatNotImplemented guards FR-020's deliberate
 // deferral: ProjectsService has no chat/converse method to mirror, so
-// "/project chat ..." must never grow new CLI-only chat capability.
+// "/project chat ..." must never grow new CLI-only chat capability. FR-003
+// (auto-review fix pass): the response must be a specific "not yet
+// implemented" message naming the command and FR-020, distinguishable from
+// a genuine typo — not the generic "Unknown project command" fallthrough.
 func TestHandleProjectCommand_ChatNotImplemented(t *testing.T) {
 	h, _ := newTestProjectHandler(t)
 	user := &domain.User{ID: "u1", Role: domain.RoleUser}
@@ -312,8 +315,39 @@ func TestHandleProjectCommand_ChatNotImplemented(t *testing.T) {
 	if strings.Contains(strings.ToLower(result), "hello there") {
 		t.Fatalf("chat subcommand must not be implemented as new capability, got: %s", result)
 	}
+	if result != projectChatNotImplementedMessage {
+		t.Errorf("expected the specific projectChatNotImplementedMessage, got: %s", result)
+	}
+	if strings.Contains(result, "Unknown project command") {
+		t.Errorf("expected a specific not-yet-implemented message, not the generic unknown-command fallthrough, got: %s", result)
+	}
+
+	// Bare "/project chat" (no id/message args) — a user typing just this
+	// to discover what the subcommand does is exactly the scenario FR-003
+	// exists for; it must not fall through to generic showHelp() either.
+	bareResult, err := h.HandleProjectCommand(context.Background(), user, "alice", "/project chat")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if bareResult != projectChatNotImplementedMessage {
+		t.Errorf("expected bare '/project chat' to also return projectChatNotImplementedMessage, got: %s", bareResult)
+	}
+}
+
+// TestHandleProjectCommand_UnknownSubcommandStillGeneric verifies a genuine
+// typo (not "chat") still gets the generic unrecognized-subcommand
+// response, so FR-003's fix for "chat" doesn't accidentally swallow real
+// typos into a misleading "not yet implemented" message.
+func TestHandleProjectCommand_UnknownSubcommandStillGeneric(t *testing.T) {
+	h, _ := newTestProjectHandler(t)
+	user := &domain.User{ID: "u1", Role: domain.RoleUser}
+
+	result, err := h.HandleProjectCommand(context.Background(), user, "alice", "/project chta")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if !strings.Contains(result, "Unknown project command") {
-		t.Errorf("expected an unrecognized-subcommand response for chat, got: %s", result)
+		t.Errorf("expected the generic unknown-subcommand response for a real typo, got: %s", result)
 	}
 }
 
