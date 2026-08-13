@@ -109,9 +109,10 @@ gateways:
     enabled: true
     relays:
       - "wss://feral-sysd.communities.buzz.xyz"
-    # channel_ids: not yet known — leave unset until the workspace owner
-    # adds this agent to a channel and shares its channel ID (see
-    # support_docs/buzz-guide.md#getting-a-channel-id)
+    channel_ids:
+      - "79405b35-8aba-498d-b73b-6a0912bbd2f4"  # Welcome
+      - "3a6a69fc-05a5-55cb-a601-0e12afc77c07"  # general
+      - "db682b45-e620-524b-a79a-d3b8746f9319"  # welcome-everyone
     # private_key: left unset — NuimanBot generates and stores one
     # automatically in the encrypted credential vault on first startup
 
