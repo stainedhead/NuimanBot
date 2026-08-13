@@ -19,16 +19,17 @@
 8. [API Documentation](#api-documentation)
 9. [MCP Client Architecture](#mcp-client-architecture)
 10. [Buzz Gateway & Nostr Protocol Architecture](#buzz-gateway--nostr-protocol-architecture)
-11. [REST API Security Architecture](#rest-api-security-architecture)
-12. [TLS Auto-Generation Architecture](#tls-auto-generation-architecture)
-13. [Web Admin Security Architecture](#web-admin-security-architecture)
-14. [Ingatan Memory Backend Architecture](#ingatan-memory-backend-architecture)
-15. [Persistent Agent Workspace Architecture](#persistent-agent-workspace-architecture)
-16. [CLI Parity Architecture](#cli-parity-architecture)
-17. [Configuration](#configuration)
-18. [Testing Strategy](#testing-strategy)
-19. [CI/CD Pipeline](#cicd-pipeline)
-20. [Deployment Architecture](#deployment-architecture)
+11. [Buzz ACP Harness Architecture](#buzz-acp-harness-architecture)
+13. [REST API Security Architecture](#rest-api-security-architecture)
+14. [TLS Auto-Generation Architecture](#tls-auto-generation-architecture)
+15. [Web Admin Security Architecture](#web-admin-security-architecture)
+16. [Ingatan Memory Backend Architecture](#ingatan-memory-backend-architecture)
+17. [Persistent Agent Workspace Architecture](#persistent-agent-workspace-architecture)
+18. [CLI Parity Architecture](#cli-parity-architecture)
+19. [Configuration](#configuration)
+20. [Testing Strategy](#testing-strategy)
+21. [CI/CD Pipeline](#cicd-pipeline)
+22. [Deployment Architecture](#deployment-architecture)
 
 ---
 
@@ -1380,6 +1381,55 @@ This is called once at startup in `cmd/nuimanbot/main.go` before constructing th
 ### `buzz_relay_connections` Metric
 
 `internal/infrastructure/metrics/prometheus.go` declares `buzz_relay_connections` as a plain `Gauge` (not labeled by `relay_url`/`status` — `nostr.Client` only exposes an aggregate `ConnectedRelayCount()`, not per-relay connect state, so a `GaugeVec` would carry unused labels). `buzz.Gateway.Start()` launches a background goroutine (`monitorRelayConnections`, `internal/adapter/gateway/buzz/gateway.go`) that polls `Client.ConnectedRelayCount()` every 250ms and sets the gauge until the gateway's context is canceled. All four Buzz metrics (`buzz_events_received_total`, `buzz_events_published_total`, `buzz_signature_verification_failures_total`, `buzz_relay_connections`) are live.
+
+---
+
+## Buzz ACP Harness Architecture
+
+### Overview
+
+Buzz Desktop supports a second, structurally different way to run an agent inside it: instead of NuimanBot connecting outward to a Nostr relay as a `domain.Gateway` (the integration documented above), Buzz's `buzz-acp` bridge binary spawns NuimanBot itself as a **subprocess, one per conversation**, and drives it over stdio using the [Agent Client Protocol](https://agentclientprotocol.com) (ACP) — JSON-RPC 2.0 over newline-delimited JSON, the same mechanism Buzz uses to run `goose`, `codex-acp`, and `claude-agent-acp` as custom harnesses (`buzz-acp --agent-command <bin> --agent-args <args>`).
+
+This is a different integration surface with a different trust/lifecycle model than the Buzz gateway:
+
+| | Buzz Gateway (`internal/adapter/gateway/buzz/`) | Buzz ACP Harness (`internal/adapter/acp/`) |
+|---|---|---|
+| Process lifecycle | One long-running NuimanBot process, connects outward | One NuimanBot subprocess per conversation, spawned by Buzz |
+| Transport | WebSocket to a Nostr relay | JSON-RPC over the subprocess's own stdin/stdout |
+| Identity | A Nostr keypair, self-published | Implicit — trust derives from being the process Buzz chose to spawn |
+| Multi-channel | Subscribes to configured `channel_ids` | One conversation per process; no channel concept |
+
+Both integrations funnel into the same `chat.Service.ProcessMessage` — see `internal/usecase/chat/service.go` — so RBAC, tool execution, memory, and security screening behave identically regardless of which surface delivered the message. The two are independent: enabling one does not require or affect the other.
+
+### `internal/adapter/acp/acp.go` — the ACP Server
+
+`ChatService.ProcessMessage` is synchronous request/response, which is exactly ACP's `session/prompt` shape — unlike the async `OnMessage`/`Send` pair `domain.Gateway` expects for the WebSocket/polling gateways, so this is a standalone `Server`, not a `domain.Gateway` implementation.
+
+- **Transport**: `Run(ctx, in, out io.Reader/io.Writer)` scans `in` line-by-line (newline-delimited JSON, not LSP-style `Content-Length` framing) and dispatches each line's JSON-RPC request in its own goroutine — necessary so a `session/cancel` notification can interrupt a still-in-flight `session/prompt` call for the same session; `Run` waits for every in-flight handler before returning. All writes to `out` go through a single mutex-guarded `write` method issuing exactly one `io.Writer.Write` call per JSON-RPC frame.
+- **Session state**: `session/new` generates a random session ID (`crypto/rand`, not a counter) and maps it to a `domain.IncomingMessage.PlatformUID` of `"acp-<sessionID>"`; every `session/prompt` for that session reuses the same `PlatformUID`, so `getConversationID`/`resolveUser` (see `chat.Service`) keep a consistent conversation thread and RBAC identity across a session's calls. Session state is in-memory only — it does not survive a process restart, matching Buzz's per-conversation subprocess model (a fresh process = a fresh session there anyway) but explicitly not surviving a crash-and-respawn.
+- **Cancellation**: each `session/prompt` derives a cancelable `context.Context` from `Run`'s ctx and stores its `context.CancelFunc` on the `session` (mutex-guarded, cleared when the call finishes); `session/cancel` looks it up and calls it. A canceled prompt returns `{"stopReason":"cancelled"}` rather than a JSON-RPC error.
+- **Platform identity**: `domain.PlatformACP = "acp"` (`internal/domain/message.go`) is a new platform constant; `defaultRoleForPlatform` (unmodified) already falls through to `RoleGuest` for any platform other than `PlatformCLI`, so a new ACP contact gets the same default role as a new Telegram/Slack/Buzz-gateway contact — no ACP-specific RBAC code was needed.
+
+### `cmd/nuimanbot/acp.go` — the Subcommand Entrypoint
+
+`nuimanbot acp` (checked as `os.Args[1]` at the very top of `main()`, before any output) runs `runACP(ctx)` instead of the normal `Run()`. It reuses `cmd/nuimanbot/main.go`'s existing in-package bootstrap helpers directly (`initializeFileStorage`, `initializeLLMService`, `registerBuiltInTools`, `registerMCPTools`, `wireConfirmationStore`, `buildOutputValidator`) rather than duplicating them — both are `package main`, so this required no new shared package. It wires only what `chat.Service.ProcessMessage` actually needs (config, vault, storage, security, LLM, tools, chat) and deliberately starts **none** of: the health-check server, web admin UI, REST API, or any gateway (CLI/Slack/Telegram/Buzz) — Buzz spawns one subprocess per conversation, so every one of them trying to bind the same fixed `:8080`/`:8081` ports would collide, and there is no REPL/relay loop for an ACP subprocess to run.
+
+**stdout discipline** was the main correctness hazard here: stdout is reserved exclusively for the ACP JSON-RPC stream from the moment `runACP` is entered — a single stray byte (a log line, a startup banner, a debug print) corrupts the stream for the host. Fixed at three points, all now correct for every caller (not just ACP), not just gated behind an ACP check:
+- `internal/infrastructure/logger.Config` gained an `Output io.Writer` field (nil defaults to the historical `os.Stdout`, preserving every existing caller's behavior); `runACP` sets it to `os.Stderr`.
+- `internal/config/loader.go`'s two startup diagnostic prints ("Config file used: ...", "No config file found...") moved from `fmt.Println`/`fmt.Printf` to `fmt.Fprintln`/`fmt.Fprintf(os.Stderr, ...)` — these are diagnostics, not data, on any entrypoint.
+- `ensureEncryptionKeyQuiet` (a separate function from `main()`'s `ensureEncryptionKey`, not a shared "quiet" flag, to avoid touching the well-exercised interactive first-run banner) generates/persists a first-run encryption key exactly like the interactive path, but writes its output to `os.Stderr`.
+
+### Registering NuimanBot with Buzz
+
+Configured on Buzz's side (not in NuimanBot's `config.yaml`) via `buzz-acp --agent-command /path/to/bin/nuimanbot --agent-args acp`, or the equivalent `agent_command_override`/`agent_args` keys in `~/Library/Application Support/xyz.block.buzz.app/agents/managed-agents.json` / `BUZZ_ACP_AGENT_COMMAND`/`BUZZ_ACP_AGENT_ARGS` env vars — see `support_docs/buzz-acp-harness-guide.md` for the full setup walkthrough.
+
+### Known Gaps (Not Blockers, Documented Follow-Ups)
+
+- **Protocol field names are best-effort, not yet verified against a live Buzz session.** `initialize`'s response shape mirrors field names observed in Buzz's own `buzz-acp` bridge output (`agentCapabilities`, `agentInfo`, `authMethods`), but `session/new`/`session/prompt`/`session/update`'s exact param/result shapes were implemented from the general ACP spec, not confirmed against a real Buzz-originated request. If Buzz's actual wire messages differ, adjust the types in `internal/adapter/acp/acp.go` — they're centralized there, not scattered.
+- **No real token-level streaming.** `chat.Service.ProcessMessage` is synchronous and non-streaming (same as every other gateway), so `session/prompt` emits exactly one `session/update` notification (the full reply as a single `agent_message_chunk`) before its final response, not incremental chunks.
+- **No per-session MCP tools.** Buzz hands each ACP session an MCP server at spawn time (observed `mcp_cmd`/`mcpCapabilities.http` in Buzz's own initialize response); NuimanBot's MCP client (`registerMCPTools`) only loads from a static `mcp.json` at startup, identical for every platform. A session-scoped MCP server from Buzz is not consumed.
+- **No `session/request_permission` handling.** Buzz runs its spawned agents with `permission_mode=bypassPermissions`, so this was not required for a first working version; NuimanBot's own confirmation-gate (Part C) still applies independently via `chat.Service`'s existing confirmation-store wiring regardless of ACP permission handling.
+- **Concurrent per-conversation subprocesses share file-based storage with no cross-process locking.** `internal/infrastructure/storage`'s file-repository locking (`sync.RWMutex` in `FileConversationRepository` et al.) is in-process only. Buzz spawning several conversation subprocesses at once (observed parallelism: 10+) means concurrent OS processes can race on the same `./data` files (e.g. `domain_users.json`) and, on a completely fresh install, on `.env`'s encryption-key generation (`ensureEncryptionKeyQuiet`) if more than one subprocess starts before a key exists. Not fixed here — the practical mitigation (run `./bin/nuimanbot` once, outside Buzz, before registering the ACP harness, so `.env`/`./data` are already initialized) is documented in `support_docs/buzz-acp-harness-guide.md`'s Known Limitations. A real fix would need either a cross-process file lock or a move off file-based storage for concurrent-writer scenarios — out of scope for this feature.
 
 ---
 

@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -20,11 +21,21 @@ const (
 type Config struct {
 	Level  LogLevel
 	Format string // "json" or "text"
+	// Output is where log records are written. Nil preserves the historical
+	// default of os.Stdout. The ACP entrypoint (cmd/nuimanbot/acp.go) sets
+	// this to os.Stderr — stdout there is reserved exclusively for the ACP
+	// JSON-RPC stream, and a stray log line on stdout would corrupt it.
+	Output io.Writer
 }
 
 // Initialize sets up the global slog logger
 func Initialize(cfg Config) {
 	level := parseLogLevel(cfg.Level)
+
+	output := cfg.Output
+	if output == nil {
+		output = os.Stdout
+	}
 
 	var handler slog.Handler
 	opts := &slog.HandlerOptions{
@@ -32,9 +43,9 @@ func Initialize(cfg Config) {
 	}
 
 	if cfg.Format == "json" {
-		handler = slog.NewJSONHandler(os.Stdout, opts)
+		handler = slog.NewJSONHandler(output, opts)
 	} else {
-		handler = slog.NewTextHandler(os.Stdout, opts)
+		handler = slog.NewTextHandler(output, opts)
 	}
 
 	logger := slog.New(handler)

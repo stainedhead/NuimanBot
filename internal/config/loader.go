@@ -46,10 +46,13 @@ func LoadConfig(configPaths ...string) (*NuimanBotConfig, error) {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
 			return nil, fmt.Errorf("failed to read config file: %w", err)
 		}
-		// If config file not found, proceed, assuming env vars will provide config
-		fmt.Println("No config file found, loading configuration from environment variables only.")
+		// If config file not found, proceed, assuming env vars will provide
+		// config. Written to stderr, not stdout: LoadConfig is called by
+		// every entrypoint, including cmd/nuimanbot's ACP subcommand, whose
+		// stdout is reserved exclusively for the ACP JSON-RPC stream.
+		fmt.Fprintln(os.Stderr, "No config file found, loading configuration from environment variables only.")
 	} else {
-		fmt.Printf("Config file used: %s\n", v.ConfigFileUsed())
+		fmt.Fprintf(os.Stderr, "Config file used: %s\n", v.ConfigFileUsed())
 	}
 
 	var cfg NuimanBotConfig

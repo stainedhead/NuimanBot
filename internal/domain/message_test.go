@@ -16,6 +16,7 @@ func TestPlatformConstants(t *testing.T) {
 		{"slack", domain.PlatformSlack, "slack"},
 		{"cli", domain.PlatformCLI, "cli"},
 		{"buzz", domain.PlatformBuzz, "buzz"},
+		{"acp", domain.PlatformACP, "acp"},
 	}
 
 	for _, tt := range tests {
