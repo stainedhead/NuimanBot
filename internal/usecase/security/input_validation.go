@@ -28,11 +28,30 @@ func NewDefaultInputValidator() *DefaultInputValidator {
 	// Initialize prompt injection patterns once, from the shared pattern set.
 	v.promptPatterns = defaultPromptInjectionPatterns().all()
 
-	// Initialize command injection patterns once
+	// Initialize command injection patterns once. Deliberately excludes a
+	// bare ")" and "\n"/"\r" — extremely common in ordinary conversational
+	// text (parentheticals, ":)" emoticons, any multi-line message) and not
+	// meaningful shell-injection signals on their own. Confirmed via a real
+	// production false positive: a normal multi-sentence chat message sent
+	// through the Buzz ACP harness was rejected outright as "potential
+	// command injection" purely for containing a newline, with no actual
+	// shell content anywhere in it — and since Buzz's delivery queue is
+	// per-channel FIFO with retry, that one rejected message blocked every
+	// later message in the same channel too.
+	//
+	// "<"/">"/"<<"/">>" are NOT excluded, despite being common in casual
+	// chat (comparisons, ">> quoted" reply style) — internal/adapter/api/
+	// middleware.Validate() reuses this same DefaultInputValidator for REST
+	// API request bodies, where "<"/">" are load-bearing for rejecting HTML/
+	// script-tag payloads (see validate_test.go's <script>/<img onerror=...>
+	// cases) — a genuinely different threat model (data that may later be
+	// rendered as HTML) than natural-language chat text. Splitting these two
+	// call sites onto separately-configured validator instances would let
+	// chat text drop "<"/">" too without weakening the API's XSS check, but
+	// wasn't undertaken here — this fix targets the confirmed, actively
+	// user-blocking newline false positive specifically.
 	v.metacharacters = []string{
-		";", "&&", "||", "|", "`", "$(",
-		"$(", "${", ")", ">>", ">", "<<", "<",
-		"\n", "\r",
+		";", "&&", "||", "|", "`", "$(", "${", ">>", ">", "<<", "<",
 	}
 
 	v.dangerousCommands = []string{

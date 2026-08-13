@@ -236,6 +236,41 @@ func TestValidateInput_CommandInjection(t *testing.T) {
 	}
 }
 
+// TestValidateInput_CommandInjection_DoesNotFlagOrdinaryChat guards against a
+// real production incident: a normal multi-sentence chat message sent via
+// the Buzz ACP harness was rejected outright as "potential command
+// injection" purely for containing a newline, blocking that message (and,
+// since Buzz's delivery queue is per-channel FIFO with retry, every message
+// behind it) indefinitely. Bare ")" and "\n"/"\r" — extremely common in
+// ordinary text — must not trip this check alone.
+//
+// "<"/">" are deliberately NOT covered here even though they're also common
+// in casual chat (e.g. "5 > 3") — they remain flagged because
+// internal/adapter/api/middleware.Validate() reuses this same validator for
+// REST API request bodies, where "<"/">" are load-bearing for rejecting
+// HTML/script-tag payloads (see that package's validate_test.go). See
+// NewDefaultInputValidator's comment for the full trade-off.
+func TestValidateInput_CommandInjection_DoesNotFlagOrdinaryChat(t *testing.T) {
+	validator := security.NewDefaultInputValidator()
+	ctx := context.Background()
+
+	benign := []string{
+		"hi, how are you?",
+		"why can't I see your replies in this thread\ncan you send messages now?\ni only see your replies at the bottom of the screen",
+		"let's meet later (say around 3pm)",
+		"here's a quick summary:\n- point one\n- point two\n- point three",
+		"smiley for you :)",
+	}
+
+	for _, input := range benign {
+		t.Run(input, func(t *testing.T) {
+			if _, err := validator.ValidateInput(ctx, input, 10000); err != nil {
+				t.Errorf("ValidateInput(%q) unexpectedly failed: %v", input, err)
+			}
+		})
+	}
+}
+
 func TestValidateInput_Sanitization(t *testing.T) {
 	validator := security.NewDefaultInputValidator()
 	ctx := context.Background()

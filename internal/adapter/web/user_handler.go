@@ -100,13 +100,18 @@ func (s *Server) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 		email := sanitizedFormValue(r, "primaryEmail")
 		role := sanitizedFormValue(r, "role")
 
-		// Create user profile
-		profile := &domain.UserProfile{
-			UserID:       userID,
-			FirstName:    firstName,
-			LastName:     lastName,
-			PrimaryEmail: email,
-			Role:         domain.Role(role),
+		// Create user profile. Built via NewUserProfile rather than a bare
+		// struct literal so it gets the same defaults every other profile
+		// creation path relies on (DataDirectory, Enabled, PrimaryLanguage,
+		// Timezone, timestamps) — the previous bare-literal version left
+		// DataDirectory empty, which profile.Service.CreateProfile's
+		// validation rejects outright ("dataDirectory is required"),
+		// meaning this form could never successfully create a user.
+		profile := domain.NewUserProfile(userID, email, domain.UserTypeIndividual)
+		profile.FirstName = firstName
+		profile.LastName = lastName
+		if role != "" {
+			profile.Role = domain.Role(role)
 		}
 
 		if s.profileService != nil {

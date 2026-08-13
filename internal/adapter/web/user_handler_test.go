@@ -225,6 +225,56 @@ func TestUserCreateSubmit(t *testing.T) {
 	}
 }
 
+// TestUserCreateSubmit_ProducesAValidProfile guards against the bug a real
+// admin hit in production: handleUserCreate built *domain.UserProfile via a
+// bare struct literal, leaving DataDirectory (and Enabled/PrimaryLanguage/
+// Timezone/timestamps) unset. The mock used elsewhere in this file doesn't
+// validate (several other tests rely on that leniency to seed minimal
+// fixture profiles), so this asserts directly on what handleUserCreate
+// actually produced rather than relying on the mock to reject it —
+// profile.Validate() is the same check the real profile.Service.
+// CreateProfile runs before persisting.
+func TestUserCreateSubmit_ProducesAValidProfile(t *testing.T) {
+	server := NewServer(":0")
+	auth := server.auth
+	profileService := NewMockProfileService()
+	server.SetProfileService(profileService)
+
+	if err := auth.AddUser("admin", "password", "admin"); err != nil {
+		t.Fatalf("AddUser failed: %v", err)
+	}
+	sessionID := auth.CreateSession("admin", "admin")
+
+	form := url.Values{}
+	form.Add("userID", "newuser2")
+	form.Add("firstName", "Jane")
+	form.Add("lastName", "Smith")
+	form.Add("primaryEmail", "jane2@example.com")
+	form.Add("role", "user")
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/users/create", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(&http.Cookie{Name: "session_id", Value: sessionID})
+	w := httptest.NewRecorder()
+
+	server.handleUserCreate(w, req)
+
+	if w.Code != http.StatusFound && w.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect status, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	profile, err := profileService.GetProfile(context.Background(), "newuser2")
+	if err != nil {
+		t.Fatalf("expected user to be created, got error: %v", err)
+	}
+	if err := profile.Validate(); err != nil {
+		t.Errorf("handleUserCreate produced an invalid profile: %v (this is exactly what made every real submission of this form fail with \"profile validation failed: ...\")", err)
+	}
+	if profile.DataDirectory == "" {
+		t.Error("expected DataDirectory to be set")
+	}
+}
+
 // TestUserDelete tests deleting a user
 func TestUserDelete(t *testing.T) {
 	server := NewServer(":0")
