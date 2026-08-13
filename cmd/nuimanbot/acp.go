@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/joho/godotenv"
+
 	"nuimanbot/internal/adapter/acp"
 	"nuimanbot/internal/config"
 	"nuimanbot/internal/infrastructure/crypto"
@@ -113,6 +115,11 @@ func runACP(ctx context.Context) error {
 
 	conversationAdapter := &conversationRepositoryAdapter{repo: fileRepos.Conversation}
 	chatService := chat.NewService(llmService, conversationAdapter, toolExecutionService, securityService, domainUserService)
+	chatService.SetLLMDefaults(chat.LLMDefaults{
+		Model:       cfg.LLM.DefaultModel.Primary,
+		MaxTokens:   cfg.LLM.DefaultModel.MaxTokens,
+		Temperature: cfg.LLM.DefaultModel.Temperature,
+	})
 
 	confirmationStorePath := storagePath + "/confirmations.json"
 	confirmationStore := infrasecurity.NewFileConfirmationStore(confirmationStorePath, cfg.Security.Confirmation.ResolvedTimeout())
@@ -133,6 +140,13 @@ func runACP(ctx context.Context) error {
 // interactive path (main()'s banner, which real users rely on to actually
 // see and save a newly generated key) is untouched by this change.
 func ensureEncryptionKeyQuiet() error {
+	// See ensureEncryptionKey's matching comment in main.go: without loading
+	// .env first, a key already saved from a prior run is invisible to
+	// IsEncryptionKeySet in a freshly spawned process, and this would
+	// regenerate (and corrupt the pairing with) an existing vault on every
+	// single ACP subprocess spawn.
+	_ = godotenv.Load() //nolint:errcheck // .env file is optional
+
 	if crypto.IsEncryptionKeySet() {
 		return nil
 	}

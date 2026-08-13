@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
+
 	"nuimanbot/internal/adapter/api"
 	cliadapter "nuimanbot/internal/adapter/cli"
 	memoryfactory "nuimanbot/internal/adapter/factory"
@@ -1438,6 +1440,18 @@ func buildAlertingConfig(cfg *config.NuimanBotConfig) alerting.Config {
 // If not, it generates a new key, displays it to the user with warnings,
 // and saves it to the .env file for future use.
 func ensureEncryptionKey() error {
+	// Load .env into the process environment before checking whether a key
+	// is already set. Without this, a key already saved to .env on a prior
+	// run is invisible to IsEncryptionKeySet (which only checks the OS
+	// environment, and a freshly spawned process — not one that inherited
+	// the var from a parent shell — starts with no such var set), so every
+	// fresh process invocation would regenerate a new key and append it to
+	// .env instead of reusing the one that actually encrypted the existing
+	// vault, corrupting it (config.LoadConfig also calls godotenv.Load,
+	// harmlessly redundantly, since godotenv.Load never overrides an
+	// already-set var).
+	_ = godotenv.Load() //nolint:errcheck // .env file is optional
+
 	// Check if key is already set
 	if crypto.IsEncryptionKeySet() {
 		return nil
