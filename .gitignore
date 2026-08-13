@@ -43,6 +43,7 @@ data/certs/
 data/users.json
 data/domain_users.json
 data/audit/
+data/vault.enc
 
 # CLI session token (auto-generated on login, never committed — AD-2)
 .nuimanbot_session
