@@ -9,6 +9,7 @@ package chats
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -61,22 +62,48 @@ func (a *conversationExportAdapter) ListConversations(ctx context.Context, userI
 	return out, nil
 }
 
-// Service orchestrates Chat create/list/get/delete/export.
+// ChatProcessor is the subset of chat.Service this package depends on to
+// actually invoke the agent for a Chat message (as opposed to just
+// persisting it — see SendMessage). Declared here, at the point of use, per
+// this project's interface convention; satisfied by *chat.Service without
+// any adapter.
+type ChatProcessor interface {
+	ProcessMessageInConversation(ctx context.Context, conversationID string, user *domain.User, incomingMsg *domain.IncomingMessage) (domain.OutgoingMessage, error)
+}
+
+// UserService resolves/creates/updates the RBAC-relevant domain.User a Chat
+// message is attributed to. Mirrors chat.Service's own (unexported)
+// UserService interface shape — declared separately here so this package
+// doesn't need to import that one just for the type name.
+type UserService interface {
+	GetUserByPlatformUID(ctx context.Context, platform domain.Platform, platformUID string) (*domain.User, error)
+	CreateUser(ctx context.Context, platform domain.Platform, platformUID string, role domain.Role) (*domain.User, error)
+	UpdateUserRole(ctx context.Context, userID string, role domain.Role) error
+}
+
+// Service orchestrates Chat create/list/get/delete/export/send.
 type Service struct {
 	conversations domain.ConversationRepository
 	exporter      *chat.Service
+	chatProcessor ChatProcessor // nil disables SendMessage (AppendUserMessage-only callers, e.g. the CLI's /chat environment, don't need it)
+	userService   UserService   // nil disables SendMessage, same as chatProcessor
 	now           func() time.Time
 }
 
-// NewService creates a Chats Service backed by conversations.
-func NewService(conversations domain.ConversationRepository) *Service {
+// NewService creates a Chats Service backed by conversations. chatProcessor
+// and userService back SendMessage (agent invocation); pass nil for both if
+// a caller only needs create/list/get/delete/export (SendMessage returns an
+// error if called without them configured).
+func NewService(conversations domain.ConversationRepository, chatProcessor ChatProcessor, userService UserService) *Service {
 	adapter := &conversationExportAdapter{repo: conversations}
 	return &Service{
 		conversations: conversations,
 		// Only memoryRepo is ever touched by ExportConversation; the other
 		// four chat.Service dependencies are intentionally nil here.
-		exporter: chat.NewService(nil, adapter, nil, nil, nil),
-		now:      time.Now,
+		exporter:      chat.NewService(nil, adapter, nil, nil, nil),
+		chatProcessor: chatProcessor,
+		userService:   userService,
+		now:           time.Now,
 	}
 }
 
@@ -163,6 +190,67 @@ func (s *Service) AppendUserMessage(ctx context.Context, ownerUserID, chatID, co
 		Timestamp: s.now(),
 	}
 	return s.conversations.AppendMessage(ctx, chatID, msg)
+}
+
+// SendMessage appends a user-authored message to a Chat the caller owns,
+// then invokes the agent (LLM/tool/RBAC pipeline, via chatProcessor) for a
+// reply within that Chat's own conversation thread — chatID is passed
+// straight through as chat.Service's conversationID, so the reply lands in
+// the same thread the caller just wrote to, and every other Chat the same
+// owner has stays independent (see chat.ProcessMessageInConversation's doc
+// comment). Both the user's message and the assistant's reply are
+// persisted by chatProcessor itself; SendMessage does not separately call
+// AppendUserMessage or write the reply — doing so would duplicate what
+// chat.Service.processTurn's own saveTurnMessages already does.
+//
+// role is the caller's own already-authenticated role (e.g. from a web
+// session) — NOT chat.Service's defaultRoleForPlatform Guest-default, which
+// exists for platforms where the sender hasn't proven their identity
+// (Telegram/Slack/Buzz). A web Chats user already has: use their real role.
+func (s *Service) SendMessage(ctx context.Context, ownerUserID, chatID, content, role string) (domain.OutgoingMessage, error) {
+	if s.chatProcessor == nil || s.userService == nil {
+		return domain.OutgoingMessage{}, fmt.Errorf("chats: SendMessage is not configured (chatProcessor/userService unset)")
+	}
+	if _, err := s.GetChat(ctx, ownerUserID, chatID); err != nil {
+		return domain.OutgoingMessage{}, err
+	}
+
+	user, err := s.resolveWebUser(ctx, ownerUserID, role)
+	if err != nil {
+		return domain.OutgoingMessage{}, fmt.Errorf("failed to resolve chat user: %w", err)
+	}
+
+	incoming := &domain.IncomingMessage{
+		ID:          uuid.NewString(),
+		Platform:    domain.PlatformWeb,
+		PlatformUID: ownerUserID,
+		Text:        content,
+		Timestamp:   s.now(),
+	}
+	return s.chatProcessor.ProcessMessageInConversation(ctx, chatID, user, incoming)
+}
+
+// resolveWebUser gets or creates the RBAC domain.User for
+// (domain.PlatformWeb, ownerUserID), keeping its Role in sync with the
+// caller's current authenticated role — a web login's role can change
+// (promotion/demotion) after the domain.User was first created, unlike
+// Telegram/Slack senders, which never carry an independently-known role to
+// reconcile against.
+func (s *Service) resolveWebUser(ctx context.Context, ownerUserID, role string) (*domain.User, error) {
+	user, err := s.userService.GetUserByPlatformUID(ctx, domain.PlatformWeb, ownerUserID)
+	if err != nil {
+		if !errors.Is(err, domain.ErrUserNotFound) {
+			return nil, err
+		}
+		return s.userService.CreateUser(ctx, domain.PlatformWeb, ownerUserID, domain.Role(role))
+	}
+	if string(user.Role) != role {
+		if err := s.userService.UpdateUserRole(ctx, user.ID, domain.Role(role)); err != nil {
+			return nil, err
+		}
+		user.Role = domain.Role(role)
+	}
+	return user, nil
 }
 
 // ExportChat exports a Chat's full transcript (FR-016), enforcing

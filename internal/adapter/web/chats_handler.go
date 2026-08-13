@@ -6,8 +6,10 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"nuimanbot/internal/domain"
+	"nuimanbot/internal/infrastructure/metrics"
 	"nuimanbot/internal/usecase/chat"
 )
 
@@ -24,6 +26,10 @@ type ChatsService interface {
 	GetChat(ctx context.Context, ownerUserID, chatID string) (*domain.Conversation, error)
 	DeleteChat(ctx context.Context, ownerUserID, chatID string) error
 	AppendUserMessage(ctx context.Context, ownerUserID, chatID, content string) error
+	// SendMessage appends a user message and invokes the agent for a reply
+	// within the same Chat thread — this is what actually makes the Chats
+	// environment interactive; AppendUserMessage alone only persists.
+	SendMessage(ctx context.Context, ownerUserID, chatID, content, role string) (domain.OutgoingMessage, error)
 	ExportChat(ctx context.Context, ownerUserID, chatID string, format chat.ExportFormat) (string, error)
 }
 
@@ -162,7 +168,9 @@ func (s *Server) handleChatDetail(w http.ResponseWriter, r *http.Request, user *
 	}
 }
 
-// handleChatMessage appends a user message to a Chat the caller owns.
+// handleChatMessage appends a user message to a Chat the caller owns and
+// invokes the agent for a reply within that same Chat thread (both
+// messages are persisted by SendMessage itself — see its doc comment).
 func (s *Server) handleChatMessage(w http.ResponseWriter, r *http.Request, user *User, id string) {
 	if !s.validCSRF(r) {
 		http.Error(w, "Invalid CSRF token", http.StatusForbidden)
@@ -171,15 +179,20 @@ func (s *Server) handleChatMessage(w http.ResponseWriter, r *http.Request, user 
 
 	content := sanitizedFormValue(r, "content")
 	if content != "" {
-		if err := s.chatsService.AppendUserMessage(r.Context(), user.Username, id, content); err != nil {
+		start := time.Now()
+		_, err := s.chatsService.SendMessage(r.Context(), user.Username, id, content, user.Role)
+		metrics.WebChatTurnDuration.Observe(time.Since(start).Seconds())
+		if err != nil {
+			metrics.WebChatTurnsTotal.WithLabelValues("error").Inc()
 			if errors.Is(err, domain.ErrNotFound) {
 				http.NotFound(w, r)
 				return
 			}
-			slog.Error("Failed to append chat message", "error", err)
+			slog.Error("Failed to send chat message", "error", err)
 			s.Error500(w, r, err)
 			return
 		}
+		metrics.WebChatTurnsTotal.WithLabelValues("success").Inc()
 	}
 	http.Redirect(w, r, "/admin/chats/"+id, http.StatusFound)
 }

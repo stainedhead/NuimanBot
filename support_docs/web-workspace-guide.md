@@ -1,7 +1,7 @@
 # Web Workspace Guide
 
-**Version:** 1.0
-**Last Updated:** 2026-08-05
+**Version:** 1.1
+**Last Updated:** 2026-08-13
 **Target Audience:** NuimanBot Users
 
 This guide covers NuimanBot's web workspace: **Chats**, **Projects**, **Jobs**, **Chores**, **History**, and **Memories**, plus the **Settings** page. These are new environments in the web admin interface (`/admin/...`), separate from chatting with NuimanBot through Telegram, Slack, or the CLI.
@@ -25,10 +25,11 @@ This guide covers NuimanBot's web workspace: **Chats**, **Projects**, **Jobs**, 
 
 ## What to Expect Today
 
-This part of NuimanBot is new, and it is honest to say up front: **the organizing, scheduling, and live-update pieces work today, but the agent itself is not yet plugged into Job/Chore execution or web Chats.** Please read this section before you start, so nothing here surprises you.
+This part of NuimanBot is new, and it is honest to say up front: **the organizing, scheduling, and live-update pieces work today; the agent is now plugged into web Chats (as of 2026-08-13), but not yet into Job/Chore execution.** Please read this section before you start, so nothing here surprises you.
 
 **Works today:**
 - Creating, naming, listing, and deleting Chats, Projects, Jobs, and Chores
+- **Sending a message in an existing web Chat gets you a real reply** — the same LLM/tool/RBAC pipeline as Telegram/Slack/CLI, using your own logged-in role
 - Jobs and Chores queue correctly and run through their full lifecycle (Queued → Running → Completed)
 - Job/Chore run history, with filtering and a notification badge for runs you haven't looked at yet, visible on every page in the workspace
 - Live status/log updates on Job, Chore, and run detail pages — no need to refresh
@@ -39,10 +40,11 @@ This part of NuimanBot is new, and it is honest to say up front: **the organizin
 
 **Not yet working — please don't rely on these:**
 - **Jobs and Chores do not do real agent work yet.** When a Job or Chore "runs," it goes through the full queue → execute → complete pipeline, but the result is a placeholder file that says no agent work was performed. Think of this as the scaffolding being built and tested before the agent is connected to it.
-- **Typing a message in a web Chat does not get you a reply.** The message is saved, but nothing responds. If you want to actually talk with NuimanBot today, use Telegram, Slack, or the CLI — those work exactly as before and are unaffected by any of this.
+- **The very first message you type when *creating* a new Chat doesn't get a reply.** Only messages sent to a Chat that already exists do (see [Using a Chat](#using-a-chat)) — create the Chat first (even with a short first message), then send your real question as a follow-up.
+- A reply can take a while depending on which LLM provider/model you've configured — for a large local model this can be tens of seconds; the page will simply wait for it rather than showing a "thinking..." indicator.
 - There's no "chat about this specific Job/Chore/run" conversation yet — those panels are planned but not built. Memories now has a similar chat panel (see [Memories](#memories)) as a preview of what's coming to the other three.
 
-If you're looking to actually get work done with NuimanBot today, use the existing chat gateways (Telegram/Slack/CLI) — see the [User Onboarding Guide](user-onboarding.md). Use this web workspace to get familiar with Projects, Jobs, and Chores organization ahead of the agent being connected to them.
+If you're looking to actually get work done with NuimanBot today, the web Chats environment now works for real conversations — Telegram/Slack/CLI remain available too and are unaffected by any of this. Use this web workspace to get familiar with Projects, Jobs, and Chores organization ahead of the agent being connected to those.
 
 ---
 
@@ -64,12 +66,14 @@ A Chat is a lightweight, ad-hoc conversation with no project or folder attached 
 1. Click **Chats** in the sidebar
 2. Type your first message and submit it
 3. NuimanBot names the Chat automatically from that first message (if you leave the message blank, it names the Chat with a timestamp instead, so you'll never see an unnamed Chat in your list)
+4. This first message is saved but does not get a reply yet — open the Chat and send a follow-up message to get NuimanBot's first actual response (see [Using a Chat](#using-a-chat))
 
 ### Using a Chat
 
 - Open a Chat from the list to see its full message history
-- You can keep typing and sending messages — they're saved to the Chat's history
-- **Remember:** as of this writing, no reply comes back in the web UI. Your message is recorded, not answered here.
+- Type a message and send it — NuimanBot replies, right there in the thread, the same way it would over Telegram/Slack/CLI
+- Your role (from your login) determines which tools NuimanBot can use on your behalf, exactly as it does on every other platform
+- **Remember:** this only applies to messages sent to a Chat that already exists — the first message typed into the *create* form is saved but doesn't get a reply (see [Creating a Chat](#creating-a-chat))
 
 ### Exporting a Chat
 

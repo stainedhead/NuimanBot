@@ -1054,8 +1054,12 @@ func (app *application) Run(ctx context.Context) error {
 
 		// Wire the Chats environment (FR-011-FR-016, specs/260805-nuimanbot-extend-context-and-ui):
 		// extends the existing Conversation/ConversationRepository rather
-		// than a new entity/store.
-		webServer.SetChatsService(chats.NewService(app.ConversationRepo))
+		// than a new entity/store. app.ChatService/app.DomainUserService
+		// back SendMessage — the web Chats environment invokes the agent
+		// directly (specs/buzz-acp-harness's "wire web Chats to the
+		// agent"), unlike the CLI's parallel /chat environment below,
+		// which remains persistence-only for now.
+		webServer.SetChatsService(chats.NewService(app.ConversationRepo, app.ChatService, app.DomainUserService))
 
 		// Wire network access (FR-005-FR-008): an absent config section
 		// resolves to the secure localhost-only default via ToDomain().
@@ -1208,7 +1212,7 @@ func (app *application) Run(ctx context.Context) error {
 	// unconditionally, mirroring the same "a second stateless
 	// chats.Service wrapper over the same app.ConversationRepo" pattern
 	// wireExtendedContextEnvironments's retention sweeper already uses.
-	cliGateway.SetChatsHandler(cli.NewChatCommandHandler(chats.NewService(app.ConversationRepo)))
+	cliGateway.SetChatsHandler(cli.NewChatCommandHandler(chats.NewService(app.ConversationRepo, nil, nil))) // persistence-only; CLI's /chat doesn't invoke the agent (see SendMessage's doc comment)
 	slog.Info("Chats CLI commands initialized")
 
 	// Projects/Jobs/Chores/History/Memories, unlike Chats, are only

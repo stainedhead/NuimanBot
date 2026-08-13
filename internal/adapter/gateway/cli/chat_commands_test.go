@@ -16,7 +16,7 @@ import (
 func newChatTestHandler(t *testing.T) *cli.ChatCommandHandler {
 	t.Helper()
 	repo := storage.NewFileConversationRepository(t.TempDir())
-	return cli.NewChatCommandHandler(chats.NewService(repo))
+	return cli.NewChatCommandHandler(chats.NewService(repo, nil, nil))
 }
 
 // chatTestUser is a currentUser whose ID/Username deliberately differ from
@@ -338,7 +338,7 @@ func TestChatCommandHandler_CrossUserIsolation(t *testing.T) {
 // inferred from both call sites passing the same ownerUserID convention.
 func TestChatCommandHandler_CrossAdapterVisibility(t *testing.T) {
 	repo := storage.NewFileConversationRepository(t.TempDir())
-	cliHandler := cli.NewChatCommandHandler(chats.NewService(repo))
+	cliHandler := cli.NewChatCommandHandler(chats.NewService(repo, nil, nil))
 	ctx := context.Background()
 
 	id := createChat(t, ctx, cliHandler, "alice", "created via CLI")
@@ -348,7 +348,7 @@ func TestChatCommandHandler_CrossAdapterVisibility(t *testing.T) {
 	// for each adapter; this test can't import internal/adapter/web without
 	// violating the no-cross-adapter-import rule, so it exercises the
 	// shared-repo assumption directly instead).
-	webSideService := chats.NewService(repo)
+	webSideService := chats.NewService(repo, nil, nil)
 	summaries, err := webSideService.ListChats(ctx, "alice")
 	if err != nil {
 		t.Fatalf("ListChats via the web-side service instance: %v", err)

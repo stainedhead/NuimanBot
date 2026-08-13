@@ -91,7 +91,7 @@ func TestRetentionSweep_DeletesExpiredDataAcrossRealRepositories(t *testing.T) {
 	userRepo := newTestUserProfileRepo(t, storagePath, ownerUserID)
 
 	convRepo := storage.NewFileConversationRepository(storagePath)
-	chatsSvc := chats.NewService(convRepo)
+	chatsSvc := chats.NewService(convRepo, nil, nil)
 
 	projectRepo := storage.NewFileProjectRepository(storagePath)
 	projectsSvc := projects.NewService(projectRepo, storage.NewFileConfinedFileStore(), storagePath)
@@ -154,7 +154,7 @@ func TestRetentionSweep_UnviewedRunSweepMarksNotifiedFirst(t *testing.T) {
 
 	userRepo := newTestUserProfileRepo(t, storagePath, ownerUserID)
 	convRepo := storage.NewFileConversationRepository(storagePath)
-	chatsSvc := chats.NewService(convRepo)
+	chatsSvc := chats.NewService(convRepo, nil, nil)
 	projectRepo := storage.NewFileProjectRepository(storagePath)
 	projectsSvc := projects.NewService(projectRepo, storage.NewFileConfinedFileStore(), storagePath)
 	runRepo := storage.NewFileRunRepository(storagePath)
@@ -200,7 +200,7 @@ func TestRetentionSweep_NeverPolicyDeletesNothing(t *testing.T) {
 
 	userRepo := newTestUserProfileRepo(t, storagePath, ownerUserID)
 	convRepo := storage.NewFileConversationRepository(storagePath)
-	chatsSvc := chats.NewService(convRepo)
+	chatsSvc := chats.NewService(convRepo, nil, nil)
 	projectRepo := storage.NewFileProjectRepository(storagePath)
 	projectsSvc := projects.NewService(projectRepo, storage.NewFileConfinedFileStore(), storagePath)
 	runRepo := storage.NewFileRunRepository(storagePath)
@@ -236,7 +236,7 @@ func TestRetentionSweep_CleansUpPendingDeletionJobsAndChores(t *testing.T) {
 
 	userRepo := newTestUserProfileRepo(t, storagePath, ownerUserID)
 	convRepo := storage.NewFileConversationRepository(storagePath)
-	chatsSvc := chats.NewService(convRepo)
+	chatsSvc := chats.NewService(convRepo, nil, nil)
 	projectRepo := storage.NewFileProjectRepository(storagePath)
 	projectsSvc := projects.NewService(projectRepo, storage.NewFileConfinedFileStore(), storagePath)
 	runRepo := storage.NewFileRunRepository(storagePath)
