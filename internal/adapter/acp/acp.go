@@ -330,6 +330,24 @@ func (s *Server) handleSessionPrompt(ctx context.Context, msg rpcMessage) {
 	sess := sessVal.(*session)
 
 	text := promptText(params.Prompt)
+	// Logged at Info, not Debug: this has repeatedly been the deciding
+	// evidence for diagnosing ACP host behavior in practice (e.g.
+	// confirming whether a host bundles conversation history/context into
+	// the prompt text alongside the human's literal message, which can
+	// trigger input validation in ways the visible message alone wouldn't
+	// explain). blockTypes lets us see the shape of what was sent even when
+	// non-text blocks are involved.
+	blockTypes := make([]string, len(params.Prompt))
+	for i, b := range params.Prompt {
+		blockTypes[i] = b.Type
+	}
+	s.logger.Info("session/prompt received",
+		"session_id", params.SessionID,
+		"block_count", len(params.Prompt),
+		"block_types", blockTypes,
+		"text_length", len(text),
+		"text", text,
+	)
 	if text == "" {
 		s.writeError(msg.ID, errCodeInvalidParams, "session/prompt: no text content in prompt")
 		return

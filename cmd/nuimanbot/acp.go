@@ -88,7 +88,15 @@ func runACP(ctx context.Context) error {
 		return fmt.Errorf("acp: failed to initialize file storage: %w", err)
 	}
 
-	inputValidator := security.NewDefaultInputValidator()
+	// WithoutCommandInjectionDetection: ACP hosts (confirmed: buzz-acp)
+	// bundle a large host-constructed system-context blob into every
+	// session/prompt call alongside the human's actual message, and that
+	// bundle reliably contains characters command-injection scanning
+	// treats as suspicious purely as a side effect of ordinary technical
+	// writing (see the option's doc comment for the full story — this
+	// isn't a hypothetical, it made every message through this integration
+	// fail regardless of content).
+	inputValidator := security.NewDefaultInputValidator(security.WithoutCommandInjectionDetection())
 	auditAdapter := &auditRepositoryAdapter{repo: fileRepos.Audit}
 	securityService := security.NewService(vault, inputValidator, auditAdapter)
 
