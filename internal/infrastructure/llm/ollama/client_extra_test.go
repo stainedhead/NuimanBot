@@ -162,6 +162,176 @@ func TestComplete_DefaultModel(t *testing.T) {
 	}
 }
 
+// TestComplete_StripsOllamaProviderPrefix guards against a real production
+// bug: config.yaml's llm.default_model.primary used a "provider/model"
+// string (the only reliable way to route a model tag containing ":"/"."
+// to a specific provider — see the client's own comment for why the
+// alternative, an exact-match models: map key, silently breaks under
+// Viper), but this client sent req.Model to Ollama's API completely
+// unmodified, including the "ollama/" prefix — Ollama has no model
+// literally named "ollama/qwen3.6:...", so every request failed with a
+// model-not-found error even though provider routing itself was correct.
+func TestComplete_StripsOllamaProviderPrefix(t *testing.T) {
+	var capturedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&capturedBody)
+
+		resp := map[string]any{
+			"model":   "qwen3.6:35b-a3b-coding-bf16",
+			"message": map[string]string{"role": "assistant", "content": "Hello!"},
+			"done":    true,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	cfg := &config.OllamaProviderConfig{BaseURL: server.URL}
+	client := ollama.New(cfg)
+
+	req := &domain.LLMRequest{
+		Model:    "ollama/qwen3.6:35b-a3b-coding-bf16",
+		Messages: []domain.Message{{Role: "user", Content: "hello"}},
+	}
+
+	_, err := client.Complete(context.Background(), domain.LLMProviderOllama, req)
+	if err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+
+	if capturedBody["model"] != "qwen3.6:35b-a3b-coding-bf16" {
+		t.Errorf("expected the \"ollama/\" prefix stripped before calling the API, got model=%v", capturedBody["model"])
+	}
+}
+
+// TestComplete_SendsToolDefinitions guards against the Ollama client
+// silently dropping req.Tools: Ollama's /api/chat needs a "tools" array
+// in OpenAI-compatible function-calling format
+// ({type:"function",function:{name,description,parameters}}) or the
+// model has no way to know a tool exists, no matter how well the tool
+// is described in prompt text (confirmed live: the model printed a fake
+// ```tool_code``` text block instead of a real structured call).
+func TestComplete_SendsToolDefinitions(t *testing.T) {
+	var capturedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&capturedBody)
+
+		resp := map[string]any{
+			"model":   "llama2",
+			"message": map[string]string{"role": "assistant", "content": "ok"},
+			"done":    true,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	cfg := &config.OllamaProviderConfig{BaseURL: server.URL}
+	client := ollama.New(cfg)
+
+	req := &domain.LLMRequest{
+		Model:    "llama2",
+		Messages: []domain.Message{{Role: "user", Content: "send a buzz message"}},
+		Tools: []domain.ToolDefinition{
+			{
+				Name:        "buzz_send_message",
+				Description: "Publish a message to Buzz",
+				InputSchema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"channel": map[string]any{"type": "string"},
+						"content": map[string]any{"type": "string"},
+					},
+					"required": []string{"channel", "content"},
+				},
+			},
+		},
+	}
+
+	_, err := client.Complete(context.Background(), domain.LLMProviderOllama, req)
+	if err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+
+	toolsRaw, ok := capturedBody["tools"]
+	if !ok {
+		t.Fatal("expected a \"tools\" field in the outgoing request body, got none")
+	}
+	tools, ok := toolsRaw.([]interface{})
+	if !ok || len(tools) != 1 {
+		t.Fatalf("expected exactly one tool, got %v", toolsRaw)
+	}
+	tool, ok := tools[0].(map[string]interface{})
+	if !ok || tool["type"] != "function" {
+		t.Fatalf(`expected tool type "function", got %v`, tool)
+	}
+	function, ok := tool["function"].(map[string]interface{})
+	if !ok || function["name"] != "buzz_send_message" {
+		t.Fatalf("expected function.name \"buzz_send_message\", got %v", function)
+	}
+	if function["description"] != "Publish a message to Buzz" {
+		t.Errorf("expected function.description to be passed through, got %v", function["description"])
+	}
+	params, ok := function["parameters"].(map[string]interface{})
+	if !ok || params["type"] != "object" {
+		t.Fatalf("expected function.parameters to carry the input schema, got %v", function["parameters"])
+	}
+}
+
+// TestComplete_ParsesToolCalls guards against the Ollama client
+// silently dropping message.tool_calls from the response: without this,
+// runToolLoop (internal/usecase/chat/service.go) never sees
+// llmResponse.ToolCalls populated and so never executes any tool, even
+// when the model made a real structured call.
+func TestComplete_ParsesToolCalls(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]any{
+			"model": "llama2",
+			"message": map[string]any{
+				"role":    "assistant",
+				"content": "",
+				"tool_calls": []map[string]any{
+					{
+						"id": "call_1",
+						"function": map[string]any{
+							"name":      "buzz_send_message",
+							"arguments": map[string]any{"channel": "chan-1", "content": "hi"},
+						},
+					},
+				},
+			},
+			"done": true,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	cfg := &config.OllamaProviderConfig{BaseURL: server.URL}
+	client := ollama.New(cfg)
+
+	req := &domain.LLMRequest{
+		Model:    "llama2",
+		Messages: []domain.Message{{Role: "user", Content: "send a buzz message"}},
+	}
+
+	resp, err := client.Complete(context.Background(), domain.LLMProviderOllama, req)
+	if err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("expected exactly one parsed tool call, got %d: %+v", len(resp.ToolCalls), resp.ToolCalls)
+	}
+	call := resp.ToolCalls[0]
+	if call.ToolName != "buzz_send_message" {
+		t.Errorf("expected ToolName \"buzz_send_message\", got %q", call.ToolName)
+	}
+	if call.Arguments["channel"] != "chan-1" || call.Arguments["content"] != "hi" {
+		t.Errorf("expected Arguments to carry channel/content through directly (no double-unmarshal needed), got %+v", call.Arguments)
+	}
+}
+
 // TestListModels_Success tests successful model listing.
 func TestListModels_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -14,6 +14,7 @@ import (
 	"nuimanbot/internal/infrastructure/logger"
 	infrasecurity "nuimanbot/internal/infrastructure/security"
 	"nuimanbot/internal/infrastructure/storage"
+	"nuimanbot/internal/tools/buzzsend"
 	"nuimanbot/internal/usecase/chat"
 	"nuimanbot/internal/usecase/security"
 	"nuimanbot/internal/usecase/tool"
@@ -116,6 +117,16 @@ func runACP(ctx context.Context) error {
 	}
 	if err := registerMCPTools(ctx, cfg, toolRegistry, outputValidator); err != nil {
 		acpLogger.Warn("MCP tool registration encountered errors", "error", err)
+	}
+	// buzz_send_message: registered only here, not in registerBuiltInTools
+	// (shared with every other platform) — it shells out to the `buzz` CLI,
+	// which is meaningless (and its BUZZ_PRIVATE_KEY/BUZZ_AUTH_TAG/
+	// BUZZ_RELAY_URL credentials absent) outside a buzz-acp-spawned
+	// process. See the tool's own doc comment for why NuimanBot needs it at
+	// all: Buzz's own system prompt requires the agent to call this to
+	// publish anything, the ACP text response alone isn't sufficient.
+	if err := toolRegistry.Register(buzzsend.New()); err != nil {
+		return fmt.Errorf("acp: failed to register buzz_send_message tool: %w", err)
 	}
 
 	toolExecutionService := tool.NewService(&cfg.Tools, toolRegistry, securityService)

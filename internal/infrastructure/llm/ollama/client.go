@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"nuimanbot/internal/config"
@@ -34,13 +35,41 @@ type ollamaChatRequest struct {
 	Model    string          `json:"model"`
 	Messages []ollamaMessage `json:"messages"`
 	Stream   bool            `json:"stream"`
+	Tools    []ollamaTool    `json:"tools,omitempty"`
 	Options  map[string]any  `json:"options,omitempty"`
+}
+
+// ollamaTool represents a tool definition in Ollama's OpenAI-compatible
+// /api/chat format (confirmed against a live Ollama instance).
+type ollamaTool struct {
+	Type     string         `json:"type"` // always "function"
+	Function ollamaFunction `json:"function"`
+}
+
+// ollamaFunction is the function body of an ollamaTool.
+type ollamaFunction struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Parameters  map[string]any `json:"parameters"`
 }
 
 // ollamaMessage represents a message in Ollama format
 type ollamaMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role      string           `json:"role"`
+	Content   string           `json:"content"`
+	ToolCalls []ollamaToolCall `json:"tool_calls,omitempty"`
+}
+
+// ollamaToolCall represents one entry of a response message's
+// "tool_calls" array. Unlike OpenAI's /v1/chat/completions,
+// function.arguments arrives already decoded as a JSON object rather
+// than a JSON-encoded string, so no second json.Unmarshal is needed
+// (confirmed against a live Ollama instance).
+type ollamaToolCall struct {
+	Function struct {
+		Name      string         `json:"name"`
+		Arguments map[string]any `json:"arguments"`
+	} `json:"function"`
 }
 
 // ollamaChatResponse represents an Ollama /api/chat response
@@ -122,12 +151,29 @@ func (c *Client) convertRequest(req *domain.LLMRequest) ollamaChatRequest {
 	if model == "" && c.config.DefaultModel != "" {
 		model = c.config.DefaultModel
 	}
+	// Strip a leading "ollama/" provider prefix if present. llm.Service's
+	// provider-resolution recognizes "provider/model" (e.g.
+	// "ollama/qwen3.6:35b-a3b-coding-bf16") via a simple runtime string
+	// split (ResolveProviderForModel's parseProviderPrefix) — the only
+	// reliable way to route a model tag containing ":"/"." to a specific
+	// provider, since config.LLMConfig.Models's exact-match-by-map-key
+	// alternative silently breaks under Viper: a YAML map key containing
+	// "." or ":" gets mangled by Viper's nested-key flattening before this
+	// config is ever read (confirmed: a "qwen3.6:35b-a3b-coding-bf16" map
+	// key decoded as a bare "qwen3" key with an empty ProviderConfigID).
+	// Every other LLM client (anthropic, openai) sends req.Model through
+	// unmodified including any provider prefix, which happens not to break
+	// them structurally today only because their own API calls are already
+	// failing on auth before model validation would matter — Ollama's API
+	// has no such luck, so this client specifically needs the prefix gone.
+	model = strings.TrimPrefix(model, "ollama/")
 
 	// Build request
 	ollamaReq := ollamaChatRequest{
 		Model:    model,
 		Messages: messages,
 		Stream:   false,
+		Tools:    convertToolDefinitions(req.Tools),
 	}
 
 	// Set options
@@ -145,10 +191,39 @@ func (c *Client) convertRequest(req *domain.LLMRequest) ollamaChatRequest {
 	return ollamaReq
 }
 
+// convertToolDefinitions converts domain.ToolDefinition slice to
+// Ollama's OpenAI-compatible tool format.
+func convertToolDefinitions(tools []domain.ToolDefinition) []ollamaTool {
+	if len(tools) == 0 {
+		return nil
+	}
+	result := make([]ollamaTool, len(tools))
+	for i, tool := range tools {
+		result[i] = ollamaTool{
+			Type: "function",
+			Function: ollamaFunction{
+				Name:        tool.Name,
+				Description: tool.Description,
+				Parameters:  tool.InputSchema,
+			},
+		}
+	}
+	return result
+}
+
 // convertResponse converts Ollama response to domain.LLMResponse
 func (c *Client) convertResponse(resp *ollamaChatResponse) *domain.LLMResponse {
+	var toolCalls []domain.ToolCall
+	for _, tc := range resp.Message.ToolCalls {
+		toolCalls = append(toolCalls, domain.ToolCall{
+			ToolName:  tc.Function.Name,
+			Arguments: tc.Function.Arguments,
+		})
+	}
+
 	return &domain.LLMResponse{
-		Content: resp.Message.Content,
+		Content:   resp.Message.Content,
+		ToolCalls: toolCalls,
 		// Ollama doesn't provide token usage in non-streaming mode
 		Usage: domain.TokenUsage{},
 		// Ollama doesn't provide finish_reason in this format

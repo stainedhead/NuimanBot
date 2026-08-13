@@ -33,6 +33,18 @@ var ToolPermissions = map[string]domain.Role{
 	"calculator": domain.RoleGuest,
 	"datetime":   domain.RoleGuest,
 
+	// buzz_send_message (internal/tools/buzzsend, registered only by
+	// cmd/nuimanbot/acp.go's runACP — outside this file's CI guard, which
+	// only covers registerBuiltInTools/registerDeveloperProductivityTools,
+	// so its absence here was never caught by that guard) is deliberately
+	// RoleGuest, matching buzzsend.Tool.RequiredPermissions()'s own (empty)
+	// answer: without an explicit entry it fell through to
+	// DefaultToolPermission (RoleUser), which silently hid it from
+	// ListTools for every first-contact Buzz Guest — the exact audience the
+	// tool exists to serve, confirmed live via a real ACP session where a
+	// guest-role user's model reported having no such tool at all.
+	"buzz_send_message": domain.RoleGuest,
+
 	// Tools requiring a registered user account.
 	//
 	// Dynamically-registered MCP tools ("mcp:<server>:<tool>", see
