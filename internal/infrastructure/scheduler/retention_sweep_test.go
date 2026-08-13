@@ -44,7 +44,7 @@ func newTestJobsAndChoresServices(storagePath string, runRepo domain.RunReposito
 	choreRepo := storage.NewFileChoreRepository(storagePath)
 	files := storage.NewFileConfinedFileStore()
 
-	jobsSvc := jobs.NewService(jobRepo, runRepo, noopEnqueuer{}, nil, files, filepath.Join(storagePath, "jobs-hidden"))
+	jobsSvc := jobs.NewService(jobRepo, runRepo, noopEnqueuer{}, nil, nil, files, filepath.Join(storagePath, "jobs-hidden"))
 	choresSvc := chores.NewService(choreRepo, fixedEvaluator{}, runRepo, files, filepath.Join(storagePath, "chores-hidden"))
 	return jobsSvc, choresSvc
 }

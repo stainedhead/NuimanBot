@@ -44,6 +44,15 @@ func (h *SkillHandler) SetMessageHandler(handler domain.MessageHandler, platform
 	h.platformUID = platformUID
 }
 
+// SetPlatformUID updates the platform UID skill-invoked chat messages are
+// attributed to. Gateway calls this once the CLI's real logged-in identity
+// is known (AD-5/FR-007), replacing the placeholder passed to
+// SetMessageHandler at wiring time — login happens after wiring, so the
+// real identity isn't available yet when SetMessageHandler is first called.
+func (h *SkillHandler) SetPlatformUID(uid string) {
+	h.platformUID = uid
+}
+
 // Execute executes a skill and processes it through the chat service.
 // Phase 7: Integrated with chat orchestrator for full E2E functionality.
 func (h *SkillHandler) Execute(ctx context.Context, skillName string, args []string) error {

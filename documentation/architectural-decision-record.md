@@ -784,3 +784,136 @@ disguised placeholder. Wire it as the only `Executor` implementation in
   end-to-end is the natural next-phase scope, tracked in
   `documentation/product-details.md`'s "Post-Feature: Persistent Agent
   Workspace — Remaining Work."
+
+---
+
+## ADR-015: `AuthService` extraction — wrapper struct embedding `*auth.Service`, not a type alias
+
+**Date:** 2026-08-11 (`specs/260811-cli-parity-for-nuimanbot-features`, AD-1)
+**Status:** Accepted
+
+### Context
+
+CLI Parity needed the CLI gateway to authenticate against the same accounts the web admin UI uses, without the CLI adapter importing the web adapter (a Clean Architecture violation — adapters must not depend on other adapters). The only pre-existing credential/session logic, `internal/adapter/web/auth.go`'s `AuthService` (bcrypt verification, session lifecycle, CSRF), was entirely private to the `web` package. The first draft of the extraction design proposed the simplest possible compatibility shim: `type AuthService = auth.Service`, a bare type alias in `web` pointing at a new `internal/usecase/auth.Service`.
+
+### Decision
+
+Reject the type-alias approach — verified against the actual code that it does not compile. A type alias cannot expose another package's unexported fields/methods, and `internal/adapter/web`'s existing white-box tests and two production call sites reach directly into `AuthService`'s unexported surface: `auth.go:332`'s `s.auth.users[username]` map access, `tls.go:21`'s `s.auth.setSecureCookies(...)`, `auth.go:339,342`'s `isDefaultCredentials`/`createSessionWithFlags` calls, and `auth_test.go`/`auth_coverage_test.go`'s direct reads/writes of `sessionTimeout` and `sessions`. Aliasing doesn't change which package declared an identifier, so all of these fail to compile under a type alias.
+
+Instead, `internal/adapter/web.AuthService` becomes a wrapper struct that embeds `*auth.Service` (promoting `ValidateCredentials`/`CreateSession`/`ValidateSession`/`GetSession`/`DestroySession`/`GetUser`/`RestoreSession`/etc.) and keeps its own `csrfTokens map[string]bool` and `secureCookies bool` fields — CSRF and cookie transport stay web-only, since they're meaningless for a terminal REPL. Four unexported shim methods (`setSecureCookies`, `isSecureCookies`, `createSessionWithFlags`, `isDefaultCredentials`) are declared directly in package `web` so the existing white-box tests calling them keep compiling completely unmodified — same source, same package, same lowercase names, just delegating to the embedded service. `cmd/nuimanbot/main.go` constructs one `internal/usecase/auth.Service` instance unconditionally (`sharedAuth := authusecase.NewService()`, seeded with the default admin account) before checking whether the web UI is enabled, so a CLI-only deployment still has an account to authenticate against; `web.NewAuthServiceWith(sharedAuth)` wraps that same instance for the web server, while the pre-existing zero-arg `web.NewAuthService()` constructor is retained for tests that want a private instance.
+
+### Consequences
+
+- Only two test functions could not be preserved "unmodified" under this design: `TestSessionExpiry` and `TestCleanupExpiredSessions` write/read unexported fields (`sessionTimeout`, `sessions`) directly rather than through a method call, which a struct-embedding shim cannot intercept. Both moved verbatim (identical body, only package clause and import path changed) into `internal/usecase/auth/session_test.go` — a documented, narrow, two-function exception, not a redefinition of the "existing tests pass unmodified" acceptance criterion.
+- `internal/adapter/gateway/cli` never imports `internal/adapter/web` — both adapters depend only on `internal/usecase/auth`, satisfying Clean Architecture's dependency rule. `cmd/nuimanbot/main.go`'s CLI wiring uses the shared `*auth.Service` directly (not the `web.AuthService` wrapper, which the CLI has no legitimate use for — it carries no CSRF/cookie concerns).
+- The web admin's login behavior (session length, login form, password rules) is unchanged — the wrapper is a compatibility layer, not a redesign, consistent with the PRD's Non-Goal of not touching web auth UX.
+
+---
+
+## ADR-016: CLI session persistence across process restarts — full session record on disk, `RestoreSession` re-validates, OS file permission is the trust boundary
+
+**Date:** 2026-08-11 (`specs/260811-cli-parity-for-nuimanbot-features`, AD-2)
+**Status:** Accepted
+
+### Context
+
+`internal/usecase/auth.Service`'s sessions live in an in-memory map — correct for a web server that is one long-running process serving many browser sessions, but the CLI starts a fresh process on every invocation. A disk-persisted session **ID** alone would be useless on restart: a fresh process's in-memory map starts empty, so there would be nothing to validate the ID against. FR-003/FR-004 require that a valid persisted session let a new CLI process skip re-login until expiry, and that a missing/corrupted/expired token fall back to a fresh login prompt without crashing.
+
+### Decision
+
+The CLI adapter (`internal/adapter/gateway/cli/auth_commands.go`) persists the **full session record** — `{session_id, username, role, created_at, expires_at}` as JSON — to a local file (`.nuimanbot_session`, alongside the configured history-file path), written at `0600`. On restore, `auth.Service.RestoreSession(session)` (a new, additive method — not a pluggable `SessionStore` interface, which was considered and rejected as more surface area than this pass needs) independently re-checks `ExpiresAt` against the current time and looks up `Username` in the live user store, failing closed on either mismatch, before re-hydrating the session into the in-memory map. On read, the file's on-disk permission bits are checked (`&0o077 != 0` rejects anything group/world-readable) before being trusted at all. Any failure at any step — absent file, unparseable JSON, overly-permissive mode, expired timestamp, or a `RestoreSession` rejection — falls back to the interactive login prompt rather than erroring.
+
+The threat model is explicit and decided, not left open: the file's `0600` permission is the entire trust boundary, consistent with the single-local-operator assumption already established by the PRD's Non-Goals (no networked/multi-user CLI access). `RestoreSession`'s re-validation is defense-in-depth against a bug in the CLI's own pre-check (e.g. clock skew), not a defense against a local user forging their own session file — a user with write access to their own session file already has everything that access implies (they could just log in as any account whose password they know). No signature/HMAC over the session record is built; that would only be warranted if multi-tenant sharing of a single OS account's CLI installation became a requirement, which it explicitly is not.
+
+### Consequences
+
+- A CLI user restarting the terminal within the 24-hour session window (matching the web admin's existing `sessionTimeout` default — no separate, CLI-specific expiry knob was added) is not re-prompted for credentials.
+- `internal/usecase/auth` stays storage-agnostic — it has no idea a CLI persists sessions to disk at all; the file is entirely a CLI-adapter concern, keeping the shared service's public surface additive (one new method) rather than redesigned.
+- A demoted admin's stale CLI session correctly loses admin privileges on next restore (`RestoreSession` re-derives `Role` from the live user store rather than trusting the persisted file's `role` field) — but this is a correctness fix for the good-faith case, not a security fix: an adversarial local user can equally well edit the persisted `username` field to claim a different account, so re-deriving `Role` does not close a tampering hole, only a staleness one. This distinction is deliberately documented rather than glossed over, since claiming otherwise would overstate what the mechanism defends against.
+- Password entry uses masked terminal input (`golang.org/x/term.ReadPassword`, a new `go.mod` dependency) when stdin is a real terminal, falling back to a plain unmasked line read from the *same* `bufio.Scanner` already reading the username when not — deliberately not a second, independent reader over `os.Stdin`, which was caught during manual binary testing as a source of silently dropped bytes when two buffered readers compete over one file descriptor.
+
+---
+
+## ADR-017: `/memories` (plural) vs `/memory ` (singular) — word-boundary prefix dispatch to avoid command-prefix collision
+
+**Date:** 2026-08-11 (`specs/260811-cli-parity-for-nuimanbot-features`, AD-3)
+**Status:** Accepted
+
+### Context
+
+The CLI already had `/memory` as an admin-command prefix (stats/export/import/rebuild-FTS, `internal/adapter/gateway/cli/memory_commands.go`'s `IsMemoryCommand`, implemented as `strings.HasPrefix(input, "/memory ")` with a trailing space). FR-037/FR-038 needed a new, distinct `/memories` (plural) prefix for the read-only browse/chat Memories environment. A naive `strings.HasPrefix(input, "/memories")` check risks ambiguity if written carelessly (e.g. checking only the first 7 characters), and a bare `/memories` typed with no trailing arguments needs to still route to help output (FR-010) rather than falling through unrecognized.
+
+### Decision
+
+Verified, not just assumed: `"/memory "` and `"/memories"` diverge at their 7th character (`'y'` vs `'i'`), so the two prefixes cannot collide regardless of dispatch order. A shared helper, `isEnvCommand(input, prefix string) bool` (`internal/adapter/gateway/cli/gateway.go`), checks that `input`'s first token is exactly `prefix` — matching either an exact match or `prefix + " "` — used uniformly by every new environment's detection function (`IsChatCommand`, `IsProjectCommand`, `IsJobCommand`, `IsChoreCommand`, `IsHistoryCommand`, `IsMemoriesCommand`, `IsSettingsCommand`), applying the same discipline `IsMemoryCommand` already used rather than inventing a second, looser convention for the six new prefixes.
+
+### Consequences
+
+- `/memories browse`, `/memories chat <id> <msg>`, and bare `/memories` (routed to help per FR-010) all dispatch correctly and never collide with `/memory stats`/`/memory export`/etc., verified by tests covering both prefixes side by side.
+- Every new environment command's detection function is a one-line call into the same shared helper — adding a future seventh or eighth environment command family requires no new dispatch logic, only a new `isEnvCommand(input, "/newprefix")` wrapper.
+- This is a case where "verify the code, don't just trust the PRD's description of a risk" paid off directly: the PRD's Risks table listed prefix-collision as a named risk requiring "explicit disambiguation logic," but reading the actual `IsMemoryCommand` implementation during architecture review showed the two prefixes were already structurally non-colliding — the real remaining work was applying the same existing discipline consistently to new code, not inventing new collision-avoidance logic.
+
+---
+
+## ADR-018: New environment command handlers reuse the existing `cli.New*Handler` + `Gateway.Set*Handler` pattern — no new dispatch mechanism
+
+**Date:** 2026-08-11 (`specs/260811-cli-parity-for-nuimanbot-features`, AD-4)
+**Status:** Accepted
+
+### Context
+
+CLI Parity adds seven new command families (Chats, Projects, Jobs, Chores, History, Memories, Settings) to a CLI gateway that already had a working, established pattern for admin commands: `SetAdminHandler`, `SetProfileHandler`, `SetBotHandler`, `SetMemoryHandler`, `SetConfigHandler`, `SetSkillHandler` on `Gateway`, each backed by a `cli.New*Handler` constructor. A new, parallel dispatch mechanism (e.g. a generic command-registry/plugin system) was one option, since seven new command families is a meaningfully larger surface than any single prior addition to this file.
+
+### Decision
+
+Follow the existing pattern exactly, with no new dispatch abstraction: one file per environment (`chat_commands.go`, `project_commands.go`, `job_commands.go`, `chore_commands.go`, `history_commands.go`, `memories_commands.go`, `settings_commands.go`), each implementing a shared `EnvCommandHandler` interface (`Handle(ctx, currentUser, ownerUserID, input) (string, error)`), one `Gateway` field plus one `Set*Handler` method per environment, and dispatch routing that checks each new prefix (via ADR-017's `isEnvCommand`) alongside the pre-existing `/memory`, `/skill`, etc. checks. Each handler is constructed against the same `internal/usecase/{chats,projects,jobs,chores,history,memories,settings}.Service` instances `cmd/nuimanbot`'s existing web wiring already constructs (`wireExtendedContextEnvironments`/`wireSettingsEnvironment`, both extended to also *return* those instances) — not a second, disconnected set of service instances.
+
+### Consequences
+
+- No new dispatch mechanism to learn, test, or maintain — the CLI gateway's command-routing shape after this feature is recognizably the same shape it was before, just larger.
+- The CLI shares the exact same `internal/usecase/*` service instances the web adapter uses, which is what makes "data created via CLI is visible in web and vice versa" true by construction rather than by a separate synchronization step.
+- Because Jobs/Chores/History/Projects/Memories/Settings all depend on infrastructure (`wireExtendedContextEnvironments`'s worker pool and notifying-decorator-wrapped `RunRepository`) that today only exists when the web UI is enabled, those six CLI command families are unavailable when the web UI is disabled — an existing architectural fact this feature inherits rather than introduces. Chats has no such dependency and is wired unconditionally.
+
+---
+
+## ADR-019: `ownerUserID` for every new CLI environment handler is `session.Username`, never `session.ID` or `domain.User.ID`
+
+**Date:** 2026-08-11 (`specs/260811-cli-parity-for-nuimanbot-features`, AD-5)
+**Status:** Accepted
+
+### Context
+
+All six `internal/usecase/{chats,projects,jobs,chores,history,memories}` services take an `ownerUserID` parameter for per-user data scoping. Verified by grep across all six existing web handlers (`chats_handler.go` through `memories_handler.go`) during architecture review: every single call site passes `user.Username`, never `user.ID` — explicit and intentional, documented directly in `projects_handler.go`'s `ProjectsService` doc comment (`session.ID` is a per-session token, not a stable user identifier). This convention is easy to get wrong in a new adapter, and getting it wrong doesn't fail loudly: it silently creates a parallel, invisible set of CLI-only records that never show up in the web UI, directly breaking the "data created via CLI is visible in web and vice versa" acceptance criterion.
+
+### Decision
+
+Every new CLI environment handler receives `ownerUserID` as an explicit parameter, threaded through from the authenticated `Session.Username` — never derived by a handler from `currentUser`'s fields, and never `Session.ID`. `gateway.go`'s dispatch passes `session.Username` explicitly at the call site for every environment command, matching the same convention every existing web handler already uses.
+
+### Consequences
+
+- A CLI-created Chat/Project/Job/Chore/History-entry/Memory query is visible in the web UI under the same username, and vice versa, verified by an explicit acceptance test (`TestChatCommandHandler_CrossAdapterVisibility`, added during the coverage-hardening pass) rather than relying solely on the underlying scoping being correct by inspection.
+- This also directly resolves what `documentation/product-details.md`'s FR-030 previously tracked as a confirmed, documented gap: memory cells created via the CLI were keyed to a shared placeholder identity (`"cli:cli_user"`) invisible to the web-admin username Memories queries by. Once the CLI has a real logged-in username and uses it as `ownerUserID` everywhere, that identity-bridge gap closes for the CLI path specifically (Telegram/Buzz remain on their own separate platform-identity systems, unaffected).
+- A `/job create --project <id>` (or `--chat <id>`) referencing a Project/Chat the logged-in user does not own returns a not-found/permission error rather than silently attaching to another user's data, since the underlying `internal/usecase/jobs.Service` methods are themselves scoped by the caller-supplied `ownerUserID`, not by the target resource's actual owner — this only holds as long as every CLI call site passes the *logged-in* user's `Username`, which is exactly what this decision enforces. **Note (added by the CLI-parity auto-review fix pass, FR-002):** at the time this ADR was originally written, this bullet described the *intended* property, not yet a verified one — `CreateJob` itself did not actually reject a foreign-owned `ContextID` at creation time; a lookup failure (indistinguishable from "belongs to someone else") was silently swallowed and Job creation still succeeded with an unresolved context. `jobs.Service.CreateJob` was fixed to reject this explicitly (see "Data Flow: Job Lifecycle" above); this bullet's claim is accurate as of that fix, not before it.
+
+---
+
+## ADR-020: CLI post-login identity reconciliation to neutralize `defaultRoleForPlatform(PlatformCLI) = RoleAdmin`
+
+**Date:** 2026-08-11 (`specs/260811-cli-parity-for-nuimanbot-features`, AD-6)
+**Status:** Accepted
+
+### Context
+
+Replacing `main.go`'s unconditional `cliGateway.SetCurrentUser(&domain.User{Role: domain.RoleAdmin})` auto-grant with real login (ADR-015/ADR-016) closes one "CLI is trusted" shortcut, but architecture review found a second, independent one, untouched by the login-flow replacement: `internal/usecase/chat/service.go`'s `defaultRoleForPlatform(PlatformCLI)` returns `RoleAdmin` whenever `resolveUser` auto-provisions a `domain.User` for a never-before-seen `(platform, platformUID)` pair — code that predates this feature and backs the live-chat RBAC path (see ADR-008's history). FR-007 requires the CLI's chat-message attribution to switch from the hardcoded `"cli_user"` placeholder to the real logged-in username. Doing only that, with no other change, means every distinct logged-in CLI username is "never-before-seen" on its first plain-chat message — silently granting every CLI user RBAC admin tool-execution privileges regardless of their actual `auth.Service`-authenticated role, defeating the entire purpose of adding real login.
+
+### Decision
+
+The CLI's post-login flow (`AuthCommandHandler.reconcileIdentity`, called immediately after a successful login or session restore, before the REPL accepts any command or chat input) looks up `domain.User` for `(PlatformCLI, session.Username)` via `internal/usecase/user.Service`. If found with a stale `Role`, it is corrected (`UpdateUserRole`) to match the just-authenticated session's real role; if not found, it is created directly with the session's real role rather than letting `resolveUser`'s auto-create path run with `defaultRoleForPlatform`'s hardcoded default. `defaultRoleForPlatform`'s `PlatformCLI` case itself is left unchanged in `internal/usecase/chat` — deliberately not touched, since it's shared RBAC code also used by Telegram/Slack/Buzz's own default-role logic — the CLI login flow instead ensures its branch is simply never reached for an authenticated CLI identity.
+
+### Consequences
+
+- A non-admin user logging in via the new real-auth flow gets exactly the RBAC privileges `auth.Service` authenticated them with on their first chat message — not a silent admin upgrade via a second, unrelated code path. `main.go` fails loudly (`log.Fatalf`, not a warning) if `DomainUserService` is ever nil at CLI-gateway-wiring time, since that would leave `Gateway.Start` skipping authentication entirely and starting an unauthenticated REPL under a placeholder identity — the exact landmine this decision exists to defuse; this fail-loud guard was added during the coverage-hardening pass (commit `8778206`) as a regression backstop, not because the nil case was ever observed live.
+- `defaultRoleForPlatform(PlatformCLI) = RoleAdmin` still exists in the code and is not itself wrong or removed — it remains correct default behavior for the case CLI Parity's login requirement is designed to eliminate (an unauthenticated identity), and unrelated platforms' default-role logic is left untouched, honoring the PRD's Non-Goal of not redesigning shared RBAC code beyond what this feature strictly requires.
+- This is the second time this codebase has found and fixed a "CLI/local access implicitly means trusted" assumption baked into RBAC defaults from two independent angles in two different features (see ADR-008's `defaultRoleForPlatform` origin) — a reminder that a single default-role table entry can be a shared root cause reachable from more than one code path, and closing one reachable path does not verify the others are also closed without an explicit check like this one.
+
+**Landmine warning (CLI-parity auto-review fix pass, FR-004 — documentation only, no code change):** this decision is a wiring-order mitigation, not a structural fix. `defaultRoleForPlatform(PlatformCLI) = RoleAdmin` is dead-in-practice-but-NOT-dead-in-code — it still exists, unchanged, and will fire for any CLI-originated message that reaches `resolveUser`'s auto-create path without first passing through `AuthCommandHandler.EnsureAuthenticated`/`reconcileIdentity`. The guarantee this ADR describes holds only as long as every CLI entry point honors that ordering; it is not enforced inside `internal/usecase/chat` itself. Any future CLI entry point — a new command source, a background job, a future socket-server mode (this feature's own Non-Goals list names all three) — must be wired through the auth gate first, or this shortcut re-arms exactly as before this ADR. See the doc comment directly on `defaultRoleForPlatform` (`internal/usecase/chat/service.go`) and `documentation/technical-details.md`'s "Identity Reconciliation (AD-6)" section for the same warning restated at the two other places a future implementer is likely to land. **Open question (Research Question 2, not decided by this fix pass):** whether to eventually close this structurally — either `Gateway.Start` refuses to run at all when `authHandler == nil` outside test builds, or `defaultRoleForPlatform(PlatformCLI)`'s default itself changes to a non-admin role now that a real reconciliation path exists. Either would remove the landmine structurally instead of only procedurally; neither is implemented here — left for a future pass if picked up, and not decided which is preferred. This fix pass's scope is documentation only.

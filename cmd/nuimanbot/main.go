@@ -44,6 +44,7 @@ import (
 	"nuimanbot/internal/tools/notes"
 	"nuimanbot/internal/tools/weather"
 	"nuimanbot/internal/tools/websearch"
+	authusecase "nuimanbot/internal/usecase/auth"
 	"nuimanbot/internal/usecase/botmgmt"
 	"nuimanbot/internal/usecase/chat"
 	"nuimanbot/internal/usecase/chats"
@@ -93,6 +94,8 @@ type application struct {
 	RunRepo              domain.RunRepository           // Backs the web admin's History environment and the Job/Chore worker pool
 	StoragePath          string                         // Base data directory, reused for the worker pool's queue/scheduler persistence and Job/Chore hidden directories
 	WorkerPool           *scheduler.WorkerPool          // Set once wireExtendedContextEnvironments runs inside Run(); read later by the Settings environment's wiring
+	ExtendedContext      extendedContextServices        // Set once wireExtendedContextEnvironments runs; zero value (all nil fields) if the web UI is disabled — read later by the CLI gateway's Projects/Jobs/Chores/History/Memories wiring (specs/260811-cli-parity-for-nuimanbot-features)
+	SettingsService      *settings.Service              // Set once wireSettingsEnvironment runs; nil if the web UI (or worker pool) is disabled — read later by the CLI gateway's Settings wiring
 }
 
 func main() {
@@ -989,6 +992,16 @@ func (app *application) Run(ctx context.Context) error {
 	botMgmtService := botmgmt.NewService(botConfigRepo)
 	slog.Info("Bot management initialized", "file", botsFilePath)
 
+	// Construct the shared credential/session service (FR-044, AD-1)
+	// unconditionally — not only when the web UI is enabled. Both the web
+	// admin login and the CLI's new login flow (FR-001) authenticate
+	// against this single instance, so a CLI-only deployment (web UI
+	// disabled) still has an account to log in as.
+	sharedAuth := authusecase.NewService()
+	if err := sharedAuth.AddUser("admin", "admin", "admin"); err != nil {
+		slog.Warn("Failed to add default admin user", "error", err)
+	}
+
 	// Start Web UI server if enabled
 	if app.Config.Gateways.WebUI.Enabled {
 		addr := app.Config.Gateways.WebUI.Addr
@@ -996,6 +1009,7 @@ func (app *application) Run(ctx context.Context) error {
 			addr = ":8081"
 		}
 		webServer := web.NewServer(addr)
+		webServer.SetAuthService(web.NewAuthServiceWith(sharedAuth))
 
 		// Wire services into Web UI
 		webServer.SetProfileService(profileService)
@@ -1014,11 +1028,12 @@ func (app *application) Run(ctx context.Context) error {
 		// subsystem (specs/260805-nuimanbot-extend-context-and-ui). Settings
 		// (FR-001-004) is wired later, once the skill registry exists (see
 		// below) — it shares this same pool for its worker-pool-size control.
-		pool, err := wireExtendedContextEnvironments(ctx, app, webServer, profileRepo)
+		pool, extCtxServices, err := wireExtendedContextEnvironments(ctx, app, webServer, profileRepo)
 		if err != nil {
 			slog.Error("Failed to wire extended-context environments", "error", err)
 		} else {
 			app.WorkerPool = pool
+			app.ExtendedContext = extCtxServices
 		}
 
 		// Wire Part C's confirmation admin UI (P5.8): lists pending
@@ -1028,11 +1043,6 @@ func (app *application) Run(ctx context.Context) error {
 				store: app.ConfirmationStore,
 				chat:  app.ChatService,
 			})
-		}
-
-		// Add default admin user for web login
-		if err := webServer.GetAuth().AddUser("admin", "admin", "admin"); err != nil {
-			slog.Warn("Failed to add default web admin user", "error", err)
 		}
 
 		app.WebServer = webServer
@@ -1109,7 +1119,7 @@ func (app *application) Run(ctx context.Context) error {
 	// called (Settings is a web-admin-only environment; nothing needs it
 	// when app.WebServer is nil).
 	if app.WebServer != nil && app.WorkerPool != nil {
-		wireSettingsEnvironment(app.WebServer, app.WorkerPool, skillRegistry, settings.RetentionDefaults{
+		app.SettingsService = wireSettingsEnvironment(app.WebServer, app.WorkerPool, skillRegistry, settings.RetentionDefaults{
 			ChatDays:    app.Config.RetentionDefaults.ChatDays,
 			ProjectDays: app.Config.RetentionDefaults.ProjectDays,
 			HistoryDays: app.Config.RetentionDefaults.HistoryDays,
@@ -1152,12 +1162,78 @@ func (app *application) Run(ctx context.Context) error {
 		slog.Info("Memory CLI commands initialized")
 	}
 
-	// Set current user as admin for CLI (CLI users are trusted)
-	cliGateway.SetCurrentUser(&domain.User{
-		ID:       "cli_admin",
-		Username: "cli_administrator",
-		Role:     domain.RoleAdmin,
-	})
+	// Wire the six environment command families + Settings
+	// (specs/260811-cli-parity-for-nuimanbot-features, Phase C/D):
+	// /chat, /project, /job, /chore, /history, /memories, /settings.
+	//
+	// Chats has no dependency on the web UI/worker pool — wired
+	// unconditionally, mirroring the same "a second stateless
+	// chats.Service wrapper over the same app.ConversationRepo" pattern
+	// wireExtendedContextEnvironments's retention sweeper already uses.
+	cliGateway.SetChatsHandler(cli.NewChatCommandHandler(chats.NewService(app.ConversationRepo)))
+	slog.Info("Chats CLI commands initialized")
+
+	// Projects/Jobs/Chores/History/Memories, unlike Chats, are only
+	// constructed inside wireExtendedContextEnvironments — which requires
+	// the worker pool (Jobs/Chores/History share its notifying-decorator-
+	// wrapped RunRepository), itself only started when the web UI is
+	// enabled. app.ExtendedContext is the zero value (all nil fields) when
+	// that never ran; these five CLI commands are then simply unavailable,
+	// matching today's existing behavior (the whole subsystem doesn't exist
+	// without the web UI enabled) rather than a new limitation this feature
+	// introduces.
+	if app.ExtendedContext.Projects != nil {
+		cliGateway.SetProjectsHandler(cli.NewProjectCommandHandler(app.ExtendedContext.Projects))
+		slog.Info("Projects CLI commands initialized")
+	}
+	if app.ExtendedContext.Jobs != nil {
+		cliGateway.SetJobsHandler(cli.NewJobCommandHandler(app.ExtendedContext.Jobs))
+		slog.Info("Jobs CLI commands initialized")
+	}
+	if app.ExtendedContext.Chores != nil {
+		cliGateway.SetChoresHandler(cli.NewChoreCommandHandler(app.ExtendedContext.Chores))
+		slog.Info("Chores CLI commands initialized")
+	}
+	if app.ExtendedContext.History != nil {
+		cliGateway.SetHistoryHandler(cli.NewHistoryCommandHandler(app.ExtendedContext.History))
+		slog.Info("History CLI commands initialized")
+	}
+	if app.ExtendedContext.Memories != nil {
+		cliGateway.SetMemoriesHandler(cli.NewMemoriesCommandHandler(app.ExtendedContext.Memories))
+		slog.Info("Memories CLI commands initialized")
+	}
+
+	// Settings, similarly, only exists once app.WorkerPool + the skill
+	// registry are both available (see wireSettingsEnvironment's call
+	// site) — nil app.SettingsService means the web UI is disabled.
+	if app.SettingsService != nil {
+		cliGateway.SetSettingsHandler(cli.NewSettingsCommandHandler(app.SettingsService))
+		slog.Info("Settings CLI commands initialized")
+	}
+
+	// CLI login (FR-001-FR-007, FR-044): the CLI authenticates against the
+	// same shared auth.Service the web admin UI uses (sharedAuth,
+	// constructed above unconditionally), and reconciles the resulting
+	// identity against app.DomainUserService's domain.User records (AD-6)
+	// before the REPL accepts any input. This replaces the previous
+	// unconditional cli_admin auto-grant.
+	//
+	// app.DomainUserService is constructed unconditionally at startup (see
+	// "5.5. Initialize domain.User resolution service" above) and is never
+	// nil in practice. This is deliberately fatal, not a soft warning: a
+	// missing auth handler leaves cliGateway.authHandler nil, and Gateway.
+	// Start skips authentication entirely whenever that's the case,
+	// starting an unauthenticated REPL under the "cli_unauthenticated"
+	// placeholder identity — the exact FR-001/AD-6 landmine this feature
+	// exists to close. If this ever fires, something upstream in wiring
+	// broke; failing loudly beats a silently unauthenticated REPL.
+	if app.DomainUserService == nil {
+		slog.Error("CLI login cannot be wired: DomainUserService is nil (AD-6 identity reconciliation requires it); refusing to start an unauthenticated REPL")
+		os.Exit(1)
+	}
+	sessionPath := cli.SessionFilePath(app.Config.Gateways.CLI.HistoryFile)
+	authHandler := cli.NewAuthCommandHandler(sharedAuth, app.DomainUserService, sessionPath, nil)
+	cliGateway.SetAuthHandler(authHandler)
 
 	app.connectGateway(cliGateway)
 
@@ -1170,7 +1246,11 @@ func (app *application) Run(ctx context.Context) error {
 		}
 		return cliGateway.Send(ctx, response)
 	}
-	skillHandler.SetMessageHandler(messageHandler, domain.PlatformCLI, "cli_user")
+	// The placeholder platformUID below is overwritten with the real
+	// logged-in identity once login/session-restore completes (AD-5/FR-007,
+	// see Gateway.authenticate → SkillHandler.SetPlatformUID) — login
+	// happens after this wiring step, inside cliGateway.Start().
+	skillHandler.SetMessageHandler(messageHandler, domain.PlatformCLI, "cli_unauthenticated")
 
 	gateways = append(gateways, cliGateway) //nolint:staticcheck // Reserved for future shutdown handling
 	_ = gateways                            // Prevent unused variable warning

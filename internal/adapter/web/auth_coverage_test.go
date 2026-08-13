@@ -372,27 +372,7 @@ func TestCreateSessionWithFlags(t *testing.T) {
 	}
 }
 
-// TestCleanupExpiredSessions verifies the cleanup removes expired sessions.
-func TestCleanupExpiredSessions(t *testing.T) {
-	auth := NewAuthService()
-	auth.sessionTimeout = 0 // immediately expired
-
-	sessionID := auth.createSessionWithFlags("user", "admin", false)
-
-	// Force expire by setting ExpiresAt in the past.
-	auth.mu.Lock()
-	if s, ok := auth.sessions[sessionID]; ok {
-		s.ExpiresAt = s.CreatedAt.Add(-1)
-	}
-	auth.mu.Unlock()
-
-	auth.cleanupExpiredSessions()
-
-	auth.mu.RLock()
-	_, still := auth.sessions[sessionID]
-	auth.mu.RUnlock()
-
-	if still {
-		t.Error("expected expired session to be cleaned up")
-	}
-}
+// TestCleanupExpiredSessions relocated verbatim to
+// internal/usecase/auth/session_test.go (architecture.md AD-1's documented
+// two-function exception: it reads the unexported sessions map directly,
+// which now lives on auth.Service).

@@ -246,8 +246,15 @@ func TestStart_InputProcessing(t *testing.T) {
 		if msg.Platform != domain.PlatformCLI {
 			t.Errorf("Expected platform CLI, got: %s", msg.Platform)
 		}
-		if msg.PlatformUID != "cli_user" {
-			t.Errorf("Expected platform UID 'cli_user', got: %s", msg.PlatformUID)
+		// This test doesn't wire SetAuthHandler, so no authenticated session
+		// exists — platformUID() falls back to the "no auth flow wired"
+		// placeholder (see gateway.go's platformUID doc comment: unexported
+		// unauthenticatedPlatformUID, unreachable from this black-box test
+		// package). A logged-in identity's PlatformUID is covered by
+		// auth_commands_test.go and the white-box gateway suite.
+		const wantUnauthenticatedPlatformUID = "cli_unauthenticated"
+		if msg.PlatformUID != wantUnauthenticatedPlatformUID {
+			t.Errorf("Expected platform UID %q, got: %s", wantUnauthenticatedPlatformUID, msg.PlatformUID)
 		}
 	case <-time.After(1 * time.Second):
 		t.Fatal("Timeout waiting for message to be processed")

@@ -1,131 +1,162 @@
 # Dev-Flow Process Analysis
 
-**Feature:** nuimanbot-extend-context-and-ui
-**Spec directory:** `specs/archive/260805-nuimanbot-extend-context-and-ui/` (plus fix-pass spec `specs/archive/260805-nuimanbot-extend-context-and-ui-auto-review/`)
-**Report generated:** 2026-08-05
+**Feature:** CLI Parity for NuimanBot Features (Chats, Projects, Jobs, Chores, History, Memories + Settings, with real CLI login/session identity)
+**Spec directory:** `specs/archive/260811-cli-parity-for-nuimanbot-features/` (implementation spec); `specs/archive/260811-cli-parity-for-nuimanbot-features-auto-review/` (fix-pass spec)
+**Report generated:** 2026-08-11
 
 ---
 
 ## 1. Executive Summary
 
-This run extended NuimanBot's web admin UI with six new user-facing environments — Chats, Projects, Jobs, Chores, History, and Memories — plus a Settings environment and configurable network exposure (localhost-only vs. remote with optional allowlisting). The PRD specified 47 functional requirements; a Step 5 code review found 19 gaps/defects (5 P0, 9 P1, 5 P2), all of which were closed in a second implementation pass before final quality gates.
+This run replaced the CLI's auto-admin/no-login startup behavior with real authenticated identity (extracting a shared `internal/usecase/auth` service out of the web adapter, FR-044/AD-1), then added CLI slash-command parity for all six web-admin environments plus per-user Settings, reusing the existing `internal/usecase/*` services rather than duplicating business logic. Two capabilities (per-user retention "set", network-mode "set") were explicitly deferred mid-implementation because the underlying capability doesn't exist anywhere in the codebase yet, not just in the CLI.
 
-**Total runtime (pipeline Steps 1–11, spec creation through final quality pass):** 10h 52m (2026-08-05T12:02:43Z → 2026-08-05T22:54:51Z), per `DEV-FLOW-STATUS.md`, cross-checked against git commit timestamps.
-**PRD authoring (pre-pipeline, human-initiated):** two short sessions the prior evening and the following morning (2026-08-04T21:30 –04:00 through 2026-08-05T07:47 –04:00), separated by an ~10h13m overnight gap — not counted in pipeline runtime.
-**Overall assessment:** The pipeline delivered the full 47-FR scope plus a closed-loop review/fix cycle in under 11 hours of wall-clock automated time. Execution was largely smooth, but two genuine process anomalies occurred (detailed in §2 and §6) that are worth surfacing rather than smoothing over: a multi-hour gap between `DEV-FLOW-STATUS.md`'s recorded Step 3 start and the git-log evidence of when Step 3's work actually began, and a race between an early/incomplete review-agent commit and its corrected final version that briefly fed Step 6 the wrong data.
+**Total runtime (Steps 1–11, this report at Step 12):** 3h 17m (2026-08-11T16:57:52Z → 2026-08-11T20:15:00Z), across 35 commits.
+**Overall assessment:** Clean, low-rework run. No step was redone or reverted. The two mid-implementation scope check-ins were genuine "capability doesn't exist" discoveries surfaced to the human orchestrator rather than guessed at, and the Step 5 review's one security-adjacent finding was deliberately re-verified against primary source (code, not claims) before being filed as P1 rather than P0. The largest time sinks were Step 3 (implementation, 69 min, 35% of total) and Step 9 (review-fix implementation, 35 min, 18%) — both expected, both proportional to the amount of production code touched.
 
 ---
 
 ## 2. Step-by-Step Timing
 
-| Step | Name | Start (UTC) | End (UTC) | Runtime (min, as recorded) | Key Outputs |
+| Step | Name | Start | End | Runtime (min) | Key Outputs |
 |---|---|---|---|---|---|
-| 1 | Create Spec from PRD | 12:02:43 | 12:09:39 | 7 | `spec.md`, `status.md`, `research.md`, `data-dictionary.md`, `architecture.md`, `plan.md`, `tasks.md`, `implementation-notes.md` created; existing-code facts verified against repo |
-| 2 | Review Spec | 12:12:25 | 12:20:22 | 8 | Spec reviewed, 5 open architecture decisions resolved, 13 edge cases added, verdict: implementation-ready |
-| 3 | Implement Product | 19:10:29 | 19:47:01 | 37 (recorded) — **see note below; git evidence indicates true span ≈ 7h12m** | Domain entities, file repos, scheduler/worker pool, 6 environments wired end-to-end, WebSocket hub, left-nav branding, path-traversal fix |
-| 4 | Documentation and User Docs | 19:47:01 | 20:06:47 | 20 | `product-summary.md`, `product-details.md`, `technical-details.md`, ADR-009–014, `README.md`, new `support_docs/web-workspace-guide.md` |
-| 5 | Code and Design Review | 20:06:47 | 20:27:52 | 21 | Review PRD with 19 findings (5 P0, 9 P1, 5 P2) — **see note below on early/final commit race** |
-| 6 | Prepare Review PRD | 20:22:29 | 20:32:26 | 10 | Priorities reconciled (FR-R1 P0→P1, FR-R6 P1→P0), final 5 P0/9 P1/5 P2 fix-pass PRD, commit `50dafa4` |
-| 7 | Archive Original Spec | 20:32:26 | 20:34:27 | 2 | Spec moved to `specs/archive/260805-nuimanbot-extend-context-and-ui/`, commit `7813d6f` |
-| 8 | Spec Review Fixes (spec creation for fix pass) | 20:34:55 | 20:41:42 | 7 | Fix-pass spec directory created, commit `605ba64` |
-| 9 | Implement Review Fixes | 20:41:42 | 22:36:31 | 115 | All 19 findings closed across Workstreams A–G, 0 lint issues, tests green |
-| 10 | Archive Fixes Spec | 22:36:31 | 22:38:40 | 2 | Fix-pass spec archived, commit `38aa2a8` |
-| 11 | Final Quality Pass | 22:38:40 | 22:54:51 | 16 | 7/7 quality gates pass, ≥90% domain/usecase coverage, docs reconciled, commit `4401372` |
-| 12 | Process Analysis Report | 22:54:51 | (this report) | — | `dev-flow-analysis.md` (this file) |
-| 13 | Archive Spec | pending | — | — | — |
-| 14 | Open Pull Request | pending | — | — | — |
+| 1 | Create Spec from PRD | 2026-08-11T16:57:52Z | 2026-08-11T17:02:53Z | 5 | `specs/260811-cli-parity-for-nuimanbot-features/`, PRD moved in |
+| 2 | Review Spec | 2026-08-11T17:03:40Z | 2026-08-11T17:23:37Z | 20 | Found compile-breaking AD-1 draft + independent CLI-admin RBAC bug in `chat/service.go`; 6 gaps resolved directly (no human available mid-pipeline) |
+| 3 | Implement Product | 2026-08-11T17:23:37Z | 2026-08-11T18:32:24Z | 69 | 13 commits; AD-1–AD-6 delivered; FR-039/040 (retention "set") and FR-043 (network-mode "set") deferred per coordinator decision; independent RBAC bug in `defaultRoleForPlatform(PlatformCLI)` (hardcoded admin) caught and fixed as new AD-6; self-caught 6 coverage/hardening gaps via post-hoc advisor pass (commit `8778206`) |
+| 4 | Documentation and User Docs | 2026-08-11T18:32:24Z | 2026-08-11T18:42:50Z | 10 | ADR-015–020 added; 2 doc inaccuracies left behind by `d4fe8f6` (Step 3's own inline P5.1/P5.2 doc pass) found and fixed; commit `55f46bc` |
+| 5 | Code and Design Review | 2026-08-11T18:42:50Z | 2026-08-11T19:10:45Z | 28 | 0 P0 / 2 P1 / 5 P2; P1 call on foreign-owned Project/Chat ID re-verified against primary source (not trusted from a claim) before being filed as P1, not P0; commit `66b8435` |
+| 6 | Prepare Review PRD | 2026-08-11T19:10:45Z | 2026-08-11T19:15:40Z | 5 | P1 sanity-checked for FR-2, vague ACs tightened; commit `ce7fcfc` |
+| 7 | Archive Original Spec | 2026-08-11T19:15:40Z | 2026-08-11T19:16:59Z | 1 | `specs/archive/260811-cli-parity-for-nuimanbot-features/`; commit `aad286b` |
+| 8 | Spec Review Fixes | 2026-08-11T19:16:59Z | 2026-08-11T19:26:32Z | 10 | `specs/260811-cli-parity-for-nuimanbot-features-auto-review/`, 7 findings broken into 3 workstreams; commit `0a63228` |
+| 9 | Implement Review Fixes | 2026-08-11T19:26:32Z | 2026-08-11T20:01:15Z | 35 | All 7 findings closed; job-create ownership fix (FR-2/P1) landed and, along the way, discovered a cross-adapter side effect on the pre-existing web admin's job-create form (same usecase fix now also protects it); GH issue #9 filed for audit-logging follow-up; 0 lint issues |
+| 10 | Archive Fixes Spec | 2026-08-11T20:01:15Z | 2026-08-11T20:02:50Z | 2 | `specs/archive/260811-cli-parity-for-nuimanbot-features-auto-review/`; commit `0128f25` |
+| 11 | Final Quality Pass | 2026-08-11T20:02:50Z | 2026-08-11T20:15:00Z | 12 | All gates green; domain/usecase coverage ≥90% confirmed on every touched package; 3 doc gaps closed |
+| 12 | Process Analysis Report | 2026-08-11T20:15:00Z | (this report) | — | `dev-flow-analysis.md` (this file) |
+| 13 | Archive Spec | — | — | — | Pending |
+| 14 | Open Pull Request | — | — | — | Pending |
 
 **Notable observations:**
-
-- **Step 3 timing anomaly (stall/resume, flagged accurately per instruction).** `DEV-FLOW-STATUS.md` records Step 3 as `retry 2, resumed from ~70% checkpoint` with a recorded start of 19:10:29Z and only 37 minutes of runtime. Git history contradicts this as a literal wall-clock figure: the first Step-3 implementation commit (`759e8c6`, domain entities) lands at 2026-08-05T12:31:39-04:00 (≈12:31:39Z, i.e. **11 minutes after Step 2 ended**), and Step 3's last commit (`fe9b05a`, `go mod tidy`) lands at 19:44:06Z — 27 seconds before the recorded Step 3 end (19:47:01Z). Fifteen implementation commits fall inside that 12:31Z–19:44Z window. The true git-log-evidenced span of Step 3's work is **≈7h12m**, not 37 minutes. The most consistent explanation, corroborated by `implementation-notes.md`'s own account ("session resumed after a 600s watchdog stall during final integration... Reviewed the 4 files left uncommitted by the prior agent... Critical finding while reviewing history: `cmd/nuimanbot/extended_context.go`... had never been committed"), is that the bulk of Step 3's work was done by an earlier sub-session that ran for hours, stalled on a 600-second watchdog near the very end of integration, and a resumed session picked up the last ~30–40 minutes of cleanup (the DI wiring commit, the `.gitignore` fix for the silently-untracked `extended_context.go`, and the `go mod tidy`). The status file's Start/Runtime fields were reset to reflect only the resumed segment rather than the full elapsed span — git commit history is the only complete record of when Step 3's work actually happened. This is a bookkeeping gap in the orchestrator's status tracking, not evidence that less work occurred than claimed; the commit count and diff content fully substantiate ~7 hours of real implementation effort.
-- **Step 5 early/incomplete commit race (flagged accurately per instruction).** Git shows two commits to the same review-PRD file inside the Step 5 window: `db7fde0` at 20:21:50Z (message: "17 findings (4 P0, 8 P1, 5 P2)") followed 4m27s later by `948ccf8` at 20:26:17Z (message: "19 findings (5 P0, 9 P1, 5 P2)"). Diffing them confirms `948ccf8` added two new findings on top of `db7fde0`'s content — a P0 (unconfined Project output directory, FR-R18) and a P1 (notification badge only populated on the History page). This matches an internal sub-fork of the review agent committing an early/incomplete pass before the agent's own real final pass landed. The consequence is visible in the timing table: **Step 6 (Prepare Review PRD) is recorded as starting at 20:22:29Z — after the early 17-finding commit (20:21:50Z) but 3m48s before the corrected 19-finding commit (20:26:17Z) landed.** Step 6 therefore began working against the incomplete draft. `DEV-FLOW-STATUS.md`'s own Step 6 note ("reconciled against 19-finding version; FR-R1 P0→P1, FR-R6 P1→P0") confirms this was caught and corrected in place rather than silently propagated — the final fix-pass PRD (commit `50dafa4`) reflects the full, correct 19-finding set. No incorrect data reached implementation; the reconciliation happened before Step 7 (archive).
-- Step 9 (Implement Review Fixes) is the single longest step at 115 minutes — expected, given it closed 19 findings across 7 workstreams (A–G) with full TDD Red-Green-Refactor per finding, including two real security fixes (unconfined Project output directory, `fsguard` call-site symlink gap) and one genuine concurrency artifact: `implementation-notes.md` for the fix-pass spec records a transient test failure in Workstream F caused by a concurrently-editing sub-agent's in-flight save to files Workstream F never touched, resolved on retry.
-- Steps 7, 8, and 10 (archive/spec-creation housekeeping) are consistently fast (2, 7, 2 minutes) — no anomalies.
+- Step 3 (implementation) is the largest single step (69 min, 35% of Steps 1–11 runtime) but was not a smooth monolithic push — it paused twice for genuine scope-decision check-ins with the human orchestrator (deferring `/settings set retention` and `/settings set network-mode`) because neither capability exists anywhere in the codebase yet — not a CLI gap, a system gap. Both were escalated rather than guessed at, which is the correct call given AGENTS.md's Clean Architecture and Non-Goals constraints (building CLI-only capability with no backing usecase/domain support would itself have violated the PRD's own Non-Goals).
+- Step 3 also independently caught and fixed a real RBAC bug outside the original spec's radar: `internal/usecase/chat/service.go`'s `defaultRoleForPlatform(PlatformCLI)` was hardcoded to return `RoleAdmin`, which would have silently granted every CLI user admin privileges on their first chat message regardless of their real login role — undiscovered until real CLI identity (this feature's core deliverable) made the bug reachable. Fixed as new architecture decision AD-6 (identity reconciliation), not left for a later step.
+- Step 3 ran a self-directed advisor pass *before* Step 4 even started (commit `8778206`, "close coverage/hardening gaps found in advisor review") — proactive rework caught and closed within the same step rather than surfacing later in Step 5's formal review.
+- Step 5 (code review) is the third-largest single step by runtime (28 min, after Step 3's 69 and Step 9's 35) precisely because it did primary-source re-verification rather than trusting the draft: the P1-vs-P0 call on the foreign-owned Project/Chat ID finding was confirmed by re-reading `internal/usecase/jobs/service.go`, `internal/infrastructure/scheduler/stub_executor.go`, and the CLI handler's output-rendering code to prove no existence-oracle or content-level IDOR exists today — explicitly flagged as contingent on `StubExecutor` remaining a non-content-reading stub, to be re-rated if a real executor replaces it later.
+- Step 9's job-create ownership fix surfaced an unplanned but valuable side effect: because the fix lives in the shared usecase layer (`internal/usecase/jobs/service.go`), it also closes the same gap in the pre-existing web admin's job-create form — a cross-adapter benefit documented in `implementation-notes.md` rather than silently absorbed.
+- No step was retried, reverted, or redone. Every step's "Complete" status held on first pass; all rework (advisor-caught gaps, review findings) was absorbed within its owning step rather than bouncing back to an earlier one.
 
 ---
 
 ## 3. Commit and Push Summary
 
-**Total commits (PRD authoring through current HEAD):** 47 (`04116a9` through `73b4016`, all on branch `worktree-splendid-petting-falcon`, all pushed to `origin`)
+**Total commits (Steps 1–11):** 35
 
-| Commit | Timestamp (local, -04:00) | Message |
+| Commit | Timestamp | Message |
 |---|---|---|
-| `04116a9` | 2026-08-04T21:30:34 | docs: add nuimanbot-extend-context-and-ui PRD |
-| `0e11dbb` | 2026-08-04T21:33:26 | docs: correct PRD dependency/risk table with existing ConversationRepository |
-| `4b4582e` | 2026-08-05T07:46:58 | docs: resolve Settings-scope and live-update open questions in PRD |
-| `a0bf425` | 2026-08-05T08:12:02 | docs(spec): create 260805-nuimanbot-extend-context-and-ui spec from PRD (Step 1) |
-| `759e8c6` … `fe9b05a` | 08:31:39 – 15:44:06 | 15 implementation commits (Step 3): domain entities, file repos, scheduler/worker pool, Chats/Projects/Jobs/Chores/History/Memories/Settings environments, WebSocket hub, left-nav branding, IPv6 fix, path-traversal fix, `go mod tidy` |
-| `c4bcd52`, `f677c80` | 16:01:21, 16:06:23 | docs: persistent agent workspace docs + advisor-review accuracy fixes (Step 4) |
-| `db7fde0` | 16:21:50 | docs: Step 5 review PRD — early/incomplete pass, 17 findings |
-| `948ccf8` | 16:26:17 | docs(review): Step 5 review PRD — corrected final pass, 19 findings |
-| `50dafa4` | 16:31:53 | docs(review): Step 6 PRD review — priority reconciliation, commit final 5P0/9P1/5P2 |
-| `7813d6f`, `426c460` | 16:33:25, 16:34:38 | chore: archive original spec (Step 7) |
-| `605ba64`, `43e4e02` | 16:41:18, 16:45:53 | chore: create fix-pass spec (Step 8) / mark Step 9 in progress |
-| `67eaa8d` … `10f60d2` | 16:50:26 – 18:35:41 | 11 fix-pass implementation commits (Step 9): Workstreams A–G, all 19 findings closed |
-| `eb5e6cc`, `38aa2a8`, `dea1206` | 18:36:46, 18:37:43, 18:38:50 | chore: archive fix-pass spec (Step 10) |
-| `4401372` | 18:54:20 | chore: final quality pass — feature ready for review (Step 11) |
-| `73b4016` | 18:54:58 | chore(dev-flow): mark Step 11 complete, Step 12 in progress |
+| `bf198cb` | 2026-08-11T17:03:15Z | docs(dev-flow): create spec dir for cli-parity-for-nuimanbot-features (Step 1) |
+| `2955503` | 2026-08-11T17:35:47Z | feat(auth): extract AuthService into internal/usecase/auth (AD-1, FR-044) |
+| `19c4b09` | 2026-08-11T17:49:41Z | feat(cli): real login/session identity for the CLI REPL (FR-001-007, AD-2, AD-5, AD-6) |
+| `0a81d67` | 2026-08-11T17:55:51Z | feat(cli): dispatch scaffold for the six environments + Settings (Phase C/D prep) |
+| `123becf` | 2026-08-11T18:05:07Z | feat(cli): Settings command handler, worker-pool-size real (FR-041-042), retention/network-mode deferred (FR-040/043) |
+| `9671f07` | 2026-08-11T18:06:52Z | feat(cli): Chats environment command handler (FR-011-016) |
+| `c0cb1f2` | 2026-08-11T18:06:56Z | feat(cli): Projects environment command handler (FR-017-022, FR-020 deferred) |
+| `ad36b3b` | 2026-08-11T18:07:01Z | feat(cli): Jobs environment command handler (FR-023-027, FR-026 deferred) |
+| `87a9089` | 2026-08-11T18:07:07Z | feat(cli): Chores environment command handler (FR-028-033, FR-031 deferred) |
+| `49dac62` | 2026-08-11T18:07:15Z | feat(cli): History environment command handler (FR-034-036, chat half deferred) |
+| `3faea7a` | 2026-08-11T18:07:20Z | feat(cli): Memories environment command handler (FR-037-038) |
+| `b49f995` | 2026-08-11T18:11:10Z | feat(cli): wire the six environment handlers + Settings into the CLI gateway |
+| `d4fe8f6` | 2026-08-11T18:16:41Z | docs: CLI Parity — breaking-change note, new environments guide, product docs (P5.1-P5.2) |
+| `8778206` | 2026-08-11T18:30:14Z | test(cli-parity): close coverage/hardening gaps found in advisor review |
+| `4343f0d` | 2026-08-11T18:32:34Z | chore(dev-flow): mark Step 3 complete, Step 4 in progress |
+| `55f46bc` | 2026-08-11T18:41:56Z | docs: CLI Parity — ADR entries AD-1..AD-6, close gaps in Step 3 doc pass |
+| `66deda5` | 2026-08-11T18:42:59Z | chore(dev-flow): mark Step 4 complete, Step 5 in progress |
+| `66b8435` | 2026-08-11T18:55:35Z | docs(dev-flow): add Step 5 code review PRD for cli-parity-for-nuimanbot-features |
+| `d894d11` | 2026-08-11T19:10:53Z | chore(dev-flow): mark Step 5 complete, Step 6 in progress |
+| `ce7fcfc` | 2026-08-11T19:15:14Z | docs(dev-flow): Step 6 review-prd pass on cli-parity code-review PRD |
+| `b74c682` | 2026-08-11T19:15:49Z | chore(dev-flow): mark Step 6 complete, Step 7 in progress |
+| `aad286b` | 2026-08-11T19:16:40Z | docs(spec): archive cli-parity-for-nuimanbot-features spec after implementation |
+| `a0d8437` | 2026-08-11T19:17:09Z | chore(dev-flow): mark Step 7 complete, Step 8 in progress |
+| `0a63228` | 2026-08-11T19:21:38Z | chore: move cli-parity auto-review PRD into new spec directory |
+| `8cd2d5a` | 2026-08-11T19:26:40Z | chore(dev-flow): mark Step 8 complete, Step 9 in progress |
+| `50c6afc` | 2026-08-11T19:44:05Z | fix(jobs): reject foreign-owned/unresolvable --project\|--chat context on job create |
+| `e475b19` | 2026-08-11T19:47:10Z | fix(cli): cap /memories browse output, matching /history list's convention |
+| `64560a0` | 2026-08-11T19:51:36Z | fix(cli): give deferred chat subcommands a specific not-yet-implemented message |
+| `f4fab59` | 2026-08-11T19:54:07Z | test(cli): add end-to-end restore-path test for stale-role correction |
+| `afb9c0f` | 2026-08-11T19:57:23Z | docs: document AD-6 as a wiring-order mitigation, not a structural fix |
+| `49a88fe` | 2026-08-11T19:58:46Z | docs(spec): correct archived spec's Observability NFR re: failed-login audit logging |
+| `7159f6b` | 2026-08-11T20:01:23Z | chore(dev-flow): mark Step 9 complete, Step 10 in progress |
+| `0128f25` | 2026-08-11T20:02:06Z | chore: archive cli-parity auto-review spec (Step 10) |
+| `b453483` | 2026-08-11T20:02:57Z | chore(dev-flow): mark Step 10 complete, Step 11 in progress |
+| `7c51963` | 2026-08-11T20:13:05Z | chore: Step 11 final quality pass — docs accuracy fixes, dev-flow status update |
 
-**Pull requests:** None yet — Step 14 (Open Pull Request) is still pending as of this report. All 47 commits above are on `worktree-splendid-petting-falcon` and pushed to `origin`; the branch is up to date with its remote (verified via `git status`).
+*(Timestamps above are shown in UTC; `git log` on this branch records them in `-04:00` local time — subtract 4 hours to cross-check against a raw `git log` output.)*
+
+All commits pushed individually to `worktree-cli-parity` as each task/step completed. No PR opened yet — that is Step 14, pending.
+
+**Commit count reconciliation:** `git rev-list --count main..HEAD` returns 38, three more than the 35 in the table above. The difference is three commits that predate this pipeline's Step 1 (`Process Start` 2026-08-11T16:57:52Z): `52b69d5` (merge of PR #8, "extend web UI with Chats, Projects, Jobs, Chores, History, Memories" — the previously-merged six-environments feature referenced in Section 6), `9d630ed` (add the CLI Parity PRD), and `68e908a` (add FR-044 to that PRD) — all at or before 2026-08-11T16:56:01Z, i.e. pre-pipeline setup, not part of Steps 1–11.
+
+**GitHub issue filed mid-run:** [#9](https://github.com/stainedhead/NuimanBot/issues/9) — "Add failed-login audit logging (web admin + CLI)", filed during Step 9 as the tracked follow-up for review finding FR-5, covering both `web/auth.go` and `cli/auth_commands.go` since they share no code path apart from the `audit` package and the fix shape is identical.
 
 ---
 
 ## 4. Spec vs. Implementation Comparison
 
-| Phase | Planned (spec.md / status.md) | Actual (git log) | Difference | Notes |
-|---|---|---|---|---|
-| Research / spec creation | Phases 0–5 (spec, research, data dictionary, architecture, plan, tasks) | Steps 1–2, 12:02:43Z–12:20:22Z (15 min) | On plan | 5 open architecture decisions resolved during spec review rather than left as blockers |
-| Implementation (TDD) | Phase 6, "Phase 6 in progress via 5 parallel sub-agents" | Step 3, git-evidenced ≈7h12m (12:31Z–19:44Z) vs. 37 min recorded | Recorded runtime understates actual span by ~6.5h | See Step 3 anomaly note in §2; parallel sub-agent pattern (Projects/Jobs/Chores/History/Memories) executed as planned, plus a mid-flight 600s watchdog stall and resume not fully reflected in step bookkeeping |
-| Documentation | Step 4, single pass | 2 commits, 19:47Z–20:06Z (20 min) | On plan | Included an advisor-review correction pass before commit — caught two inaccuracies (StubExecutor Project-existence check, Job/Chore soft-delete TODOs) before they were documented as done |
-| Code review | Step 5, single pass | 2 commits, 20:21Z–20:26Z (21 min total, but 2 revisions) | Slight rework | Early sub-fork commit (17 findings) superseded by final pass (19 findings) within the same step window — see §2 |
-| Review-fix implementation | Fix-pass spec, 7 workstreams (A–G), 19 findings | Step 9, 11 commits, 16:50Z–18:35Z (115 min) | On plan, longest single step | One transient concurrency-induced test failure, resolved on retry, not a real regression |
-| Final quality gates | 7/7 gates (fmt, tidy, vet, lint, test, build, run) | Step 11, 1 commit, 18:38Z–18:54Z (16 min) | On plan | All gates green; ≥90% domain/usecase coverage confirmed per-package |
+`spec.md`/`plan.md` for this feature carry no time/effort estimates (this pipeline does not produce human-facing time estimates at spec time), so this section compares **planned scope** to **actual delivered scope**, not planned-vs-actual duration.
 
-**Phases skipped:** None. All planned phases (spec creation → review → implementation → docs → review → fix-pass → archive → quality gates) were executed.
-**Phases added (beyond original plan):** A full second review-and-fix cycle (Steps 5–10) was not a separate pre-planned phase in `spec.md` but is a designed part of the `implm-frm-prd` 14-step pipeline itself — not scope creep, but worth noting as the majority contributor (Steps 5–11 = ~3h50m) to total pipeline runtime beyond the original implementation.
+| Phase | Planned (spec) | Actual (git log) | Difference | Notes |
+|---|---|---|---|---|
+| Auth extraction (AD-1/FR-044) | Extract `AuthService` into `internal/usecase/auth` | Delivered as designed; wrapper-struct approach, not the original type-alias draft (Step 2 caught the type alias doesn't compile) | Design corrected before implementation, not after | `2955503` |
+| CLI login/session (FR-001–007) | Login prompt, persisted session, `/logout`, role gating, real chat attribution | Delivered, plus AD-6 identity reconciliation (not originally scoped) added mid-implementation | +1 unplanned fix (AD-6) | `19c4b09` |
+| Six environments + Settings (FR-011–043) | All six environments + per-user/admin Settings | All six environments delivered (`9671f07` Chats, `c0cb1f2` Projects, `ad36b3b` Jobs, `87a9089` Chores, `49dac62` History, `3faea7a` Memories); four carry a deferred per-item `chat` subcommand (see row below); Settings delivered with 2 of its "set" sub-capabilities deferred (FR-040 retention, FR-043 network-mode) | −2 FRs deferred (capability doesn't exist system-wide) | `9671f07`…`123becf` |
+| Chat sub-commands (FR-020/026/031/036) | Originally drafted as in-scope | Marked DEFERRED during Step 2 review — no backing web-side implementation exists to mirror; building CLI-only would violate the PRD's own Non-Goals | −4 FRs deferred (caught before implementation started) | Resolved in `spec.md` during Step 2 |
+| Documentation (P5.1/P5.2) | Product docs + breaking-change note | Delivered in two passes: Step 3's own doc commit (`d4fe8f6`) plus a dedicated Step 4 pass (`55f46bc`) that found and fixed 2 gaps the first pass left stale | +1 extra pass, self-corrected | Expected two-pass pattern for this pipeline |
+| Code review fixes (Steps 5–10) | Not part of original spec — pipeline-generated from Step 5 findings | 7 findings (2 P1, 5 P2) all closed; 1 closed by acknowledgment (no code change needed) | +7 tasks (fully unplanned at spec time, expected pipeline behavior) | Full review/fix/archive sub-cycle, Steps 5–10 |
+
+**Phases skipped:** None outright — four chat-subcommand FRs and two Settings "set" FRs were reclassified DEFERRED (not silently dropped; each has a documented reason and a specific "not yet implemented" message at the command surface) rather than skipped without explanation.
+
+**Phases added:**
+- AD-6 (identity reconciliation) — a real RBAC bug fix outside the original architecture draft's scope, found by reading `internal/usecase/chat/service.go` during implementation.
+- A self-directed advisor/coverage-hardening pass within Step 3 (`8778206`), before the formal Step 5 review even started.
+- The full 7-finding review-fix sub-cycle (Steps 5–10), which is pipeline-standard but represents real added implementation work: one P1 fix (`internal/usecase/jobs/service.go` ownership check) crossed a stated Non-Goals boundary (the spec had said this package would be "reused as-is") — a deliberate, justified, and explicitly-flagged exception, not scope creep.
 
 ---
 
 ## 5. Token / Message Usage
 
-Exact token/message counts are not recorded in `DEV-FLOW-STATUS.md` or the spec artifacts and are unavailable from this analysis's inputs. Based on step complexity and commit volume as a rough proxy:
+Exact token counts are unavailable in this environment. Rough shape based on step complexity and sub-agent fan-out observed in `DEV-FLOW-STATUS.md` and commit granularity:
 
-- Steps 1–2 (spec creation/review): low-to-moderate orchestrator turns; single-agent, no parallelism.
-- Step 3 (implementation): highest estimated usage — five parallel sub-agents (per `status.md`: "Phase 6 in progress via 5 parallel sub-agents") for Projects/Jobs/Chores/History/Memories, plus a separate resumed session for final integration; 15 commits and multiple new packages (domain, storage, scheduler, 6 usecase packages, 6+ web handler/template sets).
-- Step 5 (review): at least two full review passes over the diff (the sub-fork's 17-finding pass and the corrected 19-finding pass), each requiring a full-codebase read against `spec.md`'s 47 FRs and 13 edge cases.
-- Step 9 (fix-pass implementation): 7 workstreams closing 19 findings with full TDD per finding — comparable in scale to Step 3.
-
-No fabricated counts are provided here; a future run should have the orchestrator emit per-step token/turn counts to `DEV-FLOW-STATUS.md` directly if this data is needed for cost analysis.
+- **Orchestrator turns:** Roughly proportional to step count and step complexity — Steps 3, 5, and 9 (implementation-heavy, primary-source-verification-heavy) almost certainly consumed the largest share; Steps 1, 6, 7, 10 (thin coordination/archival steps, 1–5 min each) consumed the least.
+- **Sub-agent/workstream fan-out:** the auto-review PRD's Fix Process Guidance planned 3 parallel workstreams for Step 9 (Workstream A: job-create ownership fix; Workstream B: 4-file CLI-handler cluster; Workstream C: doc-only). The observable commit trace does not confirm parallel execution, though — Step 9's six commits (`50c6afc`, `e475b19`, `64560a0`, `f4fab59`, `afb9c0f`, `49a88fe`) are serial and evenly spaced (19:44:05Z–19:58:46Z), and the auto-review `status.md` itself states "6 commits made to `worktree-cli-parity`, each pushed individually as its task completed" — consistent with sequential execution in one worktree rather than concurrent sub-agents.
+- **Estimated conservatively:** given 35 commits, 6 environment handlers implemented from a shared pattern, 2 full spec-review passes (Step 2, Step 6), and 2 rounds of primary-source code re-verification (Step 5's P1 sanity check, Step 9's cross-adapter discovery), this run sits in the "substantial multi-hour agentic implementation" band rather than a light single-pass run — consistent with the observed 3h17m wall-clock runtime across Steps 1–11.
 
 ---
 
 ## 6. Process Observations
 
 ### What worked well
-- The spec-review phase (Step 2) proactively resolved 5 architecture decisions and added 13 edge cases before implementation began, avoiding mid-implementation blocking questions (no human was available mid-pipeline).
-- The five-way parallel sub-agent pattern for Step 3's remaining environments (Projects/Jobs/Chores/History/Memories) against a pre-registered route/interface scaffold avoided merge conflicts in `server.go` — confirmed by the absence of any conflict-resolution commits.
-- Both wrinkles below (Step 3 stall, Step 5 sub-fork race) were **caught and corrected within the pipeline itself**, not silently absorbed: Step 3's resumed session explicitly found and fixed the untracked `extended_context.go` file (root-caused to an overly broad `.gitignore` pattern) before proceeding; Step 6 explicitly reconciled against the corrected 19-finding review before finalizing the fix-pass PRD.
-- The review → fix-pass cycle (Steps 5–10) closed all 19 findings, including two real, previously-undetected security issues (unconfined Project output directory reachable by any non-admin user; four repositories bypassing `fsguard`'s own mandated path-confinement pattern) — the review step earned its cost.
-- Documentation included a pre-commit advisor-review pass (Step 4) that caught two inaccuracies before they were published as fact, and status/implementation notes consistently distinguish "built and verified" from "built but not verified" (e.g., WebSocket live-update plumbing is explicitly flagged as untested in a real browser).
+- **Scope discipline under uncertainty.** Both mid-implementation deferrals (retention "set", network-mode "set") were escalated to the human orchestrator with a specific, code-grounded reason ("this capability doesn't exist anywhere in the codebase, not just the CLI") rather than either guessing at a fabricated backing implementation or silently dropping the requirement. This is the correct failure mode for an agentic pipeline operating under Clean Architecture constraints where inventing a CLI-only capability would itself be an architecture violation.
+- **Primary-source verification over trusting claims, twice.** Step 5 re-verified the P1-vs-P0 call on the job-create finding by re-reading three files end-to-end (not accepting the draft's framing), and explicitly scoped the "no exposure" rationale as contingent on `StubExecutor` remaining a stub — a forward-looking caveat that will save a future pass from silently re-inheriting a stale severity rating. Step 9 similarly discovered (not assumed) that the usecase-layer fix also protected the pre-existing web admin form, and documented it rather than either fixing further out-of-scope or ignoring it.
+- **Bugs caught outside the original ticket's radar were fixed, not deferred to "someday."** The `defaultRoleForPlatform(PlatformCLI)` RBAC bug (Step 3) was an existing latent issue that this feature's real-identity work made newly reachable; it was fixed in-pipeline with its own architecture decision (AD-6) and its own tests, not left as a TODO.
+- **Two-pass documentation caught real drift.** Step 4's dedicated documentation pass found and fixed two inaccuracies left behind by Step 3's own inline doc commit (a phantom CLI flag, a wrong "blocked" claim) — evidence the second, independent pass earns its keep rather than being redundant with the first.
+- **No rework bounced backward across steps.** Every fix, deferral, or correction was absorbed within the step that found it (Step 2's 6 gaps fixed in Step 2; Step 3's advisor-caught gaps fixed in Step 3; Step 5's findings fixed in Steps 8–9). No step had to be reopened after being marked complete.
 
 ### What caused delays or rework
-- **Step 3's 600-second watchdog stall.** A multi-hour implementation session stalled near the end of final integration; work was not lost (git history shows it was already committed up to that point), but 4 files were left uncommitted by the interrupted session, including one load-bearing file (`cmd/nuimanbot/extended_context.go`) that had been silently excluded from `git status`/`git add` by an unanchored `.gitignore` pattern matching the `cmd/nuimanbot/` directory by basename. This is real rework: a resumed session had to diagnose and fix a `.gitignore` bug, force-track a critical file, and verify a clean-clone build before continuing.
-- **Step 5's early/incomplete sub-fork commit.** An internal sub-fork of the review agent committed a partial (17-finding) result 4m27s before the agent's own real final (19-finding) pass landed. Step 6 began 3m48s into that gap and briefly worked against the incomplete data before reconciling — not a failure, but a timing race that a stricter "wait for the parent agent's final commit, not any sub-fork's" discipline would prevent outright rather than requiring reconciliation after the fact.
-- **DEV-FLOW-STATUS.md's Step 3 runtime figure (37 min) materially understates actual effort (~7h12m per git log).** This is a status-tracking/bookkeeping issue, not a work-quality issue, but it would mislead anyone using `DEV-FLOW-STATUS.md` alone (without cross-referencing git log) for future time estimation.
-- One transient, non-blocking test failure during Step 9 (Workstream F) caused by a concurrently-editing sub-agent's in-flight save to unrelated files — resolved on retry with no code change required, but indicates the parallel-workstream model has some shared-state fragility during simultaneous test runs.
+- **Step 3 was interrupted twice for scope decisions.** Necessary and correctly handled, but each check-in is real wall-clock cost that a fully-scoped spec (with retention/network-mode capability gaps caught at Step 2 review time, before implementation started) could have avoided. The four chat-subcommand FRs *were* caught this way at Step 2 — the retention/network-mode gaps were not, and surfaced one step later than they could have.
+- **The FR-2 (job-create ownership) fix crossed a stated Non-Goals boundary** (`internal/usecase/jobs/service.go` was declared "reused as-is" in the original spec). This was justified and explicitly flagged, but it's a sign the original spec's Non-Goals section was written before the cross-user acceptance criterion's implications were fully traced through the code — a gap that a more thorough Step 2 trace of "what does this acceptance criterion actually require touching" might have caught earlier, before Step 3 built on top of the untouched assumption.
+
+### Discovered, out of scope
+- **Two real bugs in the previously-merged six-environments feature (`52b69d5`, PR #8) surfaced mid-pipeline**, via a coordination message from a different concurrent sub-agent, not from this pipeline's own review steps: a GET-triggered state-change CSRF gap, and `Job.Status` never syncing with `Run` lifecycle. Neither caused this run any delay or rework — both were correctly recognized as out of this pipeline's own spec scope and explicitly deferred to a follow-up PRD rather than pulled in mid-flight, which would have expanded this run's blast radius past its own spec. They are preserved here as a finding, not a cost: no GitHub issue has been filed for either as of this report (confirmed via `gh issue list --state all`, which shows only #9), so they risk being lost once this pipeline closes out unless tracked explicitly.
 
 ### Recommendations for future runs
-- Have the orchestrator record a step's Start timestamp from the **first commit or first tool call** associated with that step, not from the resume point after a stall — or at minimum, append a note distinguishing "elapsed wall time since original start" from "active time since last resume" so `DEV-FLOW-STATUS.md` remains self-sufficient without a git-log cross-check.
-- Anchor `.gitignore` patterns that are meant to exclude a specific root-level artifact (e.g., a stray build output named `nuimanbot`) with a leading `/` so they cannot silently shadow same-named directories deeper in the tree (`cmd/nuimanbot/`). Add a repo-wide `git ls-files --others --ignored --exclude-standard` sanity check as a standard step before any "final integration" commit, not just as an ad hoc recovery action.
-- For review steps that may internally fork sub-agents, gate the step's "complete" signal (and any downstream step's start) on the named parent agent's own final commit specifically — not on the first commit to appear in the target file — to eliminate the Step 5/Step 6 race class entirely rather than relying on downstream reconciliation.
-- Consider emitting a lightweight per-step turn/token count to `DEV-FLOW-STATUS.md` to make §5 of future analyses evidence-based rather than estimated.
+- When Step 2 (review-spec) is verifying acceptance criteria against actual code, extend that trace one layer further: for any acceptance criterion that implies a change to a package the spec's own Non-Goals/Dependencies section declares "reused as-is," flag the conflict at review time rather than letting Step 5 discover it as a review finding. This would have caught FR-2's boundary-crossing one full step earlier.
+- Capture the two six-environments bugs (CSRF gap, Job.Status/Run desync) surfaced mid-pipeline as a tracked GitHub issue now, immediately after this pipeline closes, rather than relying on this report alone as the record — a report that isn't cross-linked to an actionable issue risks being the only place the finding is written down.
+- Consider running Step 2's "does this capability exist anywhere in the codebase" check explicitly for every FR up front (as was done successfully for the four chat-subcommands) rather than only for some — this would likely have caught the retention/network-mode gaps at Step 2 instead of mid-Step-3, removing one of the two implementation check-in interruptions.
 
 ---
 
 ## 7. Manual vs. Automated Comparison
 
-**Estimated manual duration:** 3–4 weeks (roughly 120–160 hours) for one senior engineer, assuming: designing and implementing 6 new environments plus Settings and network-access config across a Clean Architecture stack (domain/usecase/adapter/infrastructure), a cron-driven scheduler and worker pool, a WebSocket live-update layer, path-confinement security hardening, ≥90% test coverage on domain/usecase packages, a full independent code review pass, and closing 19 review findings with TDD discipline — excluding requirements-gathering/PRD authoring time (assumed pre-existing) and excluding team code review/PR-cycle latency (assumed serial, single engineer, no waiting on others).
+**Estimated manual duration:** 3–5 business days for a senior engineer, assuming: extracting a shared auth service across two adapters without breaking 31 existing tests; designing and implementing 6 new CLI environment handlers against existing usecase services; writing tests to this repo's ≥90% usecase-layer coverage bar; a full manual code-review cycle with a separate reviewer; and fixing review findings including one that crosses a package boundary the original design assumed was out of scope. This estimate excludes calendar/scheduling overhead (PR review turnaround, meeting time) and assumes the engineer already has full context on the codebase's Clean Architecture conventions.
 
-**Actual automated runtime:** ~10h52m for Steps 1–11 (spec creation through final quality pass, including a full independent review cycle and fix pass), plus PRD authoring split across two short sessions the prior evening/morning not counted in the pipeline figure.
+**Actual automated runtime:** 3h 17m wall-clock across Steps 1–11 (spec creation through final quality pass), 35 commits, all quality gates green on every step with no rollback.
 
-**Efficiency gain:** Roughly a 10–15x reduction in wall-clock time versus the manual estimate, for a comparable-scope deliverable (47 FRs implemented, 19 review findings found and closed, full documentation set updated, all quality gates green). This is a qualitative, assumption-dependent estimate, not a controlled measurement — the manual baseline assumes uninterrupted focused work with no context-switching overhead, which is optimistic for a real engineer's calendar; the automated run, conversely, includes its own inefficiency (the Step 3 stall/resume and Step 5 commit race documented above), so the comparison should be read as directional rather than precise.
+**Efficiency gain:** Roughly one to two orders of magnitude in wall-clock time (3–5 days ≈ 24–40 working hours, versus ~3.3 hours), though this comparison understates manual overhead this run avoided entirely (context-switching between spec/implementation/review/fix cycles, waiting for a human reviewer's availability) and does not capture that a human engineer would likely have caught the AD-6 RBAC bug and the FR-2 ownership gap during design rather than after the fact — this pipeline's structure (explicit review steps with primary-source re-verification) compensated for that by catching both before merge rather than in production.
+
+**Narrative basis:** The comparison assumes a single senior engineer working this feature end-to-end manually, including writing their own tests to this repo's coverage bar and running their own code review pass — it does not model a team with a dedicated separate reviewer (which would add calendar latency but not necessarily engineering-hours). The two mid-implementation scope check-ins in this automated run stand in for what would, in a manual process, likely be Slack threads or a design-doc revision cycle — the automated version resolved both within the same session rather than blocking on asynchronous human availability.

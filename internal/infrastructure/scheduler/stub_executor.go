@@ -30,6 +30,23 @@ var errProjectDeleted = errors.New("referenced Project no longer exists")
 // implementation-notes.md's "Deviations from Plan") is a drop-in swap:
 // nothing else in this package depends on StubExecutor specifically, only
 // on the Executor interface.
+//
+// FR-002 (auto-review fix pass) obligation for that future executor:
+// jobs.Service.CreateJob now verifies Chat-context ownership before a Job
+// is persisted, so a Job's ContextID can no longer be seeded with a
+// foreign-owned Chat at creation time. That guarantee holds only at
+// creation time, though — StubExecutor never dereferences Chat content
+// (only checkProjectExists below reads anything, and only for
+// ContextTypeProject), so today there is no run-time re-check needed. A
+// real executor that reads Chat content via a Run's source Job/Chore
+// ContextID at execution time MUST re-verify that Chat is still owned by
+// the Run's OwnerUserID before reading it (mirroring checkProjectExists'
+// pattern for Project) — CreateJob-time verification cannot protect
+// against a Chat's ownership changing (or the check being bypassed via a
+// different creation path) between Job creation and eventual execution.
+// See specs/260811-cli-parity-for-nuimanbot-features-auto-review's FR-002
+// finding and its Open Questions ("StubExecutor's eventual replacement")
+// for the full rationale.
 type StubExecutor struct {
 	runs     domain.RunRepository
 	jobs     domain.JobRepository

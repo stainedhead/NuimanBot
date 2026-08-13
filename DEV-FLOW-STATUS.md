@@ -1,29 +1,29 @@
 # Dev-Flow Implementation Status
 
-**PRD:** nuimanbot-extend-context-and-ui-PRD.md
-**Spec:** specs/260805-nuimanbot-extend-context-and-ui/
-**Branch:** worktree-splendid-petting-falcon
-**Review PRD:** nuimanbot-extend-context-and-ui-auto-review-PRD.md
-**Process Start:** 2026-08-05T12:02:43Z
-**Process End:** 2026-08-05T23:02:32Z
-**Total Runtime:** 660 minutes (~11h 0m)
-**Pull Request:** https://github.com/stainedhead/NuimanBot/pull/8
+**PRD:** cli-parity-for-nuimanbot-features-PRD.md
+**Spec:** specs/260811-cli-parity-for-nuimanbot-features/
+**Branch:** worktree-cli-parity
+**Review PRD:** cli-parity-for-nuimanbot-features-auto-review-PRD.md
+**Process Start:** 2026-08-11T16:57:52Z
+**Process End:** 2026-08-11T20:20:05Z
+**Total Runtime:** 202 minutes (~3h 22m)
+**Pull Request:** https://github.com/stainedhead/NuimanBot/pull/10
 
 ## Step Summary
 
 | Step | Name | Status | Start | End | Runtime (min) |
 |------|------|--------|-------|-----|---------------|
-| 1  | Create Spec from PRD            | ✅ Complete | 2026-08-05T12:02:43Z | 2026-08-05T12:09:39Z | 7 |
-| 2  | Review Spec                     | ✅ Complete | 2026-08-05T12:12:25Z | 2026-08-05T12:20:22Z | 8 |
-| 3  | Implement Product                | ✅ Complete (retry 2, resumed from ~70% checkpoint) | 2026-08-05T19:10:29Z | 2026-08-05T19:47:01Z | 37 |
-| 4  | Documentation and User Docs      | ✅ Complete | 2026-08-05T19:47:01Z | 2026-08-05T20:06:47Z | 20 |
-| 5  | Code and Design Review           | ✅ Complete (corrected 20:27: agent's own sub-fork committed early at 17 findings; agent's real final pass merged 2 more → 19 findings: 5 P0, 9 P1, 5 P2, commit 948ccf8) | 2026-08-05T20:06:47Z | 2026-08-05T20:27:52Z | 21 |
-| 6  | Prepare Review PRD               | ✅ Complete (reconciled against 19-finding version; FR-R1 P0→P1, FR-R6 P1→P0; final 5 P0/9 P1/5 P2, commit 50dafa4) | 2026-08-05T20:22:29Z | 2026-08-05T20:32:26Z | 10 |
-| 7  | Archive Original Spec            | ✅ Complete (moved to specs/archive/260805-nuimanbot-extend-context-and-ui/, commit 7813d6f) | 2026-08-05T20:32:26Z | 2026-08-05T20:34:27Z | 2 |
-| 8  | Spec Review Fixes                | ✅ Complete (specs/260805-nuimanbot-extend-context-and-ui-auto-review/, commit 605ba64) | 2026-08-05T20:34:55Z | 2026-08-05T20:41:42Z | 7 |
-| 9  | Implement Review Fixes           | ✅ Complete (all 19 findings closed, 0 lint issues, tests green) | 2026-08-05T20:41:42Z | 2026-08-05T22:36:31Z | 115 |
-| 10 | Archive Fixes Spec               | ✅ Complete (specs/archive/260805-nuimanbot-extend-context-and-ui-auto-review/, commit 38aa2a8) | 2026-08-05T22:36:31Z | 2026-08-05T22:38:40Z | 2 |
-| 11 | Final Quality Pass               | ✅ Complete (7/7 gates pass, coverage ≥90% domain/usecase, docs reconciled, commit 4401372) | 2026-08-05T22:38:40Z | 2026-08-05T22:54:51Z | 16 |
-| 12 | Process Analysis Report          | ✅ Complete (dev-flow-analysis.md, commit c08aa8a) | 2026-08-05T22:54:51Z | 2026-08-05T23:01:48Z | 7 |
-| 13 | Archive Spec                     | ✅ Complete (already satisfied by Steps 7/10; verified specs/archive/ holds both) | 2026-08-05T23:01:48Z | 2026-08-05T23:01:48Z | 0 |
-| 14 | Open Pull Request                | ✅ Complete (PR #8, not merged) | 2026-08-05T23:01:48Z | 2026-08-05T23:02:32Z | 1 |
+| 1  | Create Spec from PRD             | ✅ Complete (specs/260811-cli-parity-for-nuimanbot-features/, PRD moved into spec dir) | 2026-08-11T16:57:52Z | 2026-08-11T17:02:53Z | 5 |
+| 2  | Review Spec                      | ✅ Complete (found compile-breaking AD-1 flaw + real CLI-admin RBAC bug in chat/service.go; 6 gaps resolved) | 2026-08-11T17:03:40Z | 2026-08-11T17:23:37Z | 20 |
+| 3  | Implement Product                | ✅ Complete (13 commits: AD-1-6 done, 2 FRs deferred per coordinator decision, self-caught 6 gaps via post-hoc advisor pass) | 2026-08-11T17:23:37Z | 2026-08-11T18:32:24Z | 69 |
+| 4  | Documentation and User Docs      | ✅ Complete (ADR-015-020 added, 2 doc inaccuracies fixed, commit 55f46bc) | 2026-08-11T18:32:24Z | 2026-08-11T18:42:50Z | 10 |
+| 5  | Code and Design Review           | ✅ Complete (0 P0, 2 P1, 5 P2, commit 66b8435) | 2026-08-11T18:42:50Z | 2026-08-11T19:10:45Z | 28 |
+| 6  | Prepare Review PRD               | ✅ Complete (P1 sanity-checked for FR-2, vague ACs tightened, commit ce7fcfc) | 2026-08-11T19:10:45Z | 2026-08-11T19:15:40Z | 5 |
+| 7  | Archive Original Spec            | ✅ Complete (specs/archive/260811-cli-parity-for-nuimanbot-features/, commit aad286b) | 2026-08-11T19:15:40Z | 2026-08-11T19:16:59Z | 1 |
+| 8  | Spec Review Fixes                | ✅ Complete (specs/260811-cli-parity-for-nuimanbot-features-auto-review/, 7 tasks across 3 workstreams, commit 0a63228) | 2026-08-11T19:16:59Z | 2026-08-11T19:26:32Z | 10 |
+| 9  | Implement Review Fixes           | ✅ Complete (all 7 findings closed, filed GH issue #9 for audit-logging follow-up, 0 lint issues) | 2026-08-11T19:26:32Z | 2026-08-11T20:01:15Z | 35 |
+| 10 | Archive Fixes Spec               | ✅ Complete (specs/archive/260811-cli-parity-for-nuimanbot-features-auto-review/, commit 0128f25) | 2026-08-11T20:01:15Z | 2026-08-11T20:02:50Z | 2 |
+| 11 | Final Quality Pass               | ✅ Complete (all gates green, domain/usecase coverage confirmed ≥90% on every touched package, 3 doc gaps closed — deferred-chat-message wording, AD-6 messaging in Deliberately Deferred section, 2 broken README anchors fixed) | 2026-08-11T20:02:50Z | 2026-08-11T20:15:00Z | 12 |
+| 12 | Process Analysis Report          | ✅ Complete (dev-flow-analysis.md, commit 9d79d3b) | 2026-08-11T20:15:00Z | 2026-08-11T20:19:08Z | 4 |
+| 13 | Archive Spec                     | ✅ Complete (already satisfied by Steps 7/10; verified specs/archive/ holds both) | 2026-08-11T20:19:08Z | 2026-08-11T20:19:08Z | 0 |
+| 14 | Open Pull Request                | ✅ Complete (PR #10, not merged) | 2026-08-11T20:19:08Z | 2026-08-11T20:20:05Z | 1 |

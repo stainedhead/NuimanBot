@@ -41,6 +41,11 @@ data/certs/
 
 # Runtime data (auto-generated on server start, never committed)
 data/users.json
+data/domain_users.json
+data/audit/
+
+# CLI session token (auto-generated on login, never committed — AD-2)
+.nuimanbot_session
 
 # Database files
 *.db

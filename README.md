@@ -133,8 +133,9 @@ export NUIMANBOT_LLM_OLLAMA_BASEURL="http://localhost:11434"
 
 **Feature Guides**
 - [Web Workspace Guide](support_docs/web-workspace-guide.md) - Using Chats, Projects, Jobs, Chores, History, and Memories from the web UI
+- [CLI Environments Guide](support_docs/cli-environments-guide.md) - The same six environments plus Settings, from the CLI's slash-commands; also covers the CLI's login requirement
 - [Agent Skills](support_docs/skills-guide.md) - Creating and using reusable prompt templates
-- [Persona Customization](support_docs/user-onboarding.md#persona-customization) - Per-user AI personality files
+- [Persona Customization](support_docs/user-guide-persona.md) - Per-user AI personality files
 - [Self-Organizing Memory](support_docs/self-organizing-memory-guide.md) - Long-term memory system
 - [Buzz Gateway](support_docs/buzz-guide.md) - Joining Buzz (Nostr-based multi-agent chat) channels
 - [Security Hardening Guide](support_docs/security-hardening-guide.md) - Action confirmations, tool-output scanning, SSRF protection, and RBAC config
@@ -227,7 +228,7 @@ See [AGENTS.md](AGENTS.md) for detailed development guidelines.
 We welcome contributions! Please follow these guidelines:
 
 **1. Development Standards**
-- Follow [Clean Architecture](AGENTS.md#clean-architecture) principles
+- Follow [Clean Architecture](AGENTS.md#architecture-clean-architecture) principles
 - Write tests first (TDD)
 - Ensure all quality gates pass
 - Maintain or improve test coverage (currently 72%+)
@@ -392,6 +393,7 @@ See [Product Summary](documentation/product-summary.md#persistent-agent-workspac
 ✅ **Production Ready** - 100% Complete
 
 **Recently Completed**
+- ⚠️ **Breaking change:** CLI Parity — real login/session identity for the CLI REPL, replacing the previous unconditional `cli_admin` auto-grant (`./bin/nuimanbot` now prompts for username/password before any command or chat input, same accounts as the web admin UI, session persists 24h, `/logout` to end early); plus CLI slash-commands mirroring the web UI's Chats, Projects, Jobs, Chores, History, Memories, and Settings environments (`/chat`, `/project`, `/job`, `/chore`, `/history`, `/memories`, `/settings`) — data created via CLI or web is visible in both. Credential/session logic extracted from the web adapter into a shared `internal/usecase/auth` package so both adapters authenticate against the same accounts. See [CLI Environments Guide](support_docs/cli-environments-guide.md) for what changed and how to adapt any scripts relying on the old zero-friction CLI access (2026-08-11)
 - 🔶 Persistent Agent Workspace (web UI): Chats, Projects, Jobs, Chores, History, Memories, Settings, configurable network access — real queueing/scheduling/persistence pipeline with a scheduled retention sweep, restart recovery, and live browser-side WebSocket updates; agent-invoking execution still pending (2026-08-05, hardened same day by a review-fix pass; see [Known Limitations](#known-limitations))
 - ✅ Buzz Gateway (Nostr-based multi-agent chat: relay client, RBAC, tool integration; cross-platform RBAC enforcement fix) (2026-08-02)
 - ✅ Security Hardening — Parts A-G: tool-output injection filtering (`OutputValidator`), prompt-boundary guardrails, side-effecting action confirmation flow, RBAC correction with CI guard, SSRF hardening (IP-resolution + redirect revalidation), MCP trust classification, documentation parity (2026-08-02)

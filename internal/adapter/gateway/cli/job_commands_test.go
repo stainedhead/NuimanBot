@@ -1,0 +1,487 @@
+package cli_test
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+
+	"nuimanbot/internal/adapter/gateway/cli"
+	"nuimanbot/internal/domain"
+	"nuimanbot/internal/infrastructure/storage"
+	"nuimanbot/internal/usecase/jobs"
+)
+
+// stubRunEnqueuer is a minimal test double for jobs.RunEnqueuer.
+type stubRunEnqueuer struct{}
+
+func (stubRunEnqueuer) Enqueue(context.Context, jobs.EnqueueRequest) error { return nil }
+
+// stubProjectLookup is a test double for jobs.ProjectDirectoryLookup, scoped
+// by ownerUserID exactly like the real implementation would be: a project ID
+// only resolves for the owner it was registered under, so a caller-supplied
+// ownerUserID that doesn't match returns domain.ErrNotFound.
+type stubProjectLookup struct {
+	// dirs maps ownerUserID -> projectID -> outputDirectory.
+	dirs map[string]map[string]string
+}
+
+func (s *stubProjectLookup) OutputDirectoryFor(_ context.Context, ownerUserID, projectID string) (string, error) {
+	byOwner, ok := s.dirs[ownerUserID]
+	if !ok {
+		return "", domain.ErrNotFound
+	}
+	dir, ok := byOwner[projectID]
+	if !ok {
+		return "", domain.ErrNotFound
+	}
+	return dir, nil
+}
+
+// stubChatOwnership is a test double for jobs.ChatOwnershipCheck, scoped by
+// ownerUserID exactly like stubProjectLookup: a chat ID only verifies as
+// owned for the owner it was registered under.
+type stubChatOwnership struct {
+	// owned maps ownerUserID -> chatID -> owned.
+	owned map[string]map[string]bool
+}
+
+func (s *stubChatOwnership) VerifyChatOwnership(_ context.Context, ownerUserID, chatID string) error {
+	if byOwner, ok := s.owned[ownerUserID]; ok && byOwner[chatID] {
+		return nil
+	}
+	return domain.ErrNotFound
+}
+
+// newTestJobHandler builds a *cli.JobCommandHandler backed by a real
+// jobs.Service (using the same in-memory-friendly file-backed test doubles
+// internal/usecase/jobs/service_test.go uses), optionally with a
+// project lookup registered for cross-owner isolation tests. No
+// ChatOwnershipCheck is wired (see newTestJobHandlerFull for tests that
+// need one) — every call site below only exercises --chat contexts with
+// either no contextID or via newTestJobHandlerFull directly.
+func newTestJobHandler(t *testing.T, lookup jobs.ProjectDirectoryLookup) *cli.JobCommandHandler {
+	t.Helper()
+	return newTestJobHandlerFull(t, lookup, nil)
+}
+
+// newTestJobHandlerFull is newTestJobHandler with an explicit
+// ChatOwnershipCheck, for tests exercising /job create --chat <id>'s
+// ownership check (FR-002, auto-review fix pass).
+func newTestJobHandlerFull(t *testing.T, lookup jobs.ProjectDirectoryLookup, chatOwnership jobs.ChatOwnershipCheck) *cli.JobCommandHandler {
+	t.Helper()
+	tmp := t.TempDir()
+	svc := jobs.NewService(
+		storage.NewFileJobRepository(tmp),
+		storage.NewFileRunRepository(tmp),
+		stubRunEnqueuer{},
+		lookup,
+		chatOwnership,
+		storage.NewFileConfinedFileStore(),
+		tmp,
+	)
+	return cli.NewJobCommandHandler(svc)
+}
+
+func TestJobCommand_BareShowsHelp(t *testing.T) {
+	h := newTestJobHandler(t, nil)
+	out, err := h.HandleJobCommand(context.Background(), &domain.User{ID: "u1"}, "alice", "/job")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "list") || !strings.Contains(out, "create") || !strings.Contains(out, "show") || !strings.Contains(out, "delete") {
+		t.Fatalf("expected help text listing subcommands, got: %q", out)
+	}
+}
+
+func TestJobCommand_UnrecognizedSubcommand(t *testing.T) {
+	h := newTestJobHandler(t, nil)
+	out, err := h.HandleJobCommand(context.Background(), &domain.User{ID: "u1"}, "alice", "/job bogus")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "Unknown") {
+		t.Fatalf("expected unknown-subcommand message, got: %q", out)
+	}
+}
+
+// TestJobCommand_ChatDeferred guards FR-026's deliberate deferral: /job
+// chat must not be recognized as a working subcommand (no new chat
+// capability built). FR-003 (auto-review fix pass): the response must be a
+// specific "not yet implemented" message naming the command and FR-026,
+// distinguishable from a genuine typo — not the generic "Unknown job
+// command" fallthrough.
+func TestJobCommand_ChatDeferred(t *testing.T) {
+	h := newTestJobHandler(t, nil)
+	out, err := h.HandleJobCommand(context.Background(), &domain.User{ID: "u1"}, "alice", "/job chat job-1 hello")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(out, "hello") {
+		t.Fatalf("expected /job chat to NOT be handled as a real chat command, got: %q", out)
+	}
+	// job_commands_test.go is package cli_test (black-box) and cannot
+	// reference the unexported jobChatNotImplementedMessage constant
+	// directly, so this asserts on the message's distinctive, stable
+	// content instead of exact equality — still "the specific message
+	// text," not merely "some non-crashing response" (tasks.md B.2).
+	if !strings.Contains(out, "'/job chat'") || !strings.Contains(out, "not yet implemented") || !strings.Contains(out, "FR-026") {
+		t.Errorf("expected a specific '/job chat ... not yet implemented ... FR-026' message, got: %q", out)
+	}
+	if strings.Contains(out, "Unknown job command") {
+		t.Errorf("expected a specific not-yet-implemented message, not the generic unknown-command fallthrough, got: %q", out)
+	}
+
+	// Bare "/job chat" (no id/message args) must also return the specific
+	// message, not fall through to generic showHelp().
+	bareOut, err := h.HandleJobCommand(context.Background(), &domain.User{ID: "u1"}, "alice", "/job chat")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(bareOut, "'/job chat'") || !strings.Contains(bareOut, "not yet implemented") {
+		t.Errorf("expected bare '/job chat' to also return the not-yet-implemented message, got: %q", bareOut)
+	}
+}
+
+// TestJobCommand_UnknownSubcommandStillGeneric verifies a genuine typo
+// (not "chat") still gets the generic unrecognized-subcommand response —
+// complementing (not duplicating) TestJobCommand_UnrecognizedSubcommand's
+// looser "/job bogus" check above with a typo shaped specifically to
+// confirm FR-003's new "chat" case doesn't over-match ("chta" vs "chat"),
+// so FR-003's fix for "chat" doesn't accidentally swallow real typos into
+// a misleading "not yet implemented" message.
+func TestJobCommand_UnknownSubcommandStillGeneric(t *testing.T) {
+	h := newTestJobHandler(t, nil)
+	out, err := h.HandleJobCommand(context.Background(), &domain.User{ID: "u1"}, "alice", "/job chta")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "Unknown job command") {
+		t.Errorf("expected the generic unknown-subcommand response for a real typo, got: %q", out)
+	}
+}
+
+func TestJobCommand_CreateAndList(t *testing.T) {
+	h := newTestJobHandler(t, nil)
+	ctx := context.Background()
+	user := &domain.User{ID: "u1"}
+
+	out, err := h.HandleJobCommand(ctx, user, "alice", `/job create "Clean the inbox" "Archive anything older than 30 days."`)
+	if err != nil {
+		t.Fatalf("create: unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "Clean the inbox") {
+		t.Fatalf("expected created job title in output, got: %q", out)
+	}
+
+	out, err = h.HandleJobCommand(ctx, user, "alice", "/job list")
+	if err != nil {
+		t.Fatalf("list: unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "Clean the inbox") {
+		t.Fatalf("expected job in list output, got: %q", out)
+	}
+}
+
+func TestJobCommand_ListEmpty(t *testing.T) {
+	h := newTestJobHandler(t, nil)
+	out, err := h.HandleJobCommand(context.Background(), &domain.User{ID: "u1"}, "alice", "/job list")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(out), "no job") {
+		t.Fatalf("expected an empty-list message, got: %q", out)
+	}
+}
+
+func TestJobCommand_CreateWithChatContext(t *testing.T) {
+	chatOwnership := &stubChatOwnership{owned: map[string]map[string]bool{
+		"alice": {"chat-1": true},
+	}}
+	h := newTestJobHandlerFull(t, nil, chatOwnership)
+	ctx := context.Background()
+	user := &domain.User{ID: "u1"}
+
+	_, err := h.HandleJobCommand(ctx, user, "alice", `/job create Title Description --chat chat-1`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	out, err := h.HandleJobCommand(ctx, user, "alice", "/job list --chat chat-1")
+	if err != nil {
+		t.Fatalf("list --chat: unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "Title") {
+		t.Fatalf("expected job filtered by --chat context, got: %q", out)
+	}
+
+	out, err = h.HandleJobCommand(ctx, user, "alice", "/job list --project some-other-id")
+	if err != nil {
+		t.Fatalf("list --project: unexpected error: %v", err)
+	}
+	if strings.Contains(out, "Title") {
+		t.Fatalf("expected job to be filtered OUT by unrelated --project context, got: %q", out)
+	}
+}
+
+// TestJobCommand_CreateWithForeignChat_FailsNotFound is FR-002's mandatory
+// explicit acceptance test for --chat, mirroring
+// TestJobCommand_CreateWithForeignProject_FailsNotFound: a chat ID owned by
+// a DIFFERENT user must be rejected outright, not silently attached.
+// Previously ContextTypeChat had no ownership check at all.
+func TestJobCommand_CreateWithForeignChat_FailsNotFound(t *testing.T) {
+	chatOwnership := &stubChatOwnership{owned: map[string]map[string]bool{
+		// chat-1 exists only under "bob", not "alice".
+		"bob": {"chat-1": true},
+	}}
+	h := newTestJobHandlerFull(t, nil, chatOwnership)
+	ctx := context.Background()
+	user := &domain.User{ID: "u1"}
+
+	out, err := h.HandleJobCommand(ctx, user, "alice", `/job create Title Description --chat chat-1`)
+	if err == nil {
+		t.Fatalf("expected an error rejecting a foreign-owned chat context, got output: %q", out)
+	}
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got: %v", err)
+	}
+
+	jobsList, listErr := h.HandleJobCommand(ctx, user, "alice", "/job list")
+	if listErr != nil {
+		t.Fatalf("unexpected error: %v", listErr)
+	}
+	if strings.Contains(jobsList, "Title") {
+		t.Fatalf("expected no job to have been created for a rejected foreign chat context, got: %q", jobsList)
+	}
+}
+
+func TestJobCommand_CreateWithProjectContext(t *testing.T) {
+	lookup := &stubProjectLookup{dirs: map[string]map[string]string{
+		"alice": {"proj-1": "/output/proj-1"},
+	}}
+	h := newTestJobHandler(t, lookup)
+	ctx := context.Background()
+	user := &domain.User{ID: "u1"}
+
+	out, err := h.HandleJobCommand(ctx, user, "alice", `/job create Title Description --project proj-1`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "Title") {
+		t.Fatalf("expected created job in output, got: %q", out)
+	}
+
+	out, err = h.HandleJobCommand(ctx, user, "alice", "/job list --project proj-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "Title") {
+		t.Fatalf("expected job filtered by --project context, got: %q", out)
+	}
+}
+
+// TestJobCommand_CreateWithForeignProject_FailsNotFound is the mandatory
+// explicit test for FR-002 (auto-review fix pass, spec.md line 157): a
+// /job create --project <id> where <id> belongs to a DIFFERENT owner must
+// resolve as a not-found/permission error, never silently attach the new
+// Job to another user's Project.
+//
+// This test previously asserted the pre-fix behavior — CreateJob did NOT
+// hard-fail on an unresolved project lookup, it just left WorkingDirectory
+// empty, so Job creation "succeeded" with a still-dangling foreign
+// ContextID (visible via /job show and /job list --project). That was
+// exactly the bug this finding describes; the test's own name already
+// promised "FailsNotFound," it just didn't check for it yet. It now does.
+func TestJobCommand_CreateWithForeignProject_FailsNotFound(t *testing.T) {
+	lookup := &stubProjectLookup{dirs: map[string]map[string]string{
+		// proj-1 exists only under "bob", not "alice".
+		"bob": {"proj-1": "/output/proj-1"},
+	}}
+	h := newTestJobHandler(t, lookup)
+	ctx := context.Background()
+	user := &domain.User{ID: "u1"}
+
+	out, err := h.HandleJobCommand(ctx, user, "alice", `/job create Title Description --project proj-1`)
+	if err == nil {
+		t.Fatalf("expected an error rejecting a foreign-owned project context, got output: %q", out)
+	}
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got: %v", err)
+	}
+
+	jobsList, listErr := h.HandleJobCommand(ctx, user, "alice", "/job list")
+	if listErr != nil {
+		t.Fatalf("unexpected error: %v", listErr)
+	}
+	if strings.Contains(jobsList, "Title") {
+		t.Fatalf("expected no job to have been created for a rejected foreign project context, got: %q", jobsList)
+	}
+}
+
+// TestJobCommand_OwnerUserIDIsUsed_NotCurrentUserID proves AD-5: the
+// ownerUserID parameter (not currentUser.ID) is what scopes data. A Job
+// created under ownerUserID "alice" must be invisible to a call using
+// currentUser.ID "alice" as ownerUserID would have been, if the handler
+// wrongly used currentUser.ID instead.
+func TestJobCommand_OwnerUserIDIsUsed_NotCurrentUserID(t *testing.T) {
+	h := newTestJobHandler(t, nil)
+	ctx := context.Background()
+
+	// currentUser.ID is deliberately different from the ownerUserID passed
+	// in, mirroring how the real Gateway calls Handle: currentUser is the
+	// domain.User for role checks, ownerUserID is the session's Username.
+	user := &domain.User{ID: "internal-user-id-999"}
+
+	if _, err := h.HandleJobCommand(ctx, user, "alice", `/job create Title Description`); err != nil {
+		t.Fatalf("create: unexpected error: %v", err)
+	}
+
+	// Listing under ownerUserID "alice" must find the job.
+	out, err := h.HandleJobCommand(ctx, user, "alice", "/job list")
+	if err != nil {
+		t.Fatalf("list alice: unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "Title") {
+		t.Fatalf("expected job under ownerUserID alice, got: %q", out)
+	}
+
+	// Listing under ownerUserID equal to currentUser.ID must NOT find it —
+	// proves currentUser.ID was never used as the scoping key.
+	out, err = h.HandleJobCommand(ctx, user, "internal-user-id-999", "/job list")
+	if err != nil {
+		t.Fatalf("list currentUser.ID: unexpected error: %v", err)
+	}
+	if strings.Contains(out, "Title") {
+		t.Fatalf("expected no job visible under currentUser.ID as ownerUserID, got: %q", out)
+	}
+}
+
+func TestJobCommand_ShowFound(t *testing.T) {
+	h := newTestJobHandler(t, nil)
+	ctx := context.Background()
+	user := &domain.User{ID: "u1"}
+
+	createOut, err := h.HandleJobCommand(ctx, user, "alice", `/job create Title "some description"`)
+	if err != nil {
+		t.Fatalf("create: unexpected error: %v", err)
+	}
+	id := extractJobID(t, createOut)
+
+	out, err := h.HandleJobCommand(ctx, user, "alice", "/job show "+id)
+	if err != nil {
+		t.Fatalf("show: unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "Title") || !strings.Contains(out, "some description") {
+		t.Fatalf("expected job detail in output, got: %q", out)
+	}
+}
+
+func TestJobCommand_ShowNotFound(t *testing.T) {
+	h := newTestJobHandler(t, nil)
+	_, err := h.HandleJobCommand(context.Background(), &domain.User{ID: "u1"}, "alice", "/job show missing-id")
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got: %v", err)
+	}
+}
+
+func TestJobCommand_ShowCrossOwnerIsNotFound(t *testing.T) {
+	h := newTestJobHandler(t, nil)
+	ctx := context.Background()
+	user := &domain.User{ID: "u1"}
+
+	createOut, err := h.HandleJobCommand(ctx, user, "alice", `/job create Title Description`)
+	if err != nil {
+		t.Fatalf("create: unexpected error: %v", err)
+	}
+	id := extractJobID(t, createOut)
+
+	if _, err := h.HandleJobCommand(ctx, user, "bob", "/job show "+id); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for cross-owner show, got: %v", err)
+	}
+}
+
+func TestJobCommand_Delete(t *testing.T) {
+	h := newTestJobHandler(t, nil)
+	ctx := context.Background()
+	user := &domain.User{ID: "u1"}
+
+	createOut, err := h.HandleJobCommand(ctx, user, "alice", `/job create Title Description`)
+	if err != nil {
+		t.Fatalf("create: unexpected error: %v", err)
+	}
+	id := extractJobID(t, createOut)
+
+	out, err := h.HandleJobCommand(ctx, user, "alice", "/job delete "+id)
+	if err != nil {
+		t.Fatalf("delete: unexpected error: %v", err)
+	}
+	if !strings.Contains(out, id) {
+		t.Fatalf("expected delete confirmation to reference job ID, got: %q", out)
+	}
+}
+
+func TestJobCommand_DeleteNotFound(t *testing.T) {
+	h := newTestJobHandler(t, nil)
+	_, err := h.HandleJobCommand(context.Background(), &domain.User{ID: "u1"}, "alice", "/job delete missing-id")
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got: %v", err)
+	}
+}
+
+func TestJobCommand_CreateMissingArgsShowsUsage(t *testing.T) {
+	h := newTestJobHandler(t, nil)
+	out, err := h.HandleJobCommand(context.Background(), &domain.User{ID: "u1"}, "alice", "/job create")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(out), "usage") {
+		t.Fatalf("expected usage message, got: %q", out)
+	}
+}
+
+func TestJobCommand_ShowMissingIDShowsUsage(t *testing.T) {
+	h := newTestJobHandler(t, nil)
+	out, err := h.HandleJobCommand(context.Background(), &domain.User{ID: "u1"}, "alice", "/job show")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(out), "usage") {
+		t.Fatalf("expected usage message, got: %q", out)
+	}
+}
+
+// TestJobCommand_SatisfiesEnvCommandHandler verifies *cli.JobCommandHandler
+// implements cli.EnvCommandHandler via its Handle method, and that Handle
+// delegates to HandleJobCommand with the same ownerUserID.
+func TestJobCommand_SatisfiesEnvCommandHandler(t *testing.T) {
+	var _ cli.EnvCommandHandler = (*cli.JobCommandHandler)(nil)
+
+	h := newTestJobHandler(t, nil)
+	ctx := context.Background()
+	user := &domain.User{ID: "u1"}
+
+	if _, err := h.Handle(ctx, user, "alice", `/job create Title Description`); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	out, err := h.Handle(ctx, user, "alice", "/job list")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "Title") {
+		t.Fatalf("expected Handle to delegate to HandleJobCommand and see created job, got: %q", out)
+	}
+}
+
+// extractJobID pulls the job ID back out of create/list output that must
+// contain a line like "ID: <uuid>".
+func extractJobID(t *testing.T, out string) string {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "ID:") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "ID:"))
+		}
+	}
+	t.Fatalf("could not find 'ID:' line in output: %q", out)
+	return ""
+}
