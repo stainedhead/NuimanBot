@@ -17,6 +17,11 @@ const (
 	// Chats environment (FR-011), as opposed to a conversation relayed from
 	// an external messaging gateway.
 	PlatformWeb Platform = "web"
+	// PlatformACP marks a Chat driven by an Agent Client Protocol (ACP) host
+	// (e.g. Buzz's buzz-acp bridge) spawning NuimanBot as a per-conversation
+	// subprocess and talking JSON-RPC over stdio, as opposed to NuimanBot
+	// polling/connecting outward via a domain.Gateway.
+	PlatformACP Platform = "acp"
 )
 
 // IncomingMessage represents a message received from a platform.

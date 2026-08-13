@@ -138,6 +138,7 @@ export NUIMANBOT_LLM_OLLAMA_BASEURL="http://localhost:11434"
 - [Persona Customization](support_docs/user-guide-persona.md) - Per-user AI personality files
 - [Self-Organizing Memory](support_docs/self-organizing-memory-guide.md) - Long-term memory system
 - [Buzz Gateway](support_docs/buzz-guide.md) - Joining Buzz (Nostr-based multi-agent chat) channels
+- [Buzz ACP Harness](support_docs/buzz-acp-harness-guide.md) - Registering NuimanBot as a custom Buzz agent, spawned per-conversation over the Agent Client Protocol
 - [Security Hardening Guide](support_docs/security-hardening-guide.md) - Action confirmations, tool-output scanning, SSRF protection, and RBAC config
 - [Advanced Skills: Subagents](support_docs/subagents-guide.md), [Preprocessing](support_docs/preprocessing-guide.md), [Plugins](support_docs/plugins-guide.md), [Versioning](support_docs/versioning-guide.md)
 
@@ -393,6 +394,7 @@ See [Product Summary](documentation/product-summary.md#persistent-agent-workspac
 ✅ **Production Ready** - 100% Complete
 
 **Recently Completed**
+- 🔶 Buzz ACP Harness: register NuimanBot as a custom Buzz agent spawned per-conversation over the Agent Client Protocol (`nuimanbot acp`), independent of the Buzz Gateway integration — protocol field names not yet verified against a live Buzz session, and concurrent subprocesses share file-based storage with no cross-process locking (see guide's Known Limitations) — see [Buzz ACP Harness Guide](support_docs/buzz-acp-harness-guide.md) (2026-08-13)
 - ⚠️ **Breaking change:** CLI Parity — real login/session identity for the CLI REPL, replacing the previous unconditional `cli_admin` auto-grant (`./bin/nuimanbot` now prompts for username/password before any command or chat input, same accounts as the web admin UI, session persists 24h, `/logout` to end early); plus CLI slash-commands mirroring the web UI's Chats, Projects, Jobs, Chores, History, Memories, and Settings environments (`/chat`, `/project`, `/job`, `/chore`, `/history`, `/memories`, `/settings`) — data created via CLI or web is visible in both. Credential/session logic extracted from the web adapter into a shared `internal/usecase/auth` package so both adapters authenticate against the same accounts. See [CLI Environments Guide](support_docs/cli-environments-guide.md) for what changed and how to adapt any scripts relying on the old zero-friction CLI access (2026-08-11)
 - 🔶 Persistent Agent Workspace (web UI): Chats, Projects, Jobs, Chores, History, Memories, Settings, configurable network access — real queueing/scheduling/persistence pipeline with a scheduled retention sweep, restart recovery, and live browser-side WebSocket updates; agent-invoking execution still pending (2026-08-05, hardened same day by a review-fix pass; see [Known Limitations](#known-limitations))
 - ✅ Buzz Gateway (Nostr-based multi-agent chat: relay client, RBAC, tool integration; cross-platform RBAC enforcement fix) (2026-08-02)

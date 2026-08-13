@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -99,6 +100,29 @@ type application struct {
 }
 
 func main() {
+	// ACP mode is checked before anything else touches stdout: it's
+	// registered with hosts like Buzz's buzz-acp bridge as a subprocess
+	// whose stdout is reserved exclusively for the ACP JSON-RPC stream (see
+	// acp.go's runACP). Every print below this branch — including the
+	// "NuimanBot starting..." banner — would otherwise corrupt that stream.
+	if len(os.Args) > 1 && os.Args[1] == acpSubcommand {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+		go func() {
+			<-sigChan
+			cancel()
+		}()
+
+		if err := runACP(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "acp: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	fmt.Println("NuimanBot starting...")
 
 	// Setup graceful shutdown
@@ -908,6 +932,18 @@ func (a *conversationRepositoryAdapter) GetConversation(ctx context.Context, con
 func (a *conversationRepositoryAdapter) GetRecentMessages(ctx context.Context, convID string, maxTokens int) ([]domain.StoredMessage, error) {
 	conv, err := a.repo.GetConversation(ctx, convID)
 	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			// A brand-new conversation (no message saved yet) has zero
+			// recent messages, not an error. Without this, every
+			// platform's very first message in a fresh conversation fails
+			// with "failed to get recent messages: not found". A non-
+			// ErrNotFound error (I/O failure, corrupt index) still
+			// propagates below — swallowing those would let a transiently
+			// unreadable conversation look empty here, and SaveMessage
+			// (a few lines above) would then treat that same error as
+			// "doesn't exist, create fresh" and overwrite real history.
+			return nil, nil
+		}
 		return nil, err
 	}
 
