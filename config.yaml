@@ -105,6 +105,15 @@ gateways:
     # token: "bot_token_from_botfather"
     # webhook_url: "https://yourdomain.com/telegram"
     # dm_policy: "pairing"
+  buzz:
+    enabled: true
+    relays:
+      - "ws://localhost:3000"
+    # channel_ids: not yet known — leave unset until the workspace owner
+    # adds this agent to a channel and shares its channel ID (see
+    # support_docs/buzz-guide.md#getting-a-channel-id)
+    # private_key: left unset — NuimanBot generates and stores one
+    # automatically in the encrypted credential vault on first startup
 
 tools:
   entries:
