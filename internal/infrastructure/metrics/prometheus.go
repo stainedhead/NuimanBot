@@ -285,4 +285,27 @@ var (
 			Help: "Total number of Buzz events dropped for failing signature verification",
 		},
 	)
+
+	// Web Chats Environment Metrics — recorded in
+	// internal/adapter/web/chats_handler.go around chatsService.SendMessage,
+	// mirroring the Buzz gateway's dedicated per-integration counter/
+	// histogram pattern above (a generic HTTP-level metric wouldn't
+	// distinguish an agent turn that failed from one that simply wasn't
+	// sent, or separate LLM-processing latency from ordinary page-render
+	// latency).
+	WebChatTurnsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "web_chat_turns_total",
+			Help: "Total number of web Chats environment agent turns processed",
+		},
+		[]string{"status"}, // "success" | "error"
+	)
+
+	WebChatTurnDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "web_chat_turn_duration_seconds",
+			Help:    "Duration of web Chats environment agent turns (SendMessage call to reply)",
+			Buckets: []float64{0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0},
+		},
+	)
 )

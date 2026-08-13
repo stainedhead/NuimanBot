@@ -14,7 +14,7 @@ import (
 func newTestService(t *testing.T) *Service {
 	t.Helper()
 	repo := storage.NewFileConversationRepository(t.TempDir())
-	return NewService(repo)
+	return NewService(repo, nil, nil)
 }
 
 func TestCreateChat_AutoNamesFromFirstMessage(t *testing.T) {

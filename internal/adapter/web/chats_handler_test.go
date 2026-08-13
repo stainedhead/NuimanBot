@@ -19,6 +19,7 @@ type MockChatsService struct {
 
 	createErr error
 	getErr    error
+	sendErr   error
 }
 
 func NewMockChatsService() *MockChatsService {
@@ -81,6 +82,22 @@ func (m *MockChatsService) AppendUserMessage(_ context.Context, ownerUserID, cha
 	}
 	c.Messages = append(c.Messages, domain.StoredMessage{ID: "m2", Role: "user", Content: content, Timestamp: time.Now()})
 	return nil
+}
+
+// SendMessage mimics AppendUserMessage plus a canned agent reply — good
+// enough for handler-level tests (does handleChatMessage call the right
+// method, redirect, and surface errors correctly); chats.Service's own
+// SendMessage semantics are covered directly in internal/usecase/chats.
+func (m *MockChatsService) SendMessage(_ context.Context, ownerUserID, chatID, content, _ string) (domain.OutgoingMessage, error) {
+	if m.sendErr != nil {
+		return domain.OutgoingMessage{}, m.sendErr
+	}
+	c, ok := m.chats[chatID]
+	if !ok || c.UserID != ownerUserID {
+		return domain.OutgoingMessage{}, domain.ErrNotFound
+	}
+	c.Messages = append(c.Messages, domain.StoredMessage{ID: "m2", Role: "user", Content: content, Timestamp: time.Now()})
+	return domain.OutgoingMessage{Content: "mock agent reply"}, nil
 }
 
 func (m *MockChatsService) ExportChat(_ context.Context, ownerUserID, chatID string, format chat.ExportFormat) (string, error) {

@@ -18,9 +18,22 @@ import (
 var embeddedFS embed.FS
 
 const (
-	// Server timeouts
+	// Server timeouts. writeTimeout in particular must comfortably exceed a
+	// single LLM completion call (internal/infrastructure/llm/ollama.Client
+	// alone allows up to 120s) — the Chats environment's handleChatMessage
+	// (specs/buzz-acp-harness's "wire web Chats to the agent") runs a real,
+	// synchronous agent turn in the request/response cycle, unlike every
+	// other route here. The previous 15s value silently killed the HTTP
+	// connection out from under a still-running, eventually-successful
+	// chat turn — confirmed live against a slower local model, where the
+	// reply completed server-side around 44s but the client had already
+	// seen the connection drop. 180s is generous headroom for one slow
+	// completion; a multi-iteration tool-calling turn (up to 5 iterations,
+	// see chat.Service.runToolLoop) could still exceed it in a pathological
+	// case — a known, not-fully-solved trade-off of this synchronous
+	// request/response design, not unique to this timeout value.
 	readTimeout  = 15 * time.Second
-	writeTimeout = 15 * time.Second
+	writeTimeout = 180 * time.Second
 	idleTimeout  = 60 * time.Second
 
 	// Shutdown timeout

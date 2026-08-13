@@ -285,16 +285,12 @@ func defaultRoleForPlatform(platform domain.Platform) domain.Role {
 }
 
 // ProcessMessage processes an incoming message, interacts with LLM/skills/memory, and returns an outgoing message.
+// conversationID and the RBAC-relevant domain.User are both derived
+// automatically from (incomingMsg.Platform, incomingMsg.PlatformUID) — the
+// one-conversation-thread-per-platform-user model every gateway except the
+// web Chats environment uses. See ProcessMessageInConversation for the
+// alternative entry point that decouples the two.
 func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.IncomingMessage) (domain.OutgoingMessage, error) {
-	// Add request ID to context for correlation
-	ctx, reqID := requestid.MustFromContext(ctx)
-	logger := requestid.Logger(ctx)
-
-	logger.Info("Processing message",
-		"platform", incomingMsg.Platform,
-		"user", incomingMsg.PlatformUID,
-	)
-
 	// 1. Validate Input
 	validatedInput, err := s.securityService.ValidateInput(ctx, incomingMsg.Text, 32768) // Max 32KB for now
 	if err != nil {
@@ -305,7 +301,7 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 	// Generate conversation ID from platform and user
 	conversationID := getConversationID(incomingMsg.Platform, incomingMsg.PlatformUID)
 
-	// 1.5. Resolve the RBAC-relevant domain.User for this platform/UID (FR-006,
+	// Resolve the RBAC-relevant domain.User for this platform/UID (FR-006,
 	// FR-011). This must happen before confirmation-reply detection and before
 	// listing/executing tools: ExecuteWithUser keys pending confirmations on
 	// user.ID (the persisted domain.User's UUID, not PlatformUID), so
@@ -318,7 +314,47 @@ func (s *Service) ProcessMessage(ctx context.Context, incomingMsg *domain.Incomi
 		return domain.OutgoingMessage{}, fmt.Errorf("failed to resolve user: %w", err)
 	}
 
-	// 1.6. Confirmation-reply detection (Part C, FR-013): before treating
+	return s.processTurn(ctx, conversationID, user, incomingMsg)
+}
+
+// ProcessMessageInConversation processes incomingMsg within an explicit
+// conversation thread (conversationID) as an already-resolved user,
+// decoupling "who is asking" (RBAC identity) from "which conversation" —
+// unlike ProcessMessage, neither is derived from
+// (incomingMsg.Platform, incomingMsg.PlatformUID). This is what the web
+// Chats environment uses: one logged-in user can own many independent named
+// Chat threads (each with its own ID), which ProcessMessage's
+// one-thread-per-platform-user model can't express. Callers are
+// responsible for their own ownership/authorization checks before calling
+// this — it performs none itself beyond RBAC on tool calls via user.
+func (s *Service) ProcessMessageInConversation(ctx context.Context, conversationID string, user *domain.User, incomingMsg *domain.IncomingMessage) (domain.OutgoingMessage, error) {
+	validatedInput, err := s.securityService.ValidateInput(ctx, incomingMsg.Text, 32768) // Max 32KB for now
+	if err != nil {
+		return domain.OutgoingMessage{}, fmt.Errorf("input validation failed: %w", err)
+	}
+	incomingMsg.Text = validatedInput // Use validated input
+
+	return s.processTurn(ctx, conversationID, user, incomingMsg)
+}
+
+// processTurn is ProcessMessage/ProcessMessageInConversation's shared core:
+// everything from confirmation-reply detection through the tool-calling
+// loop and turn completion, once conversationID and user are already known.
+// Input validation happens in each caller (its wording — "input validation
+// failed" — differs subtly in meaning depending on which entry point is
+// used, so it stays there rather than here).
+func (s *Service) processTurn(ctx context.Context, conversationID string, user *domain.User, incomingMsg *domain.IncomingMessage) (domain.OutgoingMessage, error) {
+	// Add request ID to context for correlation
+	ctx, reqID := requestid.MustFromContext(ctx)
+	logger := requestid.Logger(ctx)
+
+	logger.Info("Processing message",
+		"platform", incomingMsg.Platform,
+		"user", incomingMsg.PlatformUID,
+		"conversation_id", conversationID,
+	)
+
+	// Confirmation-reply detection (Part C, FR-013): before treating
 	// this message as a new chat turn, check whether it resolves an open
 	// confirmation for (user.ID, conversationID).
 	if s.confirmationStore != nil {

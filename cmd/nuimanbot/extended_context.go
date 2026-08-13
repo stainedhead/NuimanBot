@@ -254,7 +254,7 @@ func wireExtendedContextEnvironments(ctx context.Context, app *application, webS
 	// difference and avoids a bigger DI-wiring reshuffle just to share one
 	// pointer. Retention is a system-wide default (not yet per-user
 	// configurable — see settings.Service.RetentionDefaults's doc comment).
-	sweepChats := chats.NewService(app.ConversationRepo)
+	sweepChats := chats.NewService(app.ConversationRepo, nil, nil) // retention sweep only, never sends a message
 	retentionSweeper := scheduler.NewRetentionSweeper(
 		userProfileRepo,
 		sweepChats,
