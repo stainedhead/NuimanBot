@@ -108,7 +108,7 @@ gateways:
   buzz:
     enabled: true
     relays:
-      - "ws://localhost:3000"
+      - "wss://feral-sysd.communities.buzz.xyz"
     # channel_ids: not yet known — leave unset until the workspace owner
     # adds this agent to a channel and shares its channel ID (see
     # support_docs/buzz-guide.md#getting-a-channel-id)
