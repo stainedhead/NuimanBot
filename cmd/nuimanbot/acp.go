@@ -14,6 +14,7 @@ import (
 	"nuimanbot/internal/infrastructure/logger"
 	infrasecurity "nuimanbot/internal/infrastructure/security"
 	"nuimanbot/internal/infrastructure/storage"
+	"nuimanbot/internal/tools/buzzget"
 	"nuimanbot/internal/tools/buzzsend"
 	"nuimanbot/internal/usecase/chat"
 	"nuimanbot/internal/usecase/security"
@@ -127,6 +128,14 @@ func runACP(ctx context.Context) error {
 	// publish anything, the ACP text response alone isn't sufficient.
 	if err := toolRegistry.Register(buzzsend.New()); err != nil {
 		return fmt.Errorf("acp: failed to register buzz_send_message tool: %w", err)
+	}
+	// buzz_get_messages: same ACP-only rationale as buzz_send_message above.
+	// Gives the model a real way to read channel history instead of
+	// assuming the capability from Buzz's system prompt and fabricating a
+	// plausible-sounding failure when it has no actual tool to call (see
+	// that tool's own doc comment for the live incident this fixes).
+	if err := toolRegistry.Register(buzzget.New()); err != nil {
+		return fmt.Errorf("acp: failed to register buzz_get_messages tool: %w", err)
 	}
 
 	toolExecutionService := tool.NewService(&cfg.Tools, toolRegistry, securityService)

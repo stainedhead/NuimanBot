@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"nuimanbot/internal/domain"
+	"nuimanbot/internal/tools/buzzget"
 	"nuimanbot/internal/tools/buzzsend"
 	"nuimanbot/internal/tools/calculator"
 	"nuimanbot/internal/tools/datetime"
@@ -56,6 +57,7 @@ func newProductionLikeRegistry(t *testing.T) ToolRegistry {
 		summarize.NewSummarizeSkill(domain.ToolConfig{}, nil, nil, nil),
 		coding_agent.NewCodingAgentSkill(domain.ToolConfig{}, nil, common.NewPathValidator(nil)),
 		buzzsend.New(),
+		buzzget.New(),
 	}
 
 	for _, tl := range tools {
@@ -100,6 +102,7 @@ func TestToolPermissions_ExpectedRoles(t *testing.T) {
 		"github":            domain.RoleAdmin,
 		"coding_agent":      domain.RoleAdmin,
 		"buzz_send_message": domain.RoleGuest,
+		"buzz_get_messages": domain.RoleGuest,
 	}
 
 	for name, wantRole := range expected {

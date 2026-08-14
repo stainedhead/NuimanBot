@@ -45,6 +45,12 @@ var ToolPermissions = map[string]domain.Role{
 	// guest-role user's model reported having no such tool at all.
 	"buzz_send_message": domain.RoleGuest,
 
+	// buzz_get_messages (internal/tools/buzzget, same ACP-only registration
+	// as buzz_send_message above) is RoleGuest for the same reason: any
+	// Buzz contact who can reach Iman should be able to prompt it to recall
+	// channel context, including a first-message Guest.
+	"buzz_get_messages": domain.RoleGuest,
+
 	// Tools requiring a registered user account.
 	//
 	// Dynamically-registered MCP tools ("mcp:<server>:<tool>", see
