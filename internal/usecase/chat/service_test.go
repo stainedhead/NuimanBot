@@ -1884,3 +1884,86 @@ func TestProcessMessage_ACPSkipsDuplicatePublishToSameDestination(t *testing.T) 
 		t.Errorf("expected exactly 1 real buzz_send_message execution (the duplicate must be skipped), got %d", executeCount)
 	}
 }
+
+// TestProcessMessage_ACPSkipsDuplicatePublishWithInconsistentChannelValue
+// is a regression test for a real production gap in the duplicate-publish
+// guard above: a turn published the same content to the same reply_to
+// TWICE because the two calls used different string representations of the
+// same channel ("3a6a69fc-05a5-55cb-a601-0e12afc77c07" the first time,
+// "general" the second) -- so an exact-string channel+reply_to key failed
+// to recognize them as the same destination. reply_to (a Nostr event ID) is
+// the reliable, unambiguous identifier here; the model's channel value is
+// not.
+func TestProcessMessage_ACPSkipsDuplicatePublishWithInconsistentChannelValue(t *testing.T) {
+	callCount := 0
+	executeCount := 0
+
+	llmService := &mockLLMService{
+		completeFunc: func(ctx context.Context, provider domain.LLMProvider, req *domain.LLMRequest) (*domain.LLMResponse, error) {
+			callCount++
+			switch callCount {
+			case 1:
+				return &domain.LLMResponse{
+					Content: "",
+					ToolCalls: []domain.ToolCall{
+						{ToolName: "buzz_send_message", Arguments: map[string]any{
+							"channel": "3a6a69fc-05a5-55cb-a601-0e12afc77c07", "reply_to": "root-1",
+							"content": "Yes, my replies are threaded.",
+						}},
+					},
+					FinishReason: "tool_use",
+				}, nil
+			case 2:
+				// Same reply_to, same content, but a different string for
+				// the channel -- must still be recognized as a duplicate.
+				return &domain.LLMResponse{
+					Content: "",
+					ToolCalls: []domain.ToolCall{
+						{ToolName: "buzz_send_message", Arguments: map[string]any{
+							"channel": "general", "reply_to": "root-1",
+							"content": "Yes, my replies are threaded.",
+						}},
+					},
+					FinishReason: "tool_use",
+				}, nil
+			default:
+				return &domain.LLMResponse{Content: "", ToolCalls: []domain.ToolCall{}, FinishReason: "end_turn"}, nil
+			}
+		},
+	}
+
+	memoryRepo := &mockMemoryRepository{
+		getRecentMessagesFunc: func(ctx context.Context, convID string, maxTokens int) ([]domain.StoredMessage, error) {
+			return []domain.StoredMessage{}, nil
+		},
+	}
+
+	toolExecService := &mockToolExecutionService{
+		listSkillsFunc: func(ctx context.Context, user *domain.User) ([]domain.Tool, error) {
+			return []domain.Tool{buzzSendMessageTool()}, nil
+		},
+		executeWithUserFunc: func(ctx context.Context, user *domain.User, conversationID, toolName string, params map[string]any) (*domain.ExecutionResult, error) {
+			executeCount++
+			return &domain.ExecutionResult{Output: `{"accepted":true}`}, nil
+		},
+	}
+
+	service := createTestService(llmService, memoryRepo, toolExecService, &mockSecurityService{})
+
+	incomingMsg := &domain.IncomingMessage{
+		ID:          "test-acp-dup-publish-channel-mismatch",
+		Platform:    domain.PlatformACP,
+		PlatformUID: "acp-user-1",
+		Text:        "are your replies threaded?",
+		Timestamp:   time.Now(),
+	}
+
+	_, err := service.ProcessMessage(context.Background(), incomingMsg)
+	if err != nil {
+		t.Fatalf("ProcessMessage failed: %v", err)
+	}
+
+	if executeCount != 1 {
+		t.Errorf("expected exactly 1 real buzz_send_message execution despite the channel string mismatch, got %d", executeCount)
+	}
+}

@@ -41,10 +41,22 @@ func toolDefined(tools []domain.ToolDefinition, name string) bool {
 // buzz_send_message call would publish to, used by partitionPublishCalls to
 // detect the model attempting to send more than one reply to the same
 // destination within a single turn.
+//
+// Keyed on reply_to alone when present, not channel+reply_to: reply_to is a
+// canonical Nostr event ID, but the model's channel value is not reliably
+// consistent across calls in the same turn -- confirmed live, a single turn
+// published the same content to the same reply_to twice because the first
+// call used the channel UUID ("3a6a69fc-05a5-55cb-a601-0e12afc77c07") and
+// the second used the channel's plain name ("general"), which an
+// exact-string channel+reply_to key failed to recognize as the same
+// destination. Falls back to channel for a top-level (non-reply) post,
+// where no reply_to exists to key on.
 func publishDestinationKey(args map[string]any) string {
+	if replyTo, _ := args["reply_to"].(string); replyTo != "" {
+		return "reply:" + replyTo
+	}
 	channel, _ := args["channel"].(string)
-	replyTo, _ := args["reply_to"].(string)
-	return channel + "|" + replyTo
+	return "channel:" + channel
 }
 
 // duplicatePublishSkipMessage is the synthetic tool result content returned
