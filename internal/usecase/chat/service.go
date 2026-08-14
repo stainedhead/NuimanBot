@@ -704,7 +704,7 @@ func (s *Service) finishTurn(ctx context.Context, incomingMsg *domain.IncomingMe
 
 	// Extract memory cells from the interaction (non-blocking, graceful degradation)
 	if s.memoryCurator != nil {
-		if curatorErr := s.memoryCurator.ExtractMemoryCells(ctx, conversationID, incomingMsg.Text, responseContent, collectedToolOutputs); curatorErr != nil {
+		if curatorErr := s.memoryCurator.ExtractMemoryCells(ctx, conversationID, historyText(incomingMsg), responseContent, collectedToolOutputs); curatorErr != nil {
 			logger.Error("Failed to extract memory cells",
 				"conversation_id", conversationID,
 				"error", curatorErr,
@@ -798,6 +798,22 @@ func confirmationResolutionText(approved bool) string {
 	return "no"
 }
 
+// historyText returns incomingMsg.HistoryText when set, else Text — the
+// content to persist/curate as this turn's human message, as opposed to
+// Text, which is always what's actually sent to the LLM this turn. See
+// domain.IncomingMessage.HistoryText's doc comment: for ACP, Text carries
+// Buzz's entire bundled prompt, not just the literal human message, and
+// persisting/curating that verbatim caused a later turn in the same session
+// to see an EARLIER turn's full bundle (including its own "[Buzz event]"
+// trigger description) replayed back into the LLM's context as if still
+// unanswered.
+func historyText(incomingMsg *domain.IncomingMessage) string {
+	if incomingMsg.HistoryText != "" {
+		return incomingMsg.HistoryText
+	}
+	return incomingMsg.Text
+}
+
 // saveTurnMessages persists the incoming user message and an outgoing
 // assistant message (with the given reply content and token count) to
 // memory. Best-effort: failures are logged, not returned, matching the
@@ -806,7 +822,7 @@ func (s *Service) saveTurnMessages(ctx context.Context, conversationID string, i
 	incomingStoredMsg := domain.StoredMessage{
 		ID:        incomingMsg.ID, // Use incoming message ID
 		Role:      "user",
-		Content:   incomingMsg.Text,
+		Content:   historyText(incomingMsg),
 		Timestamp: incomingMsg.Timestamp,
 	}
 	if err := s.memoryRepo.SaveMessage(ctx, conversationID, incomingMsg.PlatformUID, incomingMsg.Platform, incomingStoredMsg); err != nil {

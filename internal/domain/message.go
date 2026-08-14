@@ -32,6 +32,24 @@ type IncomingMessage struct {
 	Text        string
 	Timestamp   time.Time
 	Metadata    map[string]any
+
+	// HistoryText, when non-empty, is used instead of Text when persisting
+	// this turn's human message to conversation history (see
+	// chat.Service.saveTurnMessages). Text itself is always what's actually
+	// sent to the LLM for this turn — for most platforms it already is just
+	// the literal human message, so this stays empty and Text is used for
+	// both.
+	//
+	// ACP is the exception: Buzz's buzz-acp bridge bundles Text with far
+	// more than the literal message (system instructions, conversation
+	// context, the raw event description) — confirmed as the cause of a
+	// real production bug, where persisting that whole bundle as history
+	// meant a later turn in the same session replayed an OLD turn's full
+	// bundled prompt (including its own "[Buzz event]" trigger description)
+	// back into the LLM's context, looking like a still-unanswered event
+	// rather than settled history. internal/adapter/acp extracts just the
+	// literal message into HistoryText for exactly this reason.
+	HistoryText string
 }
 
 // OutgoingMessage represents a message to be sent to a platform.

@@ -365,3 +365,110 @@ func TestSessionCancelInterruptsInFlightPrompt(t *testing.T) {
 		t.Error("expected fakeChatService to have observed context cancellation")
 	}
 }
+
+// TestSessionPrompt_ExtractsHistoryTextFromBuzzBundledPrompt guards a real
+// production bug: saving the full Buzz-bundled prompt text as conversation
+// history caused a later turn in the same session to see an EARLIER turn's
+// entire bundle -- including that turn's own "[Buzz event]" trigger
+// description -- replayed back as if still unanswered. The incoming
+// domain.IncomingMessage's HistoryText must carry just the literal human
+// message (the "Content:" line), for chat.Service.saveTurnMessages to
+// persist instead of the full bundle. Text itself must stay the full
+// bundle unchanged -- that's what actually gets sent to the LLM this turn.
+func TestSessionPrompt_ExtractsHistoryTextFromBuzzBundledPrompt(t *testing.T) {
+	chat := &fakeChatService{reply: domain.OutgoingMessage{Content: "ok"}}
+	server := acp.NewServer(chat, testLogger())
+	out := newLineWriter()
+
+	in := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"session/new","params":{}}` + "\n")
+	go func() {
+		if err := server.Run(context.Background(), in, out); err != nil {
+			t.Errorf("Run returned error: %v", err)
+		}
+	}()
+	newResp := out.next(t)
+	sessionID := newResp["result"].(map[string]any)["sessionId"].(string)
+
+	bundledText := "[Base]\nYou are operating inside the Buzz platform...\n" +
+		"[Context]\nScope: dm\nChannel: DM (#abc)\n" +
+		"[Buzz event: @mention]\n" +
+		"Event ID: deadbeef\n" +
+		"Channel: DM (#abc)\n" +
+		"Kind: 9\n" +
+		"From: stainedhead (npub: npub1..., hex: 38cf...)\n" +
+		"Time: 2026-08-14T12:21:40+00:00\n" +
+		"Content: @Iman good morning, do you know Pi?\n" +
+		"Tags: [[\"h\",\"abc\"],[\"p\",\"iman\"]]\n" +
+		"Parsed: mentions=[Iman (iman)]"
+
+	payload := map[string]any{
+		"jsonrpc": "2.0", "id": 2, "method": "session/prompt",
+		"params": map[string]any{
+			"sessionId": sessionID,
+			"prompt":    []map[string]any{{"type": "text", "text": bundledText}},
+		},
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("failed to marshal payload: %v", err)
+	}
+	in2 := strings.NewReader(string(b) + "\n")
+	if err := server.Run(context.Background(), in2, out); err != nil {
+		t.Fatalf("Run (prompt) returned error: %v", err)
+	}
+	out.next(t) // session/update notification
+	out.next(t) // session/prompt result
+
+	lastMsg := chat.LastMsg()
+	if lastMsg == nil {
+		t.Fatal("expected ChatService.ProcessMessage to have been called")
+	}
+	if lastMsg.Text != bundledText {
+		t.Errorf("expected Text to remain the full bundle unchanged, got %q", lastMsg.Text)
+	}
+	wantHistory := "@Iman good morning, do you know Pi?"
+	if lastMsg.HistoryText != wantHistory {
+		t.Errorf("expected HistoryText=%q, got %q", wantHistory, lastMsg.HistoryText)
+	}
+}
+
+// TestSessionPrompt_NoBuzzEventBlockLeavesHistoryTextEmpty ensures a plain,
+// non-Buzz-bundled prompt (e.g. a direct ACP test, or a future host with a
+// different format) leaves HistoryText empty rather than extracting
+// something wrong -- chat.Service.saveTurnMessages falls back to the full
+// Text in that case, matching this test's existing sibling
+// TestSessionNewAndPrompt.
+func TestSessionPrompt_NoBuzzEventBlockLeavesHistoryTextEmpty(t *testing.T) {
+	chat := &fakeChatService{reply: domain.OutgoingMessage{Content: "hello from nuimanbot"}}
+	server := acp.NewServer(chat, testLogger())
+	out := newLineWriter()
+
+	lines := []string{`{"jsonrpc":"2.0","id":1,"method":"session/new","params":{}}`}
+	in := strings.NewReader(strings.Join(lines, "\n") + "\n")
+	go func() {
+		if err := server.Run(context.Background(), in, out); err != nil {
+			t.Errorf("Run returned error: %v", err)
+		}
+	}()
+	newResp := out.next(t)
+	sessionID := newResp["result"].(map[string]any)["sessionId"].(string)
+
+	promptLine := fmt.Sprintf(
+		`{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{"sessionId":%q,"prompt":[{"type":"text","text":"hi there"}]}}`,
+		sessionID,
+	)
+	in2 := strings.NewReader(promptLine + "\n")
+	if err := server.Run(context.Background(), in2, out); err != nil {
+		t.Fatalf("Run (prompt) returned error: %v", err)
+	}
+	out.next(t)
+	out.next(t)
+
+	lastMsg := chat.LastMsg()
+	if lastMsg == nil {
+		t.Fatal("expected ChatService.ProcessMessage to have been called")
+	}
+	if lastMsg.HistoryText != "" {
+		t.Errorf("expected empty HistoryText for a non-Buzz-bundled prompt, got %q", lastMsg.HistoryText)
+	}
+}

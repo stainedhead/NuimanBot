@@ -1967,3 +1967,110 @@ func TestProcessMessage_ACPSkipsDuplicatePublishWithInconsistentChannelValue(t *
 		t.Errorf("expected exactly 1 real buzz_send_message execution despite the channel string mismatch, got %d", executeCount)
 	}
 }
+
+// TestProcessMessage_PersistsHistoryTextInsteadOfFullBundle guards a real
+// production bug: chat.Service persisted incomingMsg.Text verbatim to
+// conversation history, and for ACP that Text is Buzz's entire bundled
+// prompt (system instructions, conversation context, the raw
+// "[Buzz event]" description), not just the literal human message. On a
+// later turn in the same session, that stored blob got fed back into the
+// LLM's context via historyToMessages, replaying an OLD turn's own
+// "[Buzz event]" trigger description as if still unanswered. When
+// IncomingMessage.HistoryText is set (by the ACP adapter, see
+// internal/adapter/acp.extractHistoryText), saveTurnMessages must persist
+// that instead of the full Text.
+func TestProcessMessage_PersistsHistoryTextInsteadOfFullBundle(t *testing.T) {
+	llmService := &mockLLMService{
+		completeFunc: func(ctx context.Context, provider domain.LLMProvider, req *domain.LLMRequest) (*domain.LLMResponse, error) {
+			return &domain.LLMResponse{Content: "hi", ToolCalls: []domain.ToolCall{}, FinishReason: "end_turn"}, nil
+		},
+	}
+
+	var savedUserContent string
+	memoryRepo := &mockMemoryRepository{
+		getRecentMessagesFunc: func(ctx context.Context, convID string, maxTokens int) ([]domain.StoredMessage, error) {
+			return []domain.StoredMessage{}, nil
+		},
+		saveMessageFunc: func(ctx context.Context, convID string, userID string, platform domain.Platform, msg domain.StoredMessage) error {
+			if msg.Role == "user" {
+				savedUserContent = msg.Content
+			}
+			return nil
+		},
+	}
+
+	toolExecService := &mockToolExecutionService{
+		listSkillsFunc: func(ctx context.Context, user *domain.User) ([]domain.Tool, error) {
+			return []domain.Tool{}, nil
+		},
+	}
+
+	service := createTestService(llmService, memoryRepo, toolExecService, &mockSecurityService{})
+
+	incomingMsg := &domain.IncomingMessage{
+		ID:          "test-history-text",
+		Platform:    domain.PlatformACP,
+		PlatformUID: "acp-user-1",
+		Text:        "[Base]\n...18KB of bundled context...\n[Buzz event]\nContent: @Iman hi there\n",
+		HistoryText: "@Iman hi there",
+		Timestamp:   time.Now(),
+	}
+
+	_, err := service.ProcessMessage(context.Background(), incomingMsg)
+	if err != nil {
+		t.Fatalf("ProcessMessage failed: %v", err)
+	}
+
+	if savedUserContent != "@Iman hi there" {
+		t.Errorf("expected the persisted user message to be HistoryText, got %q", savedUserContent)
+	}
+}
+
+// TestProcessMessage_FallsBackToTextWhenHistoryTextEmpty ensures every
+// other platform (whose IncomingMessage never sets HistoryText) keeps
+// persisting Text unchanged.
+func TestProcessMessage_FallsBackToTextWhenHistoryTextEmpty(t *testing.T) {
+	llmService := &mockLLMService{
+		completeFunc: func(ctx context.Context, provider domain.LLMProvider, req *domain.LLMRequest) (*domain.LLMResponse, error) {
+			return &domain.LLMResponse{Content: "hi", ToolCalls: []domain.ToolCall{}, FinishReason: "end_turn"}, nil
+		},
+	}
+
+	var savedUserContent string
+	memoryRepo := &mockMemoryRepository{
+		getRecentMessagesFunc: func(ctx context.Context, convID string, maxTokens int) ([]domain.StoredMessage, error) {
+			return []domain.StoredMessage{}, nil
+		},
+		saveMessageFunc: func(ctx context.Context, convID string, userID string, platform domain.Platform, msg domain.StoredMessage) error {
+			if msg.Role == "user" {
+				savedUserContent = msg.Content
+			}
+			return nil
+		},
+	}
+
+	toolExecService := &mockToolExecutionService{
+		listSkillsFunc: func(ctx context.Context, user *domain.User) ([]domain.Tool, error) {
+			return []domain.Tool{}, nil
+		},
+	}
+
+	service := createTestService(llmService, memoryRepo, toolExecService, &mockSecurityService{})
+
+	incomingMsg := &domain.IncomingMessage{
+		ID:          "test-history-text-fallback",
+		Platform:    domain.PlatformCLI,
+		PlatformUID: "cli-user-1",
+		Text:        "hello",
+		Timestamp:   time.Now(),
+	}
+
+	_, err := service.ProcessMessage(context.Background(), incomingMsg)
+	if err != nil {
+		t.Fatalf("ProcessMessage failed: %v", err)
+	}
+
+	if savedUserContent != "hello" {
+		t.Errorf("expected the persisted user message to fall back to Text, got %q", savedUserContent)
+	}
+}

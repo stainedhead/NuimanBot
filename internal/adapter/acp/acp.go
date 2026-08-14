@@ -315,6 +315,41 @@ func promptText(blocks []contentBlock) string {
 	return strings.Join(parts, "\n")
 }
 
+// buzzContentLinePrefix marks the literal human message within a
+// Buzz-bundled prompt's "[Buzz event: ...]" block ("Content: <text>").
+// extractHistoryText looks for the LAST such line, since that block always
+// appears after any [Base]/[Context]/[Conversation Context] sections in
+// Buzz's own prompt layout — see domain.IncomingMessage.HistoryText's doc
+// comment for why this matters: persisting the full bundle as conversation
+// history caused a later turn in the same session to see an EARLIER turn's
+// entire bundle (including its own "[Buzz event]" trigger description)
+// replayed back into the LLM's context, looking like a still-unanswered
+// event rather than settled history.
+const buzzContentLinePrefix = "\nContent: "
+
+// extractHistoryText pulls the literal human message out of a Buzz-bundled
+// ACP prompt (see buzzContentLinePrefix) for use as the persisted
+// conversation-history entry instead of the full bundle. ok is false when
+// the expected pattern isn't found — callers should fall back to the full
+// text rather than treating this as an error; Buzz's prompt format is not a
+// contract NuimanBot owns, and a plain (non-Buzz) ACP host's prompt won't
+// contain it at all.
+func extractHistoryText(promptText string) (text string, ok bool) {
+	idx := strings.LastIndex(promptText, buzzContentLinePrefix)
+	if idx == -1 {
+		return "", false
+	}
+	rest := promptText[idx+len(buzzContentLinePrefix):]
+	if nl := strings.IndexByte(rest, '\n'); nl != -1 {
+		rest = rest[:nl]
+	}
+	rest = strings.TrimSpace(rest)
+	if rest == "" {
+		return "", false
+	}
+	return rest, true
+}
+
 func (s *Server) handleSessionPrompt(ctx context.Context, msg rpcMessage) {
 	var params sessionPromptParams
 	if err := json.Unmarshal(msg.Params, &params); err != nil {
@@ -364,11 +399,13 @@ func (s *Server) handleSessionPrompt(ctx context.Context, msg rpcMessage) {
 		cancel()
 	}()
 
+	historyText, _ := extractHistoryText(text)
 	incoming := &domain.IncomingMessage{
 		ID:          fmt.Sprintf("acp-%s-%d", params.SessionID, atomic.AddUint64(&s.reqCounter, 1)),
 		Platform:    domain.PlatformACP,
 		PlatformUID: sess.platformUID,
 		Text:        text,
+		HistoryText: historyText,
 		Timestamp:   time.Now(),
 	}
 
