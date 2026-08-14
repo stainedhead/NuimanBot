@@ -24,6 +24,19 @@ func convertSkillsToTools(skills []domain.Tool) []domain.ToolDefinition {
 	return tools
 }
 
+// toolDefined reports whether name is among tools -- used to gate
+// runToolLoop's publish-nudge on the publish tool actually being offered
+// this turn, not just on platform (see processTurn's enforcePublish and
+// buzzSendMessagePublishTool).
+func toolDefined(tools []domain.ToolDefinition, name string) bool {
+	for _, t := range tools {
+		if t.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // executeToolCalls executes a list of tool calls on behalf of user and
 // returns their results. Uses ExecuteWithUser (not the unchecked Execute) so
 // RBAC, rate limiting, and audit logging are enforced for every platform

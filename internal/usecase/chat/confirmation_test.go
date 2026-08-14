@@ -512,7 +512,7 @@ func TestRunToolLoop_PendingConfirmation_RoundMateResultsNotDiscarded(t *testing
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	_, collectedToolOutputs, pending, err := service.runToolLoop(context.Background(), user, "conv-1", llmRequest, logger)
+	_, collectedToolOutputs, pending, err := service.runToolLoop(context.Background(), user, "conv-1", llmRequest, logger, false)
 	if err != nil {
 		t.Fatalf("runToolLoop returned unexpected error: %v", err)
 	}

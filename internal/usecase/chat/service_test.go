@@ -1457,3 +1457,255 @@ func TestProcessMessage_CuratorReceivesToolOutputs(t *testing.T) {
 		t.Error("Expected tool outputs to be passed to curator")
 	}
 }
+
+// buzzSendMessageTool returns a mockSkill named "buzz_send_message", the
+// ACP-only publish tool whose presence in the tool list gates the nudge
+// behavior under test below.
+func buzzSendMessageTool() *mockSkill {
+	return &mockSkill{
+		name:        "buzz_send_message",
+		description: "Publish a message to Buzz",
+		inputSchema: map[string]any{"type": "object"},
+	}
+}
+
+// TestProcessMessage_ACPNudgesUnpublishedReply guards the fix for a real
+// production bug: on ACP/Buzz, a plain LLMResponse.Content is invisible to
+// the human unless the model calls buzz_send_message — and relying on the
+// system prompt's textual instruction to do so proved unreliable in live
+// testing (confirmed: the same model called the tool for one turn and
+// silently skipped it for another, both carrying identical instructions).
+// When a turn ends with real content but no tool call, runToolLoop must
+// give the model one more forced chance to publish before accepting
+// silence.
+func TestProcessMessage_ACPNudgesUnpublishedReply(t *testing.T) {
+	callCount := 0
+	var capturedToolName string
+
+	llmService := &mockLLMService{
+		completeFunc: func(ctx context.Context, provider domain.LLMProvider, req *domain.LLMRequest) (*domain.LLMResponse, error) {
+			callCount++
+			switch callCount {
+			case 1:
+				// First call: real content, but no tool call -- the bug.
+				return &domain.LLMResponse{
+					Content:      "Good day to you too!",
+					ToolCalls:    []domain.ToolCall{},
+					FinishReason: "end_turn",
+				}, nil
+			case 2:
+				// Nudge round: model now calls the publish tool.
+				return &domain.LLMResponse{
+					Content: "",
+					ToolCalls: []domain.ToolCall{
+						{
+							ToolName:  "buzz_send_message",
+							Arguments: map[string]any{"channel": "chan-1", "content": "Good day to you too!"},
+						},
+					},
+					FinishReason: "tool_use",
+				}, nil
+			default:
+				// Post-tool-call wrap-up.
+				return &domain.LLMResponse{
+					Content:      "Sent.",
+					ToolCalls:    []domain.ToolCall{},
+					FinishReason: "end_turn",
+				}, nil
+			}
+		},
+	}
+
+	memoryRepo := &mockMemoryRepository{
+		getRecentMessagesFunc: func(ctx context.Context, convID string, maxTokens int) ([]domain.StoredMessage, error) {
+			return []domain.StoredMessage{}, nil
+		},
+	}
+
+	toolExecService := &mockToolExecutionService{
+		listSkillsFunc: func(ctx context.Context, user *domain.User) ([]domain.Tool, error) {
+			return []domain.Tool{buzzSendMessageTool()}, nil
+		},
+		executeWithUserFunc: func(ctx context.Context, user *domain.User, conversationID, toolName string, params map[string]any) (*domain.ExecutionResult, error) {
+			capturedToolName = toolName
+			return &domain.ExecutionResult{Output: `{"accepted":true}`}, nil
+		},
+	}
+
+	service := createTestService(llmService, memoryRepo, toolExecService, &mockSecurityService{})
+
+	incomingMsg := &domain.IncomingMessage{
+		ID:          "test-acp-nudge-1",
+		Platform:    domain.PlatformACP,
+		PlatformUID: "acp-user-1",
+		Text:        "good day my friend",
+		Timestamp:   time.Now(),
+	}
+
+	_, err := service.ProcessMessage(context.Background(), incomingMsg)
+	if err != nil {
+		t.Fatalf("ProcessMessage failed: %v", err)
+	}
+
+	if callCount != 3 {
+		t.Fatalf("expected 3 LLM calls (initial, nudge, wrap-up), got %d", callCount)
+	}
+	if capturedToolName != "buzz_send_message" {
+		t.Errorf("expected buzz_send_message to be executed after the nudge, got tool %q", capturedToolName)
+	}
+}
+
+// TestProcessMessage_ACPNoNudgeWhenAlreadyPublished ensures the nudge does
+// not fire redundantly when the model already called buzz_send_message in
+// its first round.
+func TestProcessMessage_ACPNoNudgeWhenAlreadyPublished(t *testing.T) {
+	callCount := 0
+
+	llmService := &mockLLMService{
+		completeFunc: func(ctx context.Context, provider domain.LLMProvider, req *domain.LLMRequest) (*domain.LLMResponse, error) {
+			callCount++
+			if callCount == 1 {
+				return &domain.LLMResponse{
+					Content: "Publishing now.",
+					ToolCalls: []domain.ToolCall{
+						{ToolName: "buzz_send_message", Arguments: map[string]any{"channel": "chan-1", "content": "hi"}},
+					},
+					FinishReason: "tool_use",
+				}, nil
+			}
+			return &domain.LLMResponse{Content: "Sent.", ToolCalls: []domain.ToolCall{}, FinishReason: "end_turn"}, nil
+		},
+	}
+
+	memoryRepo := &mockMemoryRepository{
+		getRecentMessagesFunc: func(ctx context.Context, convID string, maxTokens int) ([]domain.StoredMessage, error) {
+			return []domain.StoredMessage{}, nil
+		},
+	}
+
+	toolExecService := &mockToolExecutionService{
+		listSkillsFunc: func(ctx context.Context, user *domain.User) ([]domain.Tool, error) {
+			return []domain.Tool{buzzSendMessageTool()}, nil
+		},
+		executeWithUserFunc: func(ctx context.Context, user *domain.User, conversationID, toolName string, params map[string]any) (*domain.ExecutionResult, error) {
+			return &domain.ExecutionResult{Output: `{"accepted":true}`}, nil
+		},
+	}
+
+	service := createTestService(llmService, memoryRepo, toolExecService, &mockSecurityService{})
+
+	incomingMsg := &domain.IncomingMessage{
+		ID:          "test-acp-nudge-2",
+		Platform:    domain.PlatformACP,
+		PlatformUID: "acp-user-1",
+		Text:        "hello",
+		Timestamp:   time.Now(),
+	}
+
+	_, err := service.ProcessMessage(context.Background(), incomingMsg)
+	if err != nil {
+		t.Fatalf("ProcessMessage failed: %v", err)
+	}
+
+	if callCount != 2 {
+		t.Errorf("expected 2 LLM calls (tool call, wrap-up) with no redundant nudge, got %d", callCount)
+	}
+}
+
+// TestProcessMessage_NonACPPlatformNeverNudged ensures the nudge is scoped
+// to ACP only -- other platforms' plain-text replies already reach the user
+// without a publish tool, so nudging them would be pure waste (and risks
+// misbehavior on tools not intended for auto-invocation).
+func TestProcessMessage_NonACPPlatformNeverNudged(t *testing.T) {
+	callCount := 0
+
+	llmService := &mockLLMService{
+		completeFunc: func(ctx context.Context, provider domain.LLMProvider, req *domain.LLMRequest) (*domain.LLMResponse, error) {
+			callCount++
+			return &domain.LLMResponse{Content: "Hi there.", ToolCalls: []domain.ToolCall{}, FinishReason: "end_turn"}, nil
+		},
+	}
+
+	memoryRepo := &mockMemoryRepository{
+		getRecentMessagesFunc: func(ctx context.Context, convID string, maxTokens int) ([]domain.StoredMessage, error) {
+			return []domain.StoredMessage{}, nil
+		},
+	}
+
+	toolExecService := &mockToolExecutionService{
+		listSkillsFunc: func(ctx context.Context, user *domain.User) ([]domain.Tool, error) {
+			// buzz_send_message present even though platform isn't ACP --
+			// should never happen in production, but the gate must be
+			// platform-based, not just tool-presence-based.
+			return []domain.Tool{buzzSendMessageTool()}, nil
+		},
+	}
+
+	service := createTestService(llmService, memoryRepo, toolExecService, &mockSecurityService{})
+
+	incomingMsg := &domain.IncomingMessage{
+		ID:          "test-acp-nudge-3",
+		Platform:    domain.PlatformCLI,
+		PlatformUID: "cli-user-1",
+		Text:        "hello",
+		Timestamp:   time.Now(),
+	}
+
+	_, err := service.ProcessMessage(context.Background(), incomingMsg)
+	if err != nil {
+		t.Fatalf("ProcessMessage failed: %v", err)
+	}
+
+	if callCount != 1 {
+		t.Errorf("expected exactly 1 LLM call (no nudge on non-ACP platforms), got %d", callCount)
+	}
+}
+
+// TestProcessMessage_ACPNudgeAcceptsFinalSilence ensures the nudge is a
+// single bounded attempt, not a loop: if the model still declines to call
+// buzz_send_message on the nudge round, that response is accepted as final
+// rather than nudging indefinitely.
+func TestProcessMessage_ACPNudgeAcceptsFinalSilence(t *testing.T) {
+	callCount := 0
+
+	llmService := &mockLLMService{
+		completeFunc: func(ctx context.Context, provider domain.LLMProvider, req *domain.LLMRequest) (*domain.LLMResponse, error) {
+			callCount++
+			return &domain.LLMResponse{Content: "NONE", ToolCalls: []domain.ToolCall{}, FinishReason: "end_turn"}, nil
+		},
+	}
+
+	memoryRepo := &mockMemoryRepository{
+		getRecentMessagesFunc: func(ctx context.Context, convID string, maxTokens int) ([]domain.StoredMessage, error) {
+			return []domain.StoredMessage{}, nil
+		},
+	}
+
+	toolExecService := &mockToolExecutionService{
+		listSkillsFunc: func(ctx context.Context, user *domain.User) ([]domain.Tool, error) {
+			return []domain.Tool{buzzSendMessageTool()}, nil
+		},
+	}
+
+	service := createTestService(llmService, memoryRepo, toolExecService, &mockSecurityService{})
+
+	incomingMsg := &domain.IncomingMessage{
+		ID:          "test-acp-nudge-4",
+		Platform:    domain.PlatformACP,
+		PlatformUID: "acp-user-1",
+		Text:        "hello",
+		Timestamp:   time.Now(),
+	}
+
+	outgoingMsg, err := service.ProcessMessage(context.Background(), incomingMsg)
+	if err != nil {
+		t.Fatalf("ProcessMessage failed: %v", err)
+	}
+
+	if callCount != 2 {
+		t.Errorf("expected exactly 2 LLM calls (initial + one bounded nudge), got %d", callCount)
+	}
+	if outgoingMsg.Content != "NONE" {
+		t.Errorf("expected the nudge round's response to be accepted as final, got %q", outgoingMsg.Content)
+	}
+}
