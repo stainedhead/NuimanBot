@@ -375,12 +375,30 @@ func (s *Server) handleSessionPrompt(ctx context.Context, msg rpcMessage) {
 	reply, err := s.chat.ProcessMessage(promptCtx, incoming)
 	if err != nil {
 		if errors.Is(promptCtx.Err(), context.Canceled) {
+			s.logger.Info("session/prompt cancelled", "session_id", params.SessionID, "incoming_id", incoming.ID)
 			s.writeResult(msg.ID, sessionPromptResult{StopReason: "cancelled"})
 			return
 		}
+		s.logger.Error("session/prompt failed", "session_id", params.SessionID, "incoming_id", incoming.ID, "error", err)
 		s.writeError(msg.ID, errCodeInternal, "chat processing failed: "+err.Error())
 		return
 	}
+
+	// Logged at Info for the same reason the entry log above is: this is
+	// the only way to tell, after the fact, whether a turn that produced no
+	// visible Buzz message actually reached a final reply (and what that
+	// reply's length/tool-call count was) versus silently losing state to a
+	// concurrent overlapping session/prompt call on the same session — see
+	// Run's doc comment: each line is dispatched on its own goroutine with
+	// no per-session serialization, so a host that "steers" a new prompt
+	// into an in-flight turn (e.g. Buzz's BUZZ_ACP_MULTIPLE_EVENT_HANDLING=
+	// steer) can produce two concurrent ProcessMessage calls against the
+	// same conversation_id racing on the file-backed conversation store.
+	s.logger.Info("session/prompt completed",
+		"session_id", params.SessionID,
+		"incoming_id", incoming.ID,
+		"reply_length", len(reply.Content),
+	)
 
 	s.writeNotification(methodSessionUpdate, sessionUpdateParams{
 		SessionID: params.SessionID,
