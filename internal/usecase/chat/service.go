@@ -561,12 +561,17 @@ func (s *Service) runToolLoop(ctx context.Context, user *domain.User, conversati
 
 	llmMessages := llmRequest.Messages
 
-	// published/nudged back enforcePublish's one-shot nudge (see the "no
-	// tool calls" branch below): published tracks whether
-	// buzzSendMessagePublishTool has been called in any round so far;
-	// nudged ensures the nudge fires at most once per turn regardless of
-	// how many ordinary tool-call rounds precede it.
-	var published, nudged bool
+	// publishedDestinations/nudged back two related pieces of
+	// enforcePublish behavior: publishedDestinations (keyed by
+	// publishDestinationKey) tracks every buzz_send_message destination
+	// claimed so far this turn, both to know whether the nudge below is
+	// still needed (len == 0) and, via partitionPublishCalls, to skip a
+	// redundant second publish to a destination already claimed this turn
+	// (see that function's doc comment). nudged ensures the nudge fires at
+	// most once per turn regardless of how many ordinary tool-call rounds
+	// precede it.
+	publishedDestinations := make(map[string]bool)
+	var nudged bool
 
 	for iteration := 0; iteration < maxToolIterations; iteration++ {
 		// Check cache before first LLM call (if cache is available)
@@ -599,7 +604,7 @@ func (s *Service) runToolLoop(ctx context.Context, user *domain.User, conversati
 		// -- bounded by nudged so this can't loop indefinitely even if the
 		// model keeps declining.
 		if len(llmResponse.ToolCalls) == 0 {
-			if enforcePublish && !published && !nudged && llmResponse.Content != "" {
+			if enforcePublish && len(publishedDestinations) == 0 && !nudged && llmResponse.Content != "" {
 				nudged = true
 				llmMessages = append(llmMessages,
 					domain.Message{Role: "assistant", Content: llmResponse.Content},
@@ -619,18 +624,19 @@ func (s *Service) runToolLoop(ctx context.Context, user *domain.User, conversati
 			break
 		}
 
-		for _, tc := range llmResponse.ToolCalls {
-			if tc.ToolName == buzzSendMessagePublishTool {
-				published = true
-				break
-			}
-		}
+		// Skip any buzz_send_message call redundantly targeting a
+		// destination already claimed earlier this turn (see
+		// partitionPublishCalls) — claims publishedDestinations for every
+		// first-time destination in this round as a side effect, which is
+		// also what len(publishedDestinations) == 0 above checks to decide
+		// whether the nudge is still needed.
+		toolCallsToExecute, skippedResults := partitionPublishCalls(llmResponse.ToolCalls, publishedDestinations)
 
 		// Execute tool calls and collect outputs for memory extraction. Output
 		// flagged by OutputValidator (injection_flagged in Metadata) is excluded
 		// from collectedToolOutputs so it can never resurface in a future
 		// conversation's system prompt via the memory-curation pipeline (FR-005).
-		toolResults := s.executeToolCalls(ctx, user, conversationID, llmResponse.ToolCalls)
+		toolResults := append(skippedResults, s.executeToolCalls(ctx, user, conversationID, toolCallsToExecute)...)
 
 		// FR-010/FR-R10 (specs/260803-improve-nuimanbot-security-auto-review):
 		// determine whether this round produced a pending confirmation, but do

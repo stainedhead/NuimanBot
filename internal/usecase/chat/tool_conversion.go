@@ -37,6 +37,64 @@ func toolDefined(tools []domain.ToolDefinition, name string) bool {
 	return false
 }
 
+// publishDestinationKey returns a stable key identifying where a
+// buzz_send_message call would publish to, used by partitionPublishCalls to
+// detect the model attempting to send more than one reply to the same
+// destination within a single turn.
+func publishDestinationKey(args map[string]any) string {
+	channel, _ := args["channel"].(string)
+	replyTo, _ := args["reply_to"].(string)
+	return channel + "|" + replyTo
+}
+
+// duplicatePublishSkipMessage is the synthetic tool result content returned
+// in place of actually executing a redundant buzz_send_message call (see
+// partitionPublishCalls) -- fed back to the model as this call's result so
+// it understands the skip and doesn't keep retrying, rather than silently
+// dropping it.
+const duplicatePublishSkipMessage = "Skipped: a reply was already published to this destination earlier in this turn. " +
+	"Sending another would be a duplicate — if you have something new to add, wait for the human's next message instead."
+
+// partitionPublishCalls splits toolCalls into those that should actually
+// execute and synthetic skip results for redundant buzz_send_message calls
+// targeting a destination already claimed this turn. Guards a real
+// production bug: a model that second-guesses itself mid-turn can otherwise
+// publish two near-duplicate replies to the same DM/thread -- confirmed
+// live, a single "say hello" turn published two differently-worded
+// greetings to the same channel/reply_to 13 seconds apart, neither via
+// runToolLoop's enforcePublish nudge (which only acts when a round has NO
+// tool calls) but from the model voluntarily calling the tool twice across
+// two ordinary rounds.
+//
+// claimed is mutated in place so same-round duplicates (the model
+// requesting two buzz_send_message calls to the same destination in one
+// response) are caught too, not just cross-round ones. A destination is
+// claimed as soon as its first call is chosen for execution, regardless of
+// whether that execution ultimately succeeds or errors -- an error already
+// gets reported back to the model as a normal tool result and explained to
+// the human in its own right, and does not need a second contradictory
+// destination-claim policy layered on top.
+func partitionPublishCalls(toolCalls []domain.ToolCall, claimed map[string]bool) (toExecute []domain.ToolCall, skipped []domain.ToolResult) {
+	toExecute = make([]domain.ToolCall, 0, len(toolCalls))
+	for _, tc := range toolCalls {
+		if tc.ToolName != buzzSendMessagePublishTool {
+			toExecute = append(toExecute, tc)
+			continue
+		}
+		key := publishDestinationKey(tc.Arguments)
+		if claimed[key] {
+			skipped = append(skipped, domain.ToolResult{
+				ToolName: tc.ToolName,
+				Output:   duplicatePublishSkipMessage,
+			})
+			continue
+		}
+		claimed[key] = true
+		toExecute = append(toExecute, tc)
+	}
+	return toExecute, skipped
+}
+
 // executeToolCalls executes a list of tool calls on behalf of user and
 // returns their results. Uses ExecuteWithUser (not the unchecked Execute) so
 // RBAC, rate limiting, and audit logging are enforced for every platform

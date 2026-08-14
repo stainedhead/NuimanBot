@@ -1804,3 +1804,83 @@ func TestProcessMessage_ACPNudgeDoesNotExhaustIterationBudget(t *testing.T) {
 		t.Errorf("expected final wrap-up content, got %q", outgoingMsg.Content)
 	}
 }
+
+// TestProcessMessage_ACPSkipsDuplicatePublishToSameDestination guards a
+// real production bug: a single turn ("can you say hello partner?")
+// published two near-identical greetings to the same DM 13 seconds apart --
+// the model called buzz_send_message once, then on a later round decided
+// (unprompted, not via the enforcePublish nudge) to call it again with a
+// reworded variant of the same content, to the same channel/reply_to.
+// runToolLoop must not execute a second buzz_send_message call targeting a
+// destination it already published to earlier in the same turn.
+func TestProcessMessage_ACPSkipsDuplicatePublishToSameDestination(t *testing.T) {
+	callCount := 0
+	executeCount := 0
+
+	llmService := &mockLLMService{
+		completeFunc: func(ctx context.Context, provider domain.LLMProvider, req *domain.LLMRequest) (*domain.LLMResponse, error) {
+			callCount++
+			switch callCount {
+			case 1:
+				return &domain.LLMResponse{
+					Content: "",
+					ToolCalls: []domain.ToolCall{
+						{ToolName: "buzz_send_message", Arguments: map[string]any{
+							"channel": "dm-1", "reply_to": "root-1", "content": "Howdy, partner!",
+						}},
+					},
+					FinishReason: "tool_use",
+				}, nil
+			case 2:
+				// Model second-guesses itself and tries to greet again, to
+				// the same destination.
+				return &domain.LLMResponse{
+					Content: "",
+					ToolCalls: []domain.ToolCall{
+						{ToolName: "buzz_send_message", Arguments: map[string]any{
+							"channel": "dm-1", "reply_to": "root-1", "content": "Hey there, partner!",
+						}},
+					},
+					FinishReason: "tool_use",
+				}, nil
+			default:
+				return &domain.LLMResponse{Content: "Done.", ToolCalls: []domain.ToolCall{}, FinishReason: "end_turn"}, nil
+			}
+		},
+	}
+
+	memoryRepo := &mockMemoryRepository{
+		getRecentMessagesFunc: func(ctx context.Context, convID string, maxTokens int) ([]domain.StoredMessage, error) {
+			return []domain.StoredMessage{}, nil
+		},
+	}
+
+	toolExecService := &mockToolExecutionService{
+		listSkillsFunc: func(ctx context.Context, user *domain.User) ([]domain.Tool, error) {
+			return []domain.Tool{buzzSendMessageTool()}, nil
+		},
+		executeWithUserFunc: func(ctx context.Context, user *domain.User, conversationID, toolName string, params map[string]any) (*domain.ExecutionResult, error) {
+			executeCount++
+			return &domain.ExecutionResult{Output: `{"accepted":true}`}, nil
+		},
+	}
+
+	service := createTestService(llmService, memoryRepo, toolExecService, &mockSecurityService{})
+
+	incomingMsg := &domain.IncomingMessage{
+		ID:          "test-acp-dup-publish",
+		Platform:    domain.PlatformACP,
+		PlatformUID: "acp-user-1",
+		Text:        "can you say hello partner?",
+		Timestamp:   time.Now(),
+	}
+
+	_, err := service.ProcessMessage(context.Background(), incomingMsg)
+	if err != nil {
+		t.Fatalf("ProcessMessage failed: %v", err)
+	}
+
+	if executeCount != 1 {
+		t.Errorf("expected exactly 1 real buzz_send_message execution (the duplicate must be skipped), got %d", executeCount)
+	}
+}
