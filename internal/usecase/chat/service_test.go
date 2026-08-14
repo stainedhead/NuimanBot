@@ -1709,3 +1709,98 @@ func TestProcessMessage_ACPNudgeAcceptsFinalSilence(t *testing.T) {
 		t.Errorf("expected the nudge round's response to be accepted as final, got %q", outgoingMsg.Content)
 	}
 }
+
+// TestProcessMessage_ACPNudgeDoesNotExhaustIterationBudget is a regression
+// test for a real production failure: the first live turn after the nudge
+// shipped needed 5 real tool-call rounds and THEN produced unpublished
+// content, and the nudge's extra round pushed it past the fixed 5-iteration
+// cap before finalResponse was ever set -- misreporting a turn that should
+// have succeeded (once nudged) as "max tool calling iterations exceeded".
+// enforcePublish must grant one additional round on top of the base budget
+// so the nudge never competes with legitimate tool-call rounds for the same
+// slots.
+func TestProcessMessage_ACPNudgeDoesNotExhaustIterationBudget(t *testing.T) {
+	callCount := 0
+	var capturedToolName string
+
+	llmService := &mockLLMService{
+		completeFunc: func(ctx context.Context, provider domain.LLMProvider, req *domain.LLMRequest) (*domain.LLMResponse, error) {
+			callCount++
+			switch {
+			case callCount <= 4:
+				// Four legitimate rounds of real tool use, none of them the
+				// publish tool. Combined with the 5th (content, no
+				// publish) round below, this turn would take exactly
+				// baseMaxToolIterations calls to reach its final answer --
+				// already at the boundary before any nudge is involved.
+				return &domain.LLMResponse{
+					Content: "Using tool...",
+					ToolCalls: []domain.ToolCall{
+						{ToolName: "calculator", Arguments: map[string]any{}},
+					},
+					FinishReason: "tool_use",
+				}, nil
+			case callCount == 5:
+				// Real content, but still hasn't published -- needs the
+				// nudge. Without enforcePublish's extra budget slot, the
+				// nudge round below (call 6) would never get to run.
+				return &domain.LLMResponse{
+					Content:      "Here's what I found.",
+					ToolCalls:    []domain.ToolCall{},
+					FinishReason: "end_turn",
+				}, nil
+			case callCount == 6:
+				// Nudge round: publishes.
+				return &domain.LLMResponse{
+					Content: "",
+					ToolCalls: []domain.ToolCall{
+						{ToolName: "buzz_send_message", Arguments: map[string]any{"channel": "chan-1", "content": "Here's what I found."}},
+					},
+					FinishReason: "tool_use",
+				}, nil
+			default:
+				return &domain.LLMResponse{Content: "Sent.", ToolCalls: []domain.ToolCall{}, FinishReason: "end_turn"}, nil
+			}
+		},
+	}
+
+	memoryRepo := &mockMemoryRepository{
+		getRecentMessagesFunc: func(ctx context.Context, convID string, maxTokens int) ([]domain.StoredMessage, error) {
+			return []domain.StoredMessage{}, nil
+		},
+	}
+
+	toolExecService := &mockToolExecutionService{
+		listSkillsFunc: func(ctx context.Context, user *domain.User) ([]domain.Tool, error) {
+			return []domain.Tool{
+				&mockSkill{name: "calculator", description: "Calculator", inputSchema: map[string]any{}},
+				buzzSendMessageTool(),
+			}, nil
+		},
+		executeWithUserFunc: func(ctx context.Context, user *domain.User, conversationID, toolName string, params map[string]any) (*domain.ExecutionResult, error) {
+			capturedToolName = toolName
+			return &domain.ExecutionResult{Output: `{"accepted":true}`}, nil
+		},
+	}
+
+	service := createTestService(llmService, memoryRepo, toolExecService, &mockSecurityService{})
+
+	incomingMsg := &domain.IncomingMessage{
+		ID:          "test-acp-nudge-budget",
+		Platform:    domain.PlatformACP,
+		PlatformUID: "acp-user-1",
+		Text:        "do some research and tell me",
+		Timestamp:   time.Now(),
+	}
+
+	outgoingMsg, err := service.ProcessMessage(context.Background(), incomingMsg)
+	if err != nil {
+		t.Fatalf("expected the turn to succeed once nudged, got error: %v", err)
+	}
+	if capturedToolName != "buzz_send_message" {
+		t.Errorf("expected buzz_send_message to be executed after the nudge, got tool %q", capturedToolName)
+	}
+	if outgoingMsg.Content != "Sent." {
+		t.Errorf("expected final wrap-up content, got %q", outgoingMsg.Content)
+	}
+}

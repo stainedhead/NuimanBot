@@ -537,7 +537,28 @@ const publishNudgeText = "Your previous response was not published — nothing y
 // be reported as "max tool calling iterations exceeded" even if detected on
 // the final allowed iteration.
 func (s *Service) runToolLoop(ctx context.Context, user *domain.User, conversationID string, llmRequest *domain.LLMRequest, logger *slog.Logger, enforcePublish bool) (finalResponse *domain.LLMResponse, collectedToolOutputs []string, pending *pendingConfirmationInfo, err error) {
-	const maxToolIterations = 5
+	const baseMaxToolIterations = 5
+
+	// maxToolIterations gets two extra rounds when enforcePublish is set, so
+	// the one-shot publish nudge below never competes with real tool-call
+	// rounds for the same budget. A nudge that fires costs exactly two
+	// calls beyond what a normal (non-nudged) completion at that same point
+	// would have used: the nudge round's own tool call, plus the follow-up
+	// call every tool-call round needs afterward to process its result —
+	// the same follow-up any ordinary tool round already requires, not
+	// something specific to nudging. Without this, a turn that legitimately
+	// needed close to baseMaxToolIterations rounds could have its nudge
+	// pushed past the loop bound before finalResponse was ever set,
+	// misreporting a turn that would otherwise have completed normally as
+	// "max tool calling iterations exceeded" (confirmed live: the very
+	// first production turn after the nudge shipped failed exactly this
+	// way). The nudge itself stays bounded via `nudged` regardless of this
+	// budget increase — it still fires at most once.
+	maxToolIterations := baseMaxToolIterations
+	if enforcePublish {
+		maxToolIterations += 2
+	}
+
 	llmMessages := llmRequest.Messages
 
 	// published/nudged back enforcePublish's one-shot nudge (see the "no
