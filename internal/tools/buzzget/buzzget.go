@@ -128,7 +128,7 @@ func (t *Tool) Execute(ctx context.Context, params map[string]any) (*domain.Exec
 	cmdCtx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(cmdCtx, "buzz", args...)
+	cmd := exec.CommandContext(cmdCtx, "buzz", args...) // #nosec G204 -- "buzz" is a hardcoded literal, not attacker-controlled; args are passed argv-style (no shell involved), so no element of args can be reinterpreted as a shell command regardless of content
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
