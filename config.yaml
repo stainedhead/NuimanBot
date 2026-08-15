@@ -41,7 +41,14 @@ retention_defaults:
 
 llm:
   default_model:
-    primary: anthropic/claude-sonnet
+    # "ollama/<tag>" (a "provider/model" string), not a models: map key --
+    # a YAML map key containing "." or ":" silently breaks under Viper's
+    # nested-key flattening (confirmed: "qwen3.6:35b-a3b-coding-bf16" as a
+    # map key decoded as a bare "qwen3" key with an empty provider mapping,
+    # causing random provider selection at runtime). The "ollama/" prefix
+    # is stripped by internal/infrastructure/llm/ollama.Client before the
+    # tag reaches Ollama's own API -- see that package's comment.
+    primary: "ollama/qwen3.6:35b-a3b-coding-bf16"
     max_tokens: 1024
     temperature: 0.7
     fallbacks:
@@ -57,6 +64,9 @@ llm:
     - id: anthropic-main
       type: anthropic
       api_key: "your-api-key-here"  # Set via NUIMANBOT_LLM_PROVIDERS_0_APIKEY env var
+    - id: ollama-main
+      type: ollama
+      base_url: "http://localhost:11434"
 
 # Gateway Configuration — Multi-Bot Architecture
 #

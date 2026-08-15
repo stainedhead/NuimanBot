@@ -14,6 +14,8 @@ import (
 	"nuimanbot/internal/infrastructure/logger"
 	infrasecurity "nuimanbot/internal/infrastructure/security"
 	"nuimanbot/internal/infrastructure/storage"
+	"nuimanbot/internal/tools/buzzget"
+	"nuimanbot/internal/tools/buzzsend"
 	"nuimanbot/internal/usecase/chat"
 	"nuimanbot/internal/usecase/security"
 	"nuimanbot/internal/usecase/tool"
@@ -88,7 +90,15 @@ func runACP(ctx context.Context) error {
 		return fmt.Errorf("acp: failed to initialize file storage: %w", err)
 	}
 
-	inputValidator := security.NewDefaultInputValidator()
+	// WithoutCommandInjectionDetection: ACP hosts (confirmed: buzz-acp)
+	// bundle a large host-constructed system-context blob into every
+	// session/prompt call alongside the human's actual message, and that
+	// bundle reliably contains characters command-injection scanning
+	// treats as suspicious purely as a side effect of ordinary technical
+	// writing (see the option's doc comment for the full story — this
+	// isn't a hypothetical, it made every message through this integration
+	// fail regardless of content).
+	inputValidator := security.NewDefaultInputValidator(security.WithoutCommandInjectionDetection())
 	auditAdapter := &auditRepositoryAdapter{repo: fileRepos.Audit}
 	securityService := security.NewService(vault, inputValidator, auditAdapter)
 
@@ -108,6 +118,24 @@ func runACP(ctx context.Context) error {
 	}
 	if err := registerMCPTools(ctx, cfg, toolRegistry, outputValidator); err != nil {
 		acpLogger.Warn("MCP tool registration encountered errors", "error", err)
+	}
+	// buzz_send_message: registered only here, not in registerBuiltInTools
+	// (shared with every other platform) — it shells out to the `buzz` CLI,
+	// which is meaningless (and its BUZZ_PRIVATE_KEY/BUZZ_AUTH_TAG/
+	// BUZZ_RELAY_URL credentials absent) outside a buzz-acp-spawned
+	// process. See the tool's own doc comment for why NuimanBot needs it at
+	// all: Buzz's own system prompt requires the agent to call this to
+	// publish anything, the ACP text response alone isn't sufficient.
+	if err := toolRegistry.Register(buzzsend.New()); err != nil {
+		return fmt.Errorf("acp: failed to register buzz_send_message tool: %w", err)
+	}
+	// buzz_get_messages: same ACP-only rationale as buzz_send_message above.
+	// Gives the model a real way to read channel history instead of
+	// assuming the capability from Buzz's system prompt and fabricating a
+	// plausible-sounding failure when it has no actual tool to call (see
+	// that tool's own doc comment for the live incident this fixes).
+	if err := toolRegistry.Register(buzzget.New()); err != nil {
+		return fmt.Errorf("acp: failed to register buzz_get_messages tool: %w", err)
 	}
 
 	toolExecutionService := tool.NewService(&cfg.Tools, toolRegistry, securityService)

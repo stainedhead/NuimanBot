@@ -19,10 +19,55 @@ type DefaultInputValidator struct {
 	metacharacters    []string
 	dangerousCommands []string
 	sensitivePaths    []string
+
+	// skipCommandInjection disables Rule 5 entirely (see WithoutCommandInjectionDetection).
+	skipCommandInjection bool
+}
+
+// InputValidatorOption configures a DefaultInputValidator at construction.
+type InputValidatorOption func(*DefaultInputValidator)
+
+// WithoutCommandInjectionDetection disables command-injection scanning (Rule
+// 5) entirely for this validator instance — length/null-byte/UTF-8 checks
+// and prompt-injection detection still apply.
+//
+// This exists for the Buzz ACP entrypoint (cmd/nuimanbot/acp.go) specifically
+// — not for general use. ACP hosts (confirmed: buzz-acp) bundle a large,
+// host-constructed system-context blob into every session/prompt call
+// alongside the human's actual message: a "[Base]" system prompt, recent
+// conversation history, and a markdown-formatted CLI reference table. That
+// bundle is legitimate technical documentation, not arbitrary human chat,
+// and it reliably contains characters command-injection scanning treats as
+// suspicious purely as a side effect of ordinary technical writing — e.g. a
+// semicolon in "`BUZZ_AUTH_TAG`; if it is missing, ..." or angle brackets as
+// CLI placeholder syntax in "buzz <group> --help". Selectively removing
+// individual characters from the metacharacter list (see
+// NewDefaultInputValidator's own doc comment for that earlier, insufficient
+// attempt) doesn't converge — technical documentation of any real size will
+// always contain some subset of them. Scanning the actual human-authored
+// portion specifically isn't done here either: that portion is structurally
+// embedded inside the host's own bundle format (e.g. a "Content: ..." line
+// within a larger event dump), which is undocumented and specific to
+// buzz-acp's implementation, not a stable contract to parse against.
+//
+// The dangerousCommands/sensitivePaths checks (Rule 5's other two legs) are
+// disabled along with the metacharacter check, not selectively — they were
+// not confirmed to false-positive on real bundles the way metacharacters
+// were, but they exist for the same category of "trust the tool-execution
+// RBAC layer, not blind text scanning" reasoning, and a large bundle full of
+// CLI documentation is exactly the kind of text likely to mention them
+// (e.g. this very doc comment mentions "curl", which is itself in that
+// list). Real protection against a message trying to get NuimanBot to
+// actually run something dangerous lives in
+// tool.Service.ExecuteWithUser's RBAC/confirmation gate, not here.
+func WithoutCommandInjectionDetection() InputValidatorOption {
+	return func(v *DefaultInputValidator) {
+		v.skipCommandInjection = true
+	}
 }
 
 // NewDefaultInputValidator creates a new instance of DefaultInputValidator.
-func NewDefaultInputValidator() *DefaultInputValidator {
+func NewDefaultInputValidator(opts ...InputValidatorOption) *DefaultInputValidator {
 	v := &DefaultInputValidator{}
 
 	// Initialize prompt injection patterns once, from the shared pattern set.
@@ -39,17 +84,19 @@ func NewDefaultInputValidator() *DefaultInputValidator {
 	// per-channel FIFO with retry, that one rejected message blocked every
 	// later message in the same channel too.
 	//
-	// "<"/">"/"<<"/">>" are NOT excluded, despite being common in casual
-	// chat (comparisons, ">> quoted" reply style) — internal/adapter/api/
-	// middleware.Validate() reuses this same DefaultInputValidator for REST
-	// API request bodies, where "<"/">" are load-bearing for rejecting HTML/
+	// Every other metacharacter here (";", "&&", "||", "|", "`", "$(",
+	// "${", ">>" , ">", "<<", "<") is kept — including "|" and "`", despite
+	// both also turning out to be common in ACP-bundled technical
+	// documentation (markdown tables/inline code); that problem is handled
+	// per-instance via WithoutCommandInjectionDetection (see its doc
+	// comment for the full story) rather than by further loosening this
+	// shared list, which every other platform (Telegram, Slack, CLI, web
+	// Chats, REST API) also relies on. "<"/">" specifically are load-bearing
+	// for internal/adapter/api/middleware.Validate(), which reuses this same
+	// DefaultInputValidator for REST API request bodies to reject HTML/
 	// script-tag payloads (see validate_test.go's <script>/<img onerror=...>
-	// cases) — a genuinely different threat model (data that may later be
-	// rendered as HTML) than natural-language chat text. Splitting these two
-	// call sites onto separately-configured validator instances would let
-	// chat text drop "<"/">" too without weakening the API's XSS check, but
-	// wasn't undertaken here — this fix targets the confirmed, actively
-	// user-blocking newline false positive specifically.
+	// cases) — a genuinely different threat model than natural-language chat
+	// text.
 	v.metacharacters = []string{
 		";", "&&", "||", "|", "`", "$(", "${", ">>", ">", "<<", "<",
 	}
@@ -85,6 +132,10 @@ func NewDefaultInputValidator() *DefaultInputValidator {
 		"/bin/", "/sbin/", "/usr/bin/", "/usr/sbin/",
 		"c:\\windows\\", "c:\\system32\\",
 		"/proc/", "/sys/",
+	}
+
+	for _, opt := range opts {
+		opt(v)
 	}
 
 	return v
@@ -128,8 +179,10 @@ func (v *DefaultInputValidator) ValidateInput(ctx context.Context, input string,
 		)
 	}
 
-	// Rule 5: Command injection pattern detection
-	if v.detectCommandInjection(input) {
+	// Rule 5: Command injection pattern detection (see
+	// WithoutCommandInjectionDetection's doc comment for why an instance
+	// might skip this).
+	if !v.skipCommandInjection && v.detectCommandInjection(input) {
 		return "", domain.NewUserError(
 			"SUSPICIOUS_INPUT",
 			"input detected as potential command injection",

@@ -419,7 +419,15 @@ func (s *Service) processTurn(ctx context.Context, conversationID string, user *
 	// always incomingMsg.PlatformUID (see resolveUser's doc comment), so
 	// Part C's confirmation-gate keying and reply detection
 	// (tryResolveConfirmationReply) are unaffected by this fix.
-	finalResponse, collectedToolOutputs, pending, err := s.runToolLoop(ctx, user, conversationID, llmRequest, logger)
+	//
+	// enforcePublish gates runToolLoop's publish-nudge (see its doc
+	// comment): ACP is the only platform where a plain LLMResponse.Content
+	// is invisible to the human unless a tool call publishes it, and only
+	// when that publish tool (buzz_send_message) was actually offered this
+	// turn — gating on tool presence, not just platform, keeps this inert
+	// for any ACP deployment that hasn't registered it.
+	enforcePublish := incomingMsg.Platform == domain.PlatformACP && toolDefined(tools, buzzSendMessagePublishTool)
+	finalResponse, collectedToolOutputs, pending, err := s.runToolLoop(ctx, user, conversationID, llmRequest, logger, enforcePublish)
 	if err != nil {
 		return domain.OutgoingMessage{}, err
 	}
@@ -483,6 +491,23 @@ func (s *Service) composeSystemPrompt(ctx context.Context, incomingMsg *domain.I
 	return systemPrompt
 }
 
+// buzzSendMessagePublishTool is internal/tools/buzzsend's registered name —
+// the ACP-only tool whose invocation is the only way an ACP session's reply
+// becomes a visible Buzz message (see that package's doc comment).
+// runToolLoop's enforcePublish nudge (see below) checks tool calls against
+// this name to decide whether a turn's reply was actually published.
+const buzzSendMessagePublishTool = "buzz_send_message"
+
+// publishNudgeText is appended as a user-role message when enforcePublish
+// nudges a turn that produced content but never called
+// buzzSendMessagePublishTool. Phrased as a direct, unambiguous instruction
+// rather than a repeat of the general system-prompt guidance, since that
+// guidance alone is what the model already had and skipped.
+const publishNudgeText = "Your previous response was not published — nothing you said is visible to the human yet. " +
+	"If it contains anything worth sharing, call " + buzzSendMessagePublishTool + " now, using the channel and " +
+	"reply-to information from the [Context] block earlier in this conversation. If you have deliberately decided " +
+	"to stay silent, respond with no tool call."
+
 // runToolLoop runs the LLM/tool-calling loop for llmRequest, up to
 // maxToolIterations rounds, starting from llmRequest.Messages (mutated in
 // place as the loop progresses, same as the pre-Phase-5 inline loop this
@@ -490,6 +515,14 @@ func (s *Service) composeSystemPrompt(ctx context.Context, incomingMsg *domain.I
 // conversationID, ...) — not the RBAC-free Execute — so RBAC and Part C's
 // confirmation gate are both enforced for the resolved user (FR-001 fix, see
 // resolveUser).
+//
+// enforcePublish, when true, makes the loop nudge the model once (see
+// publishNudgeText) if a turn ends with real content but never called
+// buzzSendMessagePublishTool, instead of accepting an unpublished reply as
+// final. Callers should only set this for platforms where a plain
+// LLMResponse.Content never reaches the human on its own (ACP/Buzz today)
+// and only when that publish tool was actually offered this turn — see
+// processTurn's enforcePublish computation.
 //
 // If any tool call in a round returns a pending-confirmation result (Part C,
 // FR-013 — see pendingConfirmationFrom), the round's results are still fully
@@ -503,9 +536,42 @@ func (s *Service) composeSystemPrompt(ctx context.Context, incomingMsg *domain.I
 // maxToolIterations rounds as a normal tool round-trip would, and must never
 // be reported as "max tool calling iterations exceeded" even if detected on
 // the final allowed iteration.
-func (s *Service) runToolLoop(ctx context.Context, user *domain.User, conversationID string, llmRequest *domain.LLMRequest, logger *slog.Logger) (finalResponse *domain.LLMResponse, collectedToolOutputs []string, pending *pendingConfirmationInfo, err error) {
-	const maxToolIterations = 5
+func (s *Service) runToolLoop(ctx context.Context, user *domain.User, conversationID string, llmRequest *domain.LLMRequest, logger *slog.Logger, enforcePublish bool) (finalResponse *domain.LLMResponse, collectedToolOutputs []string, pending *pendingConfirmationInfo, err error) {
+	const baseMaxToolIterations = 5
+
+	// maxToolIterations gets two extra rounds when enforcePublish is set, so
+	// the one-shot publish nudge below never competes with real tool-call
+	// rounds for the same budget. A nudge that fires costs exactly two
+	// calls beyond what a normal (non-nudged) completion at that same point
+	// would have used: the nudge round's own tool call, plus the follow-up
+	// call every tool-call round needs afterward to process its result —
+	// the same follow-up any ordinary tool round already requires, not
+	// something specific to nudging. Without this, a turn that legitimately
+	// needed close to baseMaxToolIterations rounds could have its nudge
+	// pushed past the loop bound before finalResponse was ever set,
+	// misreporting a turn that would otherwise have completed normally as
+	// "max tool calling iterations exceeded" (confirmed live: the very
+	// first production turn after the nudge shipped failed exactly this
+	// way). The nudge itself stays bounded via `nudged` regardless of this
+	// budget increase — it still fires at most once.
+	maxToolIterations := baseMaxToolIterations
+	if enforcePublish {
+		maxToolIterations += 2
+	}
+
 	llmMessages := llmRequest.Messages
+
+	// publishedDestinations/nudged back two related pieces of
+	// enforcePublish behavior: publishedDestinations (keyed by
+	// publishDestinationKey) tracks every buzz_send_message destination
+	// claimed so far this turn, both to know whether the nudge below is
+	// still needed (len == 0) and, via partitionPublishCalls, to skip a
+	// redundant second publish to a destination already claimed this turn
+	// (see that function's doc comment). nudged ensures the nudge fires at
+	// most once per turn regardless of how many ordinary tool-call rounds
+	// precede it.
+	publishedDestinations := make(map[string]bool)
+	var nudged bool
 
 	for iteration := 0; iteration < maxToolIterations; iteration++ {
 		// Check cache before first LLM call (if cache is available)
@@ -526,8 +592,28 @@ func (s *Service) runToolLoop(ctx context.Context, user *domain.User, conversati
 			}
 		}
 
-		// No tool calls - we're done
+		// No tool calls. Ordinarily we'd be done -- except when
+		// enforcePublish is set and this turn produced real content but
+		// never called the publish tool: relying on the system prompt's
+		// textual "you must publish" instruction alone has proven
+		// unreliable in live ACP/Buzz testing (confirmed: the same model
+		// called buzz_send_message for one turn and silently skipped it for
+		// another, both carrying identical instructions), silently
+		// stranding the reply where the human never sees it. Give the model
+		// exactly one more forced chance before accepting silence as final
+		// -- bounded by nudged so this can't loop indefinitely even if the
+		// model keeps declining.
 		if len(llmResponse.ToolCalls) == 0 {
+			if enforcePublish && len(publishedDestinations) == 0 && !nudged && llmResponse.Content != "" {
+				nudged = true
+				llmMessages = append(llmMessages,
+					domain.Message{Role: "assistant", Content: llmResponse.Content},
+					domain.Message{Role: "user", Content: publishNudgeText},
+				)
+				llmRequest.Messages = llmMessages
+				continue
+			}
+
 			finalResponse = llmResponse
 			// Cache successful final response (no tool calls)
 			if s.cache != nil && iteration == 0 {
@@ -538,11 +624,19 @@ func (s *Service) runToolLoop(ctx context.Context, user *domain.User, conversati
 			break
 		}
 
+		// Skip any buzz_send_message call redundantly targeting a
+		// destination already claimed earlier this turn (see
+		// partitionPublishCalls) — claims publishedDestinations for every
+		// first-time destination in this round as a side effect, which is
+		// also what len(publishedDestinations) == 0 above checks to decide
+		// whether the nudge is still needed.
+		toolCallsToExecute, skippedResults := partitionPublishCalls(llmResponse.ToolCalls, publishedDestinations)
+
 		// Execute tool calls and collect outputs for memory extraction. Output
 		// flagged by OutputValidator (injection_flagged in Metadata) is excluded
 		// from collectedToolOutputs so it can never resurface in a future
 		// conversation's system prompt via the memory-curation pipeline (FR-005).
-		toolResults := s.executeToolCalls(ctx, user, conversationID, llmResponse.ToolCalls)
+		toolResults := append(skippedResults, s.executeToolCalls(ctx, user, conversationID, toolCallsToExecute)...)
 
 		// FR-010/FR-R10 (specs/260803-improve-nuimanbot-security-auto-review):
 		// determine whether this round produced a pending confirmation, but do
@@ -610,7 +704,7 @@ func (s *Service) finishTurn(ctx context.Context, incomingMsg *domain.IncomingMe
 
 	// Extract memory cells from the interaction (non-blocking, graceful degradation)
 	if s.memoryCurator != nil {
-		if curatorErr := s.memoryCurator.ExtractMemoryCells(ctx, conversationID, incomingMsg.Text, responseContent, collectedToolOutputs); curatorErr != nil {
+		if curatorErr := s.memoryCurator.ExtractMemoryCells(ctx, conversationID, historyText(incomingMsg), responseContent, collectedToolOutputs); curatorErr != nil {
 			logger.Error("Failed to extract memory cells",
 				"conversation_id", conversationID,
 				"error", curatorErr,
@@ -704,6 +798,22 @@ func confirmationResolutionText(approved bool) string {
 	return "no"
 }
 
+// historyText returns incomingMsg.HistoryText when set, else Text — the
+// content to persist/curate as this turn's human message, as opposed to
+// Text, which is always what's actually sent to the LLM this turn. See
+// domain.IncomingMessage.HistoryText's doc comment: for ACP, Text carries
+// Buzz's entire bundled prompt, not just the literal human message, and
+// persisting/curating that verbatim caused a later turn in the same session
+// to see an EARLIER turn's full bundle (including its own "[Buzz event]"
+// trigger description) replayed back into the LLM's context as if still
+// unanswered.
+func historyText(incomingMsg *domain.IncomingMessage) string {
+	if incomingMsg.HistoryText != "" {
+		return incomingMsg.HistoryText
+	}
+	return incomingMsg.Text
+}
+
 // saveTurnMessages persists the incoming user message and an outgoing
 // assistant message (with the given reply content and token count) to
 // memory. Best-effort: failures are logged, not returned, matching the
@@ -712,7 +822,7 @@ func (s *Service) saveTurnMessages(ctx context.Context, conversationID string, i
 	incomingStoredMsg := domain.StoredMessage{
 		ID:        incomingMsg.ID, // Use incoming message ID
 		Role:      "user",
-		Content:   incomingMsg.Text,
+		Content:   historyText(incomingMsg),
 		Timestamp: incomingMsg.Timestamp,
 	}
 	if err := s.memoryRepo.SaveMessage(ctx, conversationID, incomingMsg.PlatformUID, incomingMsg.Platform, incomingStoredMsg); err != nil {
@@ -899,7 +1009,8 @@ func (s *Service) resolveConfirmationApproved(ctx context.Context, incomingMsg *
 		SystemPrompt: systemPrompt,
 	}
 
-	finalResponse, collectedToolOutputs, pending, err := s.runToolLoop(ctx, user, conversationID, llmRequest, logger)
+	enforcePublish := incomingMsg.Platform == domain.PlatformACP && toolDefined(tools, buzzSendMessagePublishTool)
+	finalResponse, collectedToolOutputs, pending, err := s.runToolLoop(ctx, user, conversationID, llmRequest, logger, enforcePublish)
 	if err != nil {
 		return domain.OutgoingMessage{}, err
 	}

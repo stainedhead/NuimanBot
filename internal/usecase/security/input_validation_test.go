@@ -237,19 +237,22 @@ func TestValidateInput_CommandInjection(t *testing.T) {
 }
 
 // TestValidateInput_CommandInjection_DoesNotFlagOrdinaryChat guards against a
-// real production incident: a normal multi-sentence chat message sent via
-// the Buzz ACP harness was rejected outright as "potential command
+// real production incident: a normal multi-sentence chat message sent
+// through the Buzz ACP harness was rejected outright as "potential command
 // injection" purely for containing a newline, blocking that message (and,
 // since Buzz's delivery queue is per-channel FIFO with retry, every message
 // behind it) indefinitely. Bare ")" and "\n"/"\r" — extremely common in
 // ordinary text — must not trip this check alone.
 //
-// "<"/">" are deliberately NOT covered here even though they're also common
-// in casual chat (e.g. "5 > 3") — they remain flagged because
-// internal/adapter/api/middleware.Validate() reuses this same validator for
-// REST API request bodies, where "<"/">" are load-bearing for rejecting
-// HTML/script-tag payloads (see that package's validate_test.go). See
-// NewDefaultInputValidator's comment for the full trade-off.
+// "<"/">"/"|"/"`" are deliberately NOT covered here even though they're also
+// common in casual chat and (for "|"/"`" specifically) in ACP-bundled
+// technical documentation — see WithoutCommandInjectionDetection's doc
+// comment for how that specific, separate problem is handled (a differently-
+// configured validator instance for the ACP entrypoint only, not by loosening
+// this shared list further). This validator instance is what every other
+// platform (Telegram, Slack, CLI, web Chats, REST API) uses, and "<"/">" in
+// particular are load-bearing for internal/adapter/api/middleware.Validate()'s
+// XSS rejection (see that package's validate_test.go).
 func TestValidateInput_CommandInjection_DoesNotFlagOrdinaryChat(t *testing.T) {
 	validator := security.NewDefaultInputValidator()
 	ctx := context.Background()
@@ -268,6 +271,51 @@ func TestValidateInput_CommandInjection_DoesNotFlagOrdinaryChat(t *testing.T) {
 				t.Errorf("ValidateInput(%q) unexpectedly failed: %v", input, err)
 			}
 		})
+	}
+}
+
+// TestValidateInput_WithoutCommandInjectionDetection covers the actual fix
+// for the ACP-bundled-documentation false positive: a validator constructed
+// with WithoutCommandInjectionDetection must accept the exact kind of
+// content that broke every message through the Buzz ACP harness (a
+// markdown table plus prose containing semicolons and CLI placeholder angle
+// brackets — none of which a plain "loosen the shared list further" fix
+// converges on, since technical documentation of any real size will always
+// contain some subset of these characters), while still rejecting nothing
+// on length/null-byte/UTF-8 grounds and leaving the *default* validator's
+// behavior for every other platform completely unchanged.
+func TestValidateInput_WithoutCommandInjectionDetection(t *testing.T) {
+	ctx := context.Background()
+
+	bundleLikeText := "[Base]\n" +
+		"Run `buzz --help` or `buzz <group> --help` for full usage.\n" +
+		"`buzz agents draft-update` requires `BUZZ_AUTH_TAG`; if it is missing, explain that.\n" +
+		"| Group | Key commands |\n" +
+		"|-------|-------------|\n" +
+		"| `buzz agents` | `draft-create`, `draft-update` |\n" +
+		"\n--- Event 1 (@mention) ---\n" +
+		"Content: what about a checking account or a passport?"
+
+	relaxed := security.NewDefaultInputValidator(security.WithoutCommandInjectionDetection())
+	if _, err := relaxed.ValidateInput(ctx, bundleLikeText, 100000); err != nil {
+		t.Errorf("relaxed validator unexpectedly rejected bundle-like text: %v", err)
+	}
+
+	// The default (strict) validator must still reject the same text --
+	// proves the option is actually doing something, not just always-pass.
+	strict := security.NewDefaultInputValidator()
+	if _, err := strict.ValidateInput(ctx, bundleLikeText, 100000); err == nil {
+		t.Error("expected the default (strict) validator to still reject this bundle-like text")
+	}
+
+	// The relaxed validator must still enforce the non-command-injection
+	// rules (length, null bytes) -- WithoutCommandInjectionDetection only
+	// disables Rule 5, nothing else.
+	if _, err := relaxed.ValidateInput(ctx, "short", 3); err == nil {
+		t.Error("expected relaxed validator to still enforce max length")
+	}
+	if _, err := relaxed.ValidateInput(ctx, "has\x00null", 100); err == nil {
+		t.Error("expected relaxed validator to still reject null bytes")
 	}
 }
 

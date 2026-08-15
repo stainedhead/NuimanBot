@@ -315,6 +315,41 @@ func promptText(blocks []contentBlock) string {
 	return strings.Join(parts, "\n")
 }
 
+// buzzContentLinePrefix marks the literal human message within a
+// Buzz-bundled prompt's "[Buzz event: ...]" block ("Content: <text>").
+// extractHistoryText looks for the LAST such line, since that block always
+// appears after any [Base]/[Context]/[Conversation Context] sections in
+// Buzz's own prompt layout — see domain.IncomingMessage.HistoryText's doc
+// comment for why this matters: persisting the full bundle as conversation
+// history caused a later turn in the same session to see an EARLIER turn's
+// entire bundle (including its own "[Buzz event]" trigger description)
+// replayed back into the LLM's context, looking like a still-unanswered
+// event rather than settled history.
+const buzzContentLinePrefix = "\nContent: "
+
+// extractHistoryText pulls the literal human message out of a Buzz-bundled
+// ACP prompt (see buzzContentLinePrefix) for use as the persisted
+// conversation-history entry instead of the full bundle. ok is false when
+// the expected pattern isn't found — callers should fall back to the full
+// text rather than treating this as an error; Buzz's prompt format is not a
+// contract NuimanBot owns, and a plain (non-Buzz) ACP host's prompt won't
+// contain it at all.
+func extractHistoryText(promptText string) (text string, ok bool) {
+	idx := strings.LastIndex(promptText, buzzContentLinePrefix)
+	if idx == -1 {
+		return "", false
+	}
+	rest := promptText[idx+len(buzzContentLinePrefix):]
+	if nl := strings.IndexByte(rest, '\n'); nl != -1 {
+		rest = rest[:nl]
+	}
+	rest = strings.TrimSpace(rest)
+	if rest == "" {
+		return "", false
+	}
+	return rest, true
+}
+
 func (s *Server) handleSessionPrompt(ctx context.Context, msg rpcMessage) {
 	var params sessionPromptParams
 	if err := json.Unmarshal(msg.Params, &params); err != nil {
@@ -330,6 +365,24 @@ func (s *Server) handleSessionPrompt(ctx context.Context, msg rpcMessage) {
 	sess := sessVal.(*session)
 
 	text := promptText(params.Prompt)
+	// Logged at Info, not Debug: this has repeatedly been the deciding
+	// evidence for diagnosing ACP host behavior in practice (e.g.
+	// confirming whether a host bundles conversation history/context into
+	// the prompt text alongside the human's literal message, which can
+	// trigger input validation in ways the visible message alone wouldn't
+	// explain). blockTypes lets us see the shape of what was sent even when
+	// non-text blocks are involved.
+	blockTypes := make([]string, len(params.Prompt))
+	for i, b := range params.Prompt {
+		blockTypes[i] = b.Type
+	}
+	s.logger.Info("session/prompt received",
+		"session_id", params.SessionID,
+		"block_count", len(params.Prompt),
+		"block_types", blockTypes,
+		"text_length", len(text),
+		"text", text,
+	)
 	if text == "" {
 		s.writeError(msg.ID, errCodeInvalidParams, "session/prompt: no text content in prompt")
 		return
@@ -346,23 +399,43 @@ func (s *Server) handleSessionPrompt(ctx context.Context, msg rpcMessage) {
 		cancel()
 	}()
 
+	historyText, _ := extractHistoryText(text)
 	incoming := &domain.IncomingMessage{
 		ID:          fmt.Sprintf("acp-%s-%d", params.SessionID, atomic.AddUint64(&s.reqCounter, 1)),
 		Platform:    domain.PlatformACP,
 		PlatformUID: sess.platformUID,
 		Text:        text,
+		HistoryText: historyText,
 		Timestamp:   time.Now(),
 	}
 
 	reply, err := s.chat.ProcessMessage(promptCtx, incoming)
 	if err != nil {
 		if errors.Is(promptCtx.Err(), context.Canceled) {
+			s.logger.Info("session/prompt cancelled", "session_id", params.SessionID, "incoming_id", incoming.ID)
 			s.writeResult(msg.ID, sessionPromptResult{StopReason: "cancelled"})
 			return
 		}
+		s.logger.Error("session/prompt failed", "session_id", params.SessionID, "incoming_id", incoming.ID, "error", err)
 		s.writeError(msg.ID, errCodeInternal, "chat processing failed: "+err.Error())
 		return
 	}
+
+	// Logged at Info for the same reason the entry log above is: this is
+	// the only way to tell, after the fact, whether a turn that produced no
+	// visible Buzz message actually reached a final reply (and what that
+	// reply's length/tool-call count was) versus silently losing state to a
+	// concurrent overlapping session/prompt call on the same session — see
+	// Run's doc comment: each line is dispatched on its own goroutine with
+	// no per-session serialization, so a host that "steers" a new prompt
+	// into an in-flight turn (e.g. Buzz's BUZZ_ACP_MULTIPLE_EVENT_HANDLING=
+	// steer) can produce two concurrent ProcessMessage calls against the
+	// same conversation_id racing on the file-backed conversation store.
+	s.logger.Info("session/prompt completed",
+		"session_id", params.SessionID,
+		"incoming_id", incoming.ID,
+		"reply_length", len(reply.Content),
+	)
 
 	s.writeNotification(methodSessionUpdate, sessionUpdateParams{
 		SessionID: params.SessionID,

@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"nuimanbot/internal/domain"
+	"nuimanbot/internal/tools/buzzget"
+	"nuimanbot/internal/tools/buzzsend"
 	"nuimanbot/internal/tools/calculator"
 	"nuimanbot/internal/tools/datetime"
 	"nuimanbot/internal/tools/notes"
@@ -20,10 +22,15 @@ import (
 
 // newProductionLikeRegistry builds a ToolRegistry populated with the same
 // tools cmd/nuimanbot's registerBuiltInTools / registerDeveloperProductivityTools
-// register in production. Dependencies that Name() never touches (executors,
-// LLM services, HTTP clients, notes repositories) are passed as nil/zero
-// values — safe here since this registry exists only to exercise Name() and
-// Register(), never Execute().
+// register in production, plus buzzsend — registered separately by
+// cmd/nuimanbot/acp.go's runACP (ACP-only, not part of
+// registerBuiltInTools) but included here anyway so this guard actually
+// covers it: its absence from ToolPermissions previously went undetected by
+// this same guard and silently hid the tool from every Guest-role user (the
+// bug this entry now catches). Dependencies that Name() never touches
+// (executors, LLM services, HTTP clients, notes repositories) are passed as
+// nil/zero values — safe here since this registry exists only to exercise
+// Name() and Register(), never Execute().
 //
 // weather is registered unconditionally here (production gates it on
 // OPENWEATHERMAP_API_KEY being set) so this guard checks its permission
@@ -49,6 +56,8 @@ func newProductionLikeRegistry(t *testing.T) ToolRegistry {
 		doc_summarize.NewDocSummarizeSkill(domain.ToolConfig{}, nil, nil),
 		summarize.NewSummarizeSkill(domain.ToolConfig{}, nil, nil, nil),
 		coding_agent.NewCodingAgentSkill(domain.ToolConfig{}, nil, common.NewPathValidator(nil)),
+		buzzsend.New(),
+		buzzget.New(),
 	}
 
 	for _, tl := range tools {
@@ -82,16 +91,18 @@ func TestToolPermissions_EveryRegisteredToolHasExplicitEntry(t *testing.T) {
 // required by specs/260802-improve-nuimanbot-security/tasks.md P3.1.
 func TestToolPermissions_ExpectedRoles(t *testing.T) {
 	expected := map[string]domain.Role{
-		"calculator":    domain.RoleGuest,
-		"datetime":      domain.RoleGuest,
-		"weather":       domain.RoleUser,
-		"websearch":     domain.RoleUser,
-		"notes":         domain.RoleUser,
-		"repo_search":   domain.RoleUser,
-		"doc_summarize": domain.RoleUser,
-		"summarize":     domain.RoleUser,
-		"github":        domain.RoleAdmin,
-		"coding_agent":  domain.RoleAdmin,
+		"calculator":        domain.RoleGuest,
+		"datetime":          domain.RoleGuest,
+		"weather":           domain.RoleUser,
+		"websearch":         domain.RoleUser,
+		"notes":             domain.RoleUser,
+		"repo_search":       domain.RoleUser,
+		"doc_summarize":     domain.RoleUser,
+		"summarize":         domain.RoleUser,
+		"github":            domain.RoleAdmin,
+		"coding_agent":      domain.RoleAdmin,
+		"buzz_send_message": domain.RoleGuest,
+		"buzz_get_messages": domain.RoleGuest,
 	}
 
 	for name, wantRole := range expected {
